@@ -127,7 +127,7 @@ const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
     // a DELETE transition for mutable document types (an immutable type's documents
     // carry no revision and the factory raises RevisionAbsentError; canBeDeleted does
     // not change that). v6's immutable claims therefore could not be cancelled at all,
-    // which breaks the cancel-safety requirement (W1); a member's exit from a
+    // which breaks the cancel-safety requirement; a member's exit from a
     // reservation outranks the permanent-record property. The durable record of who
     // formed the pool is the shares plus the RETAINED finalized manifest
     // (FORMATION_DONE_*, review F-C3), never the claims, and completion verifies each

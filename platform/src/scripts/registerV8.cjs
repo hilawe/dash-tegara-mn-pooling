@@ -19,7 +19,7 @@
  *     the receipt one-per-pool, so without owner-only ANY identity could occupy it).
  *   - allocationRows is a bounded byteArray (maxItems 2048; worst case ~1.4 KB at the
  *     8-owner cap), the EXACT bytes of formationCore.allocationPreimage().
- *   - l1Verification is the SCOPED enum (CN-4's real strength, not "verified").
+ *   - l1Verification is the SCOPED enum (the check's real strength, not "verified").
  *   - participantCount 1..8 is the DIRECT covenant-participant bound, enforced by
  *     formation before COMMIT; it is not a general Platform-allocation count.
  *
@@ -150,9 +150,9 @@ const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
       targetDuffs: { type: "integer", minimum: 1, position: 9 },
       l1Verification: { type: "string", maxLength: 24, position: 10,
         enum: ["amount-reward-verified", "node-existence-only", "demo-unverified"],
-        description: "the CN-4 verification level actually performed at completion (scoped; owner keys and refund scripts are the recorded residual)" },
+        description: "the L1 verification level actually performed at completion (scoped; owner keys and refund scripts are the recorded residual)" },
       verificationMethodVersion: { type: "integer", minimum: 1, maximum: 1, position: 11,
-        description: "the CN-4 method version this receipt's level refers to (const 1), so a future stronger method does not re-mean old receipts" },
+        description: "the verification method version this receipt's level refers to (const 1), so a future stronger method does not re-mean old receipts" },
     },
     required: ["poolId", "proTxHash", "slotIndex", "nodeType", "operatorFeeBps", "formatVersion",
       "allocationRows", "allocationHash", "participantCount", "targetDuffs",

@@ -40,7 +40,7 @@ The project exists because the incumbent pooling service is winding down its cus
 model and its successor may not be open source. Tegara preserves the non-custodial design
 as free software for the Dash network in its own right. The requirements come from three
 sources, in a fixed order of authority. The soundness corpus (the CN- and SF- findings
-logs) decides how anything is built. The successor project's public wishlist describes what
+logs) decides how anything is built. The successor project's public asks describe what
 users need, and is never treated as architecture, because it predates the primitives this
 design stands on. The archived knowledge base of the incumbent service supplies the product
 surface, the everyday verbs a pooling member actually uses.
@@ -61,7 +61,7 @@ reward output is controlled by the rail's own non-wallet key between the coinbas
 and the asset-lock transaction that fans it out (section 4.2 and section 8). The one construction
 this project established as unsound and never uses is multisig custody with pre-signed
 refunds, which fails on Dash because first-party transaction malleability lets a participant
-invalidate the refund chain (finding CN-1, reproduced live on regtest and reviewed by three
+invalidate the refund chain (the malleability finding, reproduced live on regtest and reviewed by three
 model families).
 
 ## 3. How the design was chosen
@@ -86,7 +86,7 @@ The shared-collateral covenant was built end to end on a fork branch off the mer
 commit. Its functional test registers a two-participant shared masternode, shows a normal
 transaction cannot spend the covenant-locked collateral, and dissolves unilaterally so the
 passive participant is refunded in full to their immutable refund script, keyed by proTxHash
-and never by a malleable transaction id. That is the CN-1 closure demonstrated live at the
+and never by a malleable transaction id. That is the malleability-finding closure demonstrated live at the
 participant boundary. The retail vertical (Track C) then had a real two-slot shared
 masternode earn its owner reward in the coinbase, asserted the amount-weighted DIP-0026
 split exactly, and ended with a unilateral dissolution refunding the passive slot.
@@ -248,7 +248,7 @@ went through that review, which is what added the qualifications in sections 0, 
   not consensus-atomic with reservation), and several recovery-story sentences were rewritten
   until they claimed exactly what the code demonstrates.
 
-The findings logs are the private findings log (CN-1 through CN-4) and the private review records in the repository root, one per round, each carrying the verdicts, the cross-checks,
+The findings logs are the private findings log and the private review records in the repository root, one per round, each carrying the verdicts, the cross-checks,
 and the fix history.
 
 ## 7. The SDK capability boundary
@@ -292,7 +292,7 @@ first:
 - TRUSTED RELAY. The L1 and L2 halves were joined by a trusted JSON observation and a mirrored
   UTXO across two chains, with no trustless cross-chain verification. Only the production-path
   shape was demonstrated.
-- INTRA-GROUP PRINCIPAL SPLIT UNSOLVED (CN-5). A retail group is one covenant slot behind one
+- INTRA-GROUP PRINCIPAL SPLIT UNSOLVED (the retail split boundary). A retail group is one covenant slot behind one
   refund address, so principal is trustless down to the group-participant boundary but not
   below it; dividing that slot's refunded principal among its sub-funders lands at one
   controller and has no trustless solution under current primitives. The sound resolution is
@@ -320,7 +320,7 @@ The narrower limits:
   completion receipt, and the beneficiary-transfer discussion.
 - A trustless L1-to-L2 relay to replace the trusted observation bridge (the standing bridge
   design question).
-- The intra-group principal-split resolution for retail groups (CN-5), sound direction a #187
+- The intra-group principal-split resolution for retail groups (the retail split boundary), sound direction a #187
   refund-payout-array enhancement, analysis in `RETAIL_PRINCIPAL_SPLIT.md`.
 - The upstream vote-signature exposure in Core, the only path from corroboration to enforcement
   for the governance watcher.

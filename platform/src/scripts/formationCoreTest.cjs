@@ -67,7 +67,7 @@ throws("partial set refused", () => core.allocateBps(core.aggregateByOwner([
 throws("sub-bps refused", () => core.allocateBps(core.aggregateByOwner([
   row("r1", "A", 99999999999n + 1n - 9999999n, 1), row("r2", "B", 9999999n, 2)]), T), /basis point/);
 
-// --- CN-4 verifyRegistration ---
+// --- verifyRegistration (L1 registration verification) ---
 const C = (amt, addr) => ({ amountDuffs: amt, rewardAddress: addr });
 // a good match: two participants, amounts and reward addresses agree, total = target
 ok("verify: exact match passes", core.verifyRegistration(

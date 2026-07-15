@@ -5,7 +5,7 @@ module.exports = async (ctx) => {
     autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep } = ctx;
   const myId = ctx.myId;
       // G6: the honest expectations read. The throttle values are the deployed v24
-      // consensus bounds (validated in the CN-3 analysis); the SDK exposes no live
+      // consensus bounds (validated in the the consensus-limits analysis analysis); the SDK exposes no live
       // queue or remaining-capacity query, and this says so instead of guessing.
       const identity = await client.platform.identities.get(myId);
       const balance = BigInt(identity.getBalance());
