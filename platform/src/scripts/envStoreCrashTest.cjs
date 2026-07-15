@@ -37,6 +37,7 @@ const SEED = { COMPOUND_A: "journal-a", WATCH_B: "watermark-b", RECEIPT_DRAFT_X:
 const writeSeed = () => {
   fs.rmSync(STATE_DIR, { recursive: true, force: true });
   fs.rmSync(`${ENV_PATH}.lock`, { recursive: true, force: true });
+  fs.rmSync(path.join(STATE_DIR, "env.lock"), { recursive: true, force: true });
   fs.mkdirSync(STATE_DIR);
   fs.writeFileSync(ENV_PATH,
     `MNEMONIC=m\n${Object.entries(SEED).map(([k, v]) => `${k}=${v}`).join("\n")}\n`);
@@ -107,6 +108,7 @@ const matrixOver = (label, doWrite, expectedEnd, mustSurvive = SEED) => {
     // does this; this harness tests STATE convergence, not the lock timer, which
     // envStoreTest covers)
     fs.rmSync(`${ENV_PATH}.lock`, { recursive: true, force: true });
+  fs.rmSync(path.join(STATE_DIR, "env.lock"), { recursive: true, force: true });
     let retryErr = null;
     try { doWrite(); } catch (e) { retryErr = e; }
     ok(`${label} k=${k}: the retry converges to THIS path's end state`,

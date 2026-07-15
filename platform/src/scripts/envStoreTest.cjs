@@ -122,16 +122,27 @@ updateEnvKey("PLAIN_KEY", "v3");
   ok("foreign save preserved the marker", readEnvRaw().STATE_MIGRATED === "1");
 }
 
-// 9. journalOwner sync-exactly still holds under the pairing: absent keys delete, and a
-//    write against a foreign dir refuses before touching any file
+// 9. journalOwner sync is SCOPED to the COMPOUND_ family it owns (round-3 review
+//    blocker: the old full-sync deleted every owned prefix absent from the journal's
+//    snapshot, so a journal write racing a completion could erase a fresh
+//    RECEIPT_DRAFT_ or FORMATION_ manifest). Absent COMPOUND_ keys still delete with a
+//    .prev generation; keys of OTHER families survive a journalOwner save that never
+//    saw them. The foreign-dir writer gate is unchanged.
 {
+  updateEnvKey("COMPOUND_DEL", "doomed");
+  updateEnvKey("RECEIPT_DRAFT_RACE", "frozen");
   const env = loadEnv();
   env.COMPOUND_NEW = "n1";
-  delete env.WATCH_W;
+  delete env.COMPOUND_DEL;         // in-family: must delete
+  delete env.WATCH_W;              // other family: must SURVIVE
+  delete env.RECEIPT_DRAFT_RACE;   // other family: must SURVIVE (the draft-race case)
   saveEnv(env, { journalOwner: true });
   ok("owner write landed", loadEnv().COMPOUND_NEW === "n1");
-  ok("owner sync deleted the absent key", loadEnv().WATCH_W === undefined);
-  ok("deletion kept a .prev generation", fs.existsSync(path.join(STATE_DIR, "WATCH_W.val.prev")));
+  ok("owner sync deleted the absent IN-FAMILY key", loadEnv().COMPOUND_DEL === undefined);
+  ok("in-family deletion kept a .prev generation", fs.existsSync(path.join(STATE_DIR, "COMPOUND_DEL.val.prev")));
+  ok("a WATCH_ key survives a journal save that omitted it", loadEnv().WATCH_W !== undefined);
+  ok("a RECEIPT_DRAFT_ survives a journal save that omitted it", loadEnv().RECEIPT_DRAFT_RACE === "frozen");
+  updateEnvKey("RECEIPT_DRAFT_RACE", undefined);
   fs.writeFileSync(path.join(STATE_DIR, "store.id"), "ffffffffffffffff");
   throws("owner write against a foreign dir refuses",
     () => saveEnv(loadEnvRawForOwner(), { journalOwner: true }), /store id|NOT the state directory/s);

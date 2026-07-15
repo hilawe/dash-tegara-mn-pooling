@@ -110,57 +110,91 @@ const loadEnv = () => {
   return env;
 };
 
-// The env-file lock (a mkdir lock beside .env.local). compoundJournal.cjs holds it
-// across every journal mutation, and FOREIGN saveEnv calls hold it across their
-// reload-and-write so a journal mutation can never commit in between and be clobbered
-// (independent-review TOCTOU finding, 2026-07-12). Contention is a loud refusal, never
-// a wait, so a clobber is impossible and a collision is visible.
-const LOCK_PATH = `${ENV_PATH}.lock`;
-// 30 s (review F-G1, from the reviewer's 5 s suggestion recalibrated): no lock region holds
-// across an await (verified), so real hold times are milliseconds and 120 s of friction
-// after an interrupted CLI was pure cost; 30 s still clears a paused container or a
-// slow bind mount, where a stale-steal against a LIVE holder would clobber
-const LOCK_STALE_MS = 30000;
-const lockEnv = () => {
-  try { fs.mkdirSync(LOCK_PATH); return; } catch (e) {
-    if (e.code !== "EEXIST") throw e;
-    let age = Infinity;
-    try { age = Date.now() - fs.statSync(LOCK_PATH).mtimeMs; } catch { /* raced away; fall through */ }
-    if (age > LOCK_STALE_MS) {
-      try { fs.rmdirSync(LOCK_PATH); } catch { /* another process cleaned it */ }
-      try { fs.mkdirSync(LOCK_PATH); return; } catch { /* lost the retry race */ }
-    }
-    throw new Error(`another run holds the .env.local lock (${LOCK_PATH}); ` +
-      "retry shortly, or remove it if no other run is alive");
-  }
-};
-const unlockEnv = () => { try { fs.rmdirSync(LOCK_PATH); } catch { /* already gone */ } };
+// LOCK PLACEMENT (round-3 review blocker): the documented container recipe bind-mounts
+// exactly TWO paths, the .env.local FILE and the .env.local.state DIRECTORY. Anything
+// created merely BESIDE the env file (a sibling like .env.local.lock) lands in each
+// container's private overlay, so two containers would each acquire their "own" lock
+// and interleave freely. Both lock families therefore live INSIDE the state dir
+// whenever it exists (the shared surface every documented run mounts), and fall back
+// to the env-file sibling only for the pre-adoption host bootstrap, where a single
+// host filesystem makes the sibling shared anyway.
+const lockHome = () => (fs.existsSync(STATE_DIR) ? STATE_DIR : path.dirname(ENV_PATH));
+const envLockPath = () => (fs.existsSync(STATE_DIR)
+  ? path.join(STATE_DIR, "env.lock") : `${ENV_PATH}.lock`);
 
-// A long-held per-OPERATION lock, distinct from the short env-file lock above: one
-// completion-protocol command (complete / receipt / abandon) per pool at a time, held
-// across the WHOLE command including its network awaits (review blocker: two concurrent
-// completes could each freeze a different node hash, and the loser's frozen draft could
-// then drive an immutable receipt that contradicts the live pool; per-key env locks do
-// not serialize the protocol, only single writes). Same mkdir-exclusive mechanism, but
-// a generous stale window because a completion legitimately runs many minutes on
-// 3-minute Platform blocks.
-const OP_LOCK_STALE_MS = 60 * 60 * 1000;
-const opLockPath = (name) => `${ENV_PATH}.oplock-${name}`;
-const acquireOpLock = (name) => {
-  const p = opLockPath(name);
-  try { fs.mkdirSync(p); return; } catch (e) {
+// The env-file lock. compoundJournal.cjs holds it across every journal mutation, and
+// FOREIGN saveEnv calls hold it across their reload-and-write so a journal mutation can
+// never commit in between and be clobbered (independent-review TOCTOU finding,
+// 2026-07-12). Contention is a loud refusal, never a wait, so a clobber is impossible
+// and a collision is visible.
+// 30 s (review F-G1, recalibrated from the reviewer's 5 s suggestion): no lock region
+// holds across an await (verified), so real hold times are milliseconds; 30 s still
+// clears a paused container or a slow bind mount.
+const LOCK_STALE_MS = 30000;
+let heldEnvLockPath = null;
+const lockEnv = () => {
+  const p = envLockPath();
+  try { fs.mkdirSync(p); heldEnvLockPath = p; return; } catch (e) {
     if (e.code !== "EEXIST") throw e;
     let age = Infinity;
     try { age = Date.now() - fs.statSync(p).mtimeMs; } catch { /* raced away; fall through */ }
-    if (age > OP_LOCK_STALE_MS) {
+    if (age > LOCK_STALE_MS) {
       try { fs.rmdirSync(p); } catch { /* another process cleaned it */ }
-      try { fs.mkdirSync(p); return; } catch { /* lost the retry race */ }
+      try { fs.mkdirSync(p); heldEnvLockPath = p; return; } catch { /* lost the retry race */ }
     }
-    throw new Error(`another completion-protocol run holds the operation lock for this pool (${p}); ` +
-      "wait for it to finish, or remove the lock if no other run is alive");
+    throw new Error(`another run holds the env lock (${p}); ` +
+      "retry shortly, or remove it if no other run is alive");
   }
 };
-const releaseOpLock = (name) => { try { fs.rmdirSync(opLockPath(name)); } catch { /* already gone */ } };
+const unlockEnv = () => {
+  // release the path actually acquired: the state dir can be adopted between an
+  // acquire and a release, and releasing a recomputed path would strand the real lock
+  const p = heldEnvLockPath || envLockPath();
+  heldEnvLockPath = null;
+  try { fs.rmdirSync(p); } catch { /* already gone */ }
+};
+
+// A long-held per-OPERATION lock, distinct from the short env-file lock above: one
+// completion-protocol command (complete / receipt / abandon) per pool at a time, held
+// across the WHOLE command including its network awaits (round-2 review blocker: two
+// concurrent completes could each freeze a different node hash, and the loser's frozen
+// draft could then drive an immutable receipt that contradicts the live pool).
+// OWNERSHIP-SAFE and FAIL-CLOSED (round-3 review): the lock directory carries an owner
+// token, release removes the lock only when the token is this process's own, and a
+// stale-looking lock is NEVER stolen automatically (two waiters both judging a lock
+// stale could steal it twice; a slow-but-live completion could be stolen from and then
+// its release would unlock the thief's successor). A crashed run's lock is cleaned up
+// by the operator, explicitly, with the age shown.
+const opLockPath = (name) => path.join(lockHome(), `oplock-${name}`);
+const opLockTokens = new Map();
+const acquireOpLock = (name) => {
+  const p = opLockPath(name);
+  try {
+    fs.mkdirSync(p);
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+    let ageMin = "unknown";
+    try { ageMin = Math.round((Date.now() - fs.statSync(p).mtimeMs) / 60000); } catch { /* raced */ }
+    throw new Error(`another completion-protocol run holds the operation lock for this pool (${p}, ` +
+      `~${ageMin} min old). If that run is still alive, wait for it. If it crashed, verify no ` +
+      "formation process is running, then remove the lock directory by hand; it is never stolen " +
+      "automatically.");
+  }
+  const token = `${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+  fs.writeFileSync(path.join(p, "owner"), token);
+  opLockTokens.set(name, token);
+};
+const releaseOpLock = (name) => {
+  const p = opLockPath(name);
+  const token = opLockTokens.get(name);
+  opLockTokens.delete(name);
+  try {
+    const owner = fs.readFileSync(path.join(p, "owner"), "utf8");
+    if (token === undefined || owner !== token) return; // not ours to release
+    fs.unlinkSync(path.join(p, "owner"));
+    fs.rmdirSync(p);
+  } catch { /* already gone, or not ours */ }
+};
 
 const writeEnvFile = (out) => {
   const body = Object.entries(out).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
@@ -303,8 +337,14 @@ const splitOwned = (env) => {
 
 const saveEnv = (env, opts = {}) => {
   // journalOwner callers already hold the lock and loaded fresh state inside it; their
-  // env is the AUTHORITATIVE full state, so the owned slice syncs the state dir exactly
-  // (values written, absent keys deleted) and only the plain slice reaches the env file.
+  // env is the AUTHORITATIVE state OF THEIR OWN FAMILY, so the sync (values written,
+  // absent keys deleted) is SCOPED to the COMPOUND_ journal family the one journalOwner
+  // caller (compoundJournal.mutate) actually owns. Round-3 review blocker: the earlier
+  // full-sync treated every owned prefix as this caller's deletion domain, so a journal
+  // write racing a completion from another container (where the env lock was not shared)
+  // deleted the freshly frozen RECEIPT_DRAFT_ and could do the same to a FORMATION_
+  // manifest. Other families are written only by their owners through updateEnvKey and
+  // pass through here untouched.
   if (opts.journalOwner) {
     const { plain, owned } = splitOwned(env);
     const existing = readOwnedFiles();
@@ -313,8 +353,16 @@ const saveEnv = (env, opts = {}) => {
         plain.STATE_MIGRATED === "1" && !plain.STATE_STORE_ID);
       plain.STATE_MIGRATED = "1";
     }
-    for (const [k, v] of Object.entries(owned)) writeOwnedFile(k, v);
-    for (const k of Object.keys(existing)) if (!(k in owned)) writeOwnedFile(k, undefined);
+    const inFamily = (k) => k.startsWith("COMPOUND_");
+    for (const [k, v] of Object.entries(owned)) if (inFamily(k)) writeOwnedFile(k, v);
+    for (const k of Object.keys(existing)) {
+      if (inFamily(k) && !(k in owned)) writeOwnedFile(k, undefined);
+    }
+    // non-family owned keys that were only ever in the env file (pre-migration) still
+    // migrate to their own files rather than being dropped from the plain write below
+    for (const [k, v] of Object.entries(owned)) {
+      if (!inFamily(k) && !(k in existing)) writeOwnedFile(k, v);
+    }
     writeEnvFile(plain);
     return;
   }
