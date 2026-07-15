@@ -1,0 +1,434 @@
+/**
+ * Shared .env.local persistence with atomic replacement (review finding F13, 2026-07-11),
+ * plus the OPERATION-LOG layout the holistic round converged on: every OWNED durable
+ * value (the compound/payout journals, preferences, watch watermarks, formation
+ * manifests, RAIL_STATE, MATCH_STATE) lives in its own atomically-replaced file under a
+ * sibling state DIRECTORY, so journal writes never rewrite the file that carries the
+ * wallet mnemonic, and each family's crash story is a single small file instead of a
+ * slice of a shared one. loadEnv() overlays the state files onto the parsed env file, so
+ * every existing reader keeps working unchanged; owned keys still present in the env
+ * file (pre-migration) are migrated out on the first locked write, and a STATE_MIGRATED
+ * marker makes a FORGOTTEN state-dir container mount a loud failure instead of a silent
+ * loss of every journal. The same mkdir lock covers both stores.
+ *
+ * R4 hardening (refactors review, 2026-07-12): the state dir must pre-exist before any
+ * owned write (writers never create it implicitly, so a forgotten container mount can
+ * never spawn an ephemeral copy), a STATE_MIGRATING intent marker lands in the env file
+ * before the first migration write, and a random store id pairs the env file to its
+ * state dir (STATE_STORE_ID in the file, store.id in the dir, checked on every read and
+ * write). The matrix is pinned by envStoreTest.cjs.
+ */
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+// TEGARA_ENV_PATH override: the offline harnesses point this at a temp file so their
+// journal mutations never touch the real .env.local (the state dir derives from it, so
+// the harnesses stay hermetic automatically)
+const ENV_PATH = process.env.TEGARA_ENV_PATH || path.join(__dirname, "../../.env.local");
+const STATE_DIR = `${ENV_PATH}.state`;
+
+// ---- the owned-state file store (one value per file, atomic replace) ----
+const stateFileOf = (key) => path.join(STATE_DIR, `${key}.val`);
+
+// The store-id sentinel (review finding R4): a random id lives BOTH as STATE_STORE_ID in
+// the env file and as a store.id file inside the state dir, and the two must match.
+// Directory existence alone cannot distinguish the intended mount from an accidental
+// empty or container-local one, so every guard and every writer checks the pairing.
+const SENTINEL_PATH = () => path.join(STATE_DIR, "store.id");
+const readSentinel = () => {
+  try { return fs.readFileSync(SENTINEL_PATH(), "utf8").trim(); } catch { return null; }
+};
+const ensureStateDir = (expectedId) => {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const have = readSentinel();
+  if (have === null) { fs.writeFileSync(SENTINEL_PATH(), expectedId); return; }
+  if (have !== expectedId) {
+    throw new Error(`state dir ${STATE_DIR} carries store id ${have} but this env file expects ` +
+      `${expectedId}; this is NOT the state directory that belongs to ${ENV_PATH} ` +
+      "(wrong mount or a foreign copy), refusing to write into it");
+  }
+};
+const readOwnedFiles = () => {
+  const out = {};
+  if (!fs.existsSync(STATE_DIR)) return out;
+  for (const f of fs.readdirSync(STATE_DIR)) {
+    if (!f.endsWith(".val")) continue;
+    out[f.slice(0, -4)] = fs.readFileSync(path.join(STATE_DIR, f), "utf8");
+  }
+  return out;
+};
+const writeOwnedFile = (key, value) => {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const file = stateFileOf(key);
+  if (value === undefined) {
+    if (fs.existsSync(file)) { fs.copyFileSync(file, `${file}.prev`); fs.rmSync(file); }
+    return;
+  }
+  const tmp = `${file}.tmp`;
+  const fd = fs.openSync(tmp, "w");
+  try { fs.writeSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.prev`);
+  fs.renameSync(tmp, file);
+};
+
+const loadEnv = () => {
+  const env = {};
+  if (fs.existsSync(ENV_PATH)) for (const l of fs.readFileSync(ENV_PATH, "utf8").split("\n")) {
+    const m = l.match(/^([A-Z0-9_]+)=(.*)$/); if (m) env[m[1]] = m[2];
+  }
+  // the mount guard: once owned state has migrated to the state dir (or a migration has
+  // STARTED, the R4 intent marker), a run that cannot see that dir must fail loudly,
+  // never read a world where every journal silently vanished. When the env file carries
+  // a store id, the dir's sentinel must match it, so an accidental empty or
+  // container-local directory is refused just as loudly as a missing one.
+  if (env.STATE_MIGRATED === "1" || env.STATE_MIGRATING === "1") {
+    if (!fs.existsSync(STATE_DIR)) {
+      throw new Error(`owned state ${env.STATE_MIGRATED === "1" ? "migrated" : "is migrating"} to ` +
+        `${STATE_DIR} but that directory is not visible; mount it into the container ` +
+        "(see tegara/platform/README.md) instead of running without it");
+    }
+    if (env.STATE_STORE_ID) {
+      const have = readSentinel();
+      if (have !== env.STATE_STORE_ID) {
+        throw new Error(`state dir ${STATE_DIR} carries store id ${have === null ? "(none)" : have} ` +
+          `but the env file expects ${env.STATE_STORE_ID}; this is not the directory that belongs ` +
+          `to ${ENV_PATH} (wrong mount or a foreign copy)`);
+      }
+    } else if (!readSentinel() && !hasOwnedEvidence() && process.env.TEGARA_STATE_ADOPT !== "1") {
+      // the read-side half of the F-C2 gate: a LEGACY migrated env (no store id yet)
+      // over a dir with no sentinel and no state files would read every journal as
+      // silently absent; refuse instead of presenting an empty world
+      throw new Error(`this env file says its owned state migrated, but ${STATE_DIR} carries no ` +
+        "store.id sentinel and no state files; it is probably NOT the real state directory " +
+        "(a forgotten mount appears as exactly this empty auto-created dir). Mount the real " +
+        "directory, or if this empty one is genuinely correct, adopt it explicitly (node src/scripts/stateAdopt.cjs, or a one-shot TEGARA_STATE_ADOPT=1 run)");
+    }
+  }
+  // state files OVERLAY the env file (they are the authoritative copy after migration)
+  for (const [k, v] of Object.entries(readOwnedFiles())) env[k] = v;
+  return env;
+};
+
+// The env-file lock (a mkdir lock beside .env.local). compoundJournal.cjs holds it
+// across every journal mutation, and FOREIGN saveEnv calls hold it across their
+// reload-and-write so a journal mutation can never commit in between and be clobbered
+// (independent-review TOCTOU finding, 2026-07-12). Contention is a loud refusal, never
+// a wait, so a clobber is impossible and a collision is visible.
+const LOCK_PATH = `${ENV_PATH}.lock`;
+// 30 s (review F-G1, from the reviewer's 5 s suggestion recalibrated): no lock region holds
+// across an await (verified), so real hold times are milliseconds and 120 s of friction
+// after an interrupted CLI was pure cost; 30 s still clears a paused container or a
+// slow bind mount, where a stale-steal against a LIVE holder would clobber
+const LOCK_STALE_MS = 30000;
+const lockEnv = () => {
+  try { fs.mkdirSync(LOCK_PATH); return; } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+    let age = Infinity;
+    try { age = Date.now() - fs.statSync(LOCK_PATH).mtimeMs; } catch { /* raced away; fall through */ }
+    if (age > LOCK_STALE_MS) {
+      try { fs.rmdirSync(LOCK_PATH); } catch { /* another process cleaned it */ }
+      try { fs.mkdirSync(LOCK_PATH); return; } catch { /* lost the retry race */ }
+    }
+    throw new Error(`another run holds the .env.local lock (${LOCK_PATH}); ` +
+      "retry shortly, or remove it if no other run is alive");
+  }
+};
+const unlockEnv = () => { try { fs.rmdirSync(LOCK_PATH); } catch { /* already gone */ } };
+
+// A long-held per-OPERATION lock, distinct from the short env-file lock above: one
+// completion-protocol command (complete / receipt / abandon) per pool at a time, held
+// across the WHOLE command including its network awaits (review blocker: two concurrent
+// completes could each freeze a different node hash, and the loser's frozen draft could
+// then drive an immutable receipt that contradicts the live pool; per-key env locks do
+// not serialize the protocol, only single writes). Same mkdir-exclusive mechanism, but
+// a generous stale window because a completion legitimately runs many minutes on
+// 3-minute Platform blocks.
+const OP_LOCK_STALE_MS = 60 * 60 * 1000;
+const opLockPath = (name) => `${ENV_PATH}.oplock-${name}`;
+const acquireOpLock = (name) => {
+  const p = opLockPath(name);
+  try { fs.mkdirSync(p); return; } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+    let age = Infinity;
+    try { age = Date.now() - fs.statSync(p).mtimeMs; } catch { /* raced away; fall through */ }
+    if (age > OP_LOCK_STALE_MS) {
+      try { fs.rmdirSync(p); } catch { /* another process cleaned it */ }
+      try { fs.mkdirSync(p); return; } catch { /* lost the retry race */ }
+    }
+    throw new Error(`another completion-protocol run holds the operation lock for this pool (${p}); ` +
+      "wait for it to finish, or remove the lock if no other run is alive");
+  }
+};
+const releaseOpLock = (name) => { try { fs.rmdirSync(opLockPath(name)); } catch { /* already gone */ } };
+
+const writeEnvFile = (out) => {
+  const body = Object.entries(out).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
+  const tmp = `${ENV_PATH}.tmp`;
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeSync(fd, body);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (fs.existsSync(ENV_PATH)) fs.copyFileSync(ENV_PATH, `${ENV_PATH}.prev`);
+  try {
+    fs.renameSync(tmp, ENV_PATH);
+  } catch (e) {
+    // a single-file docker bind mount pins the inode, so nothing can rename over it
+    // (EBUSY). Fall back to an in-place copy: not atomic, but by this point the NEW
+    // state is fsynced in .tmp and the OLD state copied to .prev, so a write torn by
+    // an interruption is recoverable from either neighbor. The .tmp is kept.
+    if (!["EBUSY", "EPERM", "EXDEV"].includes(e.code)) throw e;
+    fs.copyFileSync(tmp, ENV_PATH);
+  }
+};
+
+// Key families owned by dedicated writers (the compound journal, the autopay
+// preference, the watch watermark, the formation manifest, and the OLDER durable
+// journals RAIL_STATE/MATCH_STATE, holistic-round F2), which every FOREIGN saveEnv
+// preserves from disk instead of its own possibly-stale copy. Owners write through
+// updateEnvKey (or pass journalOwner while already holding the lock).
+const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIPT_DRAFT_"];
+const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE"];
+const isOwnedKey = (k) => OWNED_KEYS.includes(k) || OWNED_PREFIXES.some((p) => k.startsWith(p));
+
+// The shared writer-side gate (review finding R4): any write that puts owned state into
+// the state dir first requires the dir to ALREADY exist (the run recipe creates it on
+// the host and mounts it; a missing dir inside a container means the mount was
+// forgotten, and creating it here would write into the container's ephemeral overlay),
+// then pairs it to this env file through the store-id sentinel. Returns the store id.
+const hasOwnedEvidence = () => {
+  try { return fs.readdirSync(STATE_DIR).some((f) => f.endsWith(".val")); } catch { return false; }
+};
+const requireStateDirLocked = (envStoreId, legacyMigrated) => {
+  if (!fs.existsSync(STATE_DIR)) {
+    throw new Error(`owned state belongs in ${STATE_DIR} but that directory does not exist; ` +
+      "create it once on the host (mkdir -p) and mount it into every container run " +
+      "(see tegara/platform/README.md), never let a run create it implicitly");
+  }
+  // the ambiguous-legacy gate (review F-C2): an env file that says its state MIGRATED
+  // but carries no store id must not adopt a directory with no sentinel AND no owned
+  // state files. A migration only ever runs when owned keys exist, so the true legacy
+  // directory always holds .val files; an empty one is the docker auto-created shape of
+  // a forgotten mount, and adopting it would pair the env file to the wrong place
+  // permanently. TEGARA_STATE_ADOPT=1 is the explicit operator override for a store
+  // that is genuinely this empty directory.
+  if (legacyMigrated && !readSentinel() && !hasOwnedEvidence() &&
+      process.env.TEGARA_STATE_ADOPT !== "1") {
+    throw new Error(`this env file says its owned state migrated, but ${STATE_DIR} carries no ` +
+      "store.id sentinel and no state files; it is probably NOT the real state directory " +
+      "(a forgotten mount appears as exactly this empty auto-created dir). Mount the real " +
+      "directory, or if this empty one is genuinely correct, adopt it explicitly (node src/scripts/stateAdopt.cjs, or a one-shot TEGARA_STATE_ADOPT=1 run)");
+  }
+  const storeId = envStoreId || readSentinel() || crypto.randomBytes(8).toString("hex");
+  ensureStateDir(storeId);
+  return storeId;
+};
+
+// One-shot migration, run inside any locked write: owned keys still living in the env
+// FILE move into their own state files and leave the env file for good. R4 ordering:
+// the STATE_MIGRATING intent marker and the store id land in the env file BEFORE the
+// first state-file write (with the owned values still inside, so nothing is lost), and
+// only the final write removes the values and flips the marker to STATE_MIGRATED. An
+// interruption anywhere in between leaves a marker that gates every later run.
+const migrateOwnedLocked = () => {
+  const fileEnv = {};
+  if (fs.existsSync(ENV_PATH)) for (const l of fs.readFileSync(ENV_PATH, "utf8").split("\n")) {
+    const m = l.match(/^([A-Z0-9_]+)=(.*)$/); if (m) fileEnv[m[1]] = m[2];
+  }
+  const owned = Object.keys(fileEnv).filter(isOwnedKey);
+  const legacy = fileEnv.STATE_MIGRATED === "1" && !fileEnv.STATE_STORE_ID;
+  if (owned.length === 0) {
+    // backfill for a store migrated before the sentinel existed: pair it now, but only
+    // to a directory carrying evidence it is the real one (F-C2, gate inside)
+    if (legacy) {
+      fileEnv.STATE_STORE_ID = requireStateDirLocked(null, true);
+      writeEnvFile(fileEnv);
+    }
+    return fileEnv;
+  }
+  const storeId = requireStateDirLocked(fileEnv.STATE_STORE_ID, legacy);
+  fileEnv.STATE_STORE_ID = storeId;
+  fileEnv.STATE_MIGRATING = "1";
+  writeEnvFile(fileEnv); // intent marker armed, owned values still safe in the env file
+  for (const k of owned) { writeOwnedFile(k, fileEnv[k]); delete fileEnv[k]; }
+  delete fileEnv.STATE_MIGRATING;
+  fileEnv.STATE_MIGRATED = "1";
+  writeEnvFile(fileEnv);
+  return fileEnv;
+};
+
+// The EXPLICIT adoption operation (review follow-on, two-model convergence): pair THIS
+// env file with the currently visible state dir, deliberately, under the lock. The
+// ordinary paths refuse an ambiguous legacy directory (no sentinel, no .val evidence)
+// and that refusal names this operation; running it is the operator stating "this
+// directory is correct". It never overrides a CONFLICTING pairing (env and dir carrying
+// different ids), because that shape means two real stores exist and a human must look.
+// Returns a non-secret report for the caller to print.
+const adoptStateDir = () => {
+  lockEnv();
+  try {
+    const fileEnv = {};
+    if (fs.existsSync(ENV_PATH)) for (const l of fs.readFileSync(ENV_PATH, "utf8").split("\n")) {
+      const m = l.match(/^([A-Z0-9_]+)=(.*)$/); if (m) fileEnv[m[1]] = m[2];
+    }
+    if (!fs.existsSync(STATE_DIR)) {
+      throw new Error(`nothing to adopt: ${STATE_DIR} does not exist (create it on the host and ` +
+        "mount it, see tegara/platform/README.md)");
+    }
+    const have = readSentinel();
+    const vals = fs.readdirSync(STATE_DIR).filter((f) => f.endsWith(".val"));
+    if (fileEnv.STATE_STORE_ID && have === fileEnv.STATE_STORE_ID) {
+      return { already: true, storeId: have, valCount: vals.length, valKeys: vals.map((f) => f.slice(0, -4)) };
+    }
+    if (fileEnv.STATE_STORE_ID && have && have !== fileEnv.STATE_STORE_ID) {
+      throw new Error(`refusing to adopt: the env file expects store id ${fileEnv.STATE_STORE_ID} but ` +
+        `${STATE_DIR} carries ${have}; two different stores exist and adoption never overrides a ` +
+        "conflicting pairing, resolve by hand");
+    }
+    const storeId = fileEnv.STATE_STORE_ID || have || crypto.randomBytes(8).toString("hex");
+    if (have === null) fs.writeFileSync(SENTINEL_PATH(), storeId);
+    if (fileEnv.STATE_STORE_ID !== storeId) { fileEnv.STATE_STORE_ID = storeId; writeEnvFile(fileEnv); }
+    return { already: false, storeId, valCount: vals.length, valKeys: vals.map((f) => f.slice(0, -4)) };
+  } finally { unlockEnv(); }
+};
+
+const splitOwned = (env) => {
+  const plain = {}; const owned = {};
+  for (const [k, v] of Object.entries(env)) (isOwnedKey(k) ? owned : plain)[k] = v;
+  return { plain, owned };
+};
+
+const saveEnv = (env, opts = {}) => {
+  // journalOwner callers already hold the lock and loaded fresh state inside it; their
+  // env is the AUTHORITATIVE full state, so the owned slice syncs the state dir exactly
+  // (values written, absent keys deleted) and only the plain slice reaches the env file.
+  if (opts.journalOwner) {
+    const { plain, owned } = splitOwned(env);
+    const existing = readOwnedFiles();
+    if (Object.keys(owned).length > 0 || Object.keys(existing).length > 0) {
+      plain.STATE_STORE_ID = requireStateDirLocked(plain.STATE_STORE_ID,
+        plain.STATE_MIGRATED === "1" && !plain.STATE_STORE_ID);
+      plain.STATE_MIGRATED = "1";
+    }
+    for (const [k, v] of Object.entries(owned)) writeOwnedFile(k, v);
+    for (const k of Object.keys(existing)) if (!(k in owned)) writeOwnedFile(k, undefined);
+    writeEnvFile(plain);
+    return;
+  }
+  // a FOREIGN save never touches owned state at all now (it lives in files the save does
+  // not write), so a stale env copy can neither clobber nor resurrect a journal; only
+  // the caller's plain keys land, after the one-shot migration clears any pre-migration
+  // owned keys out of the env file.
+  lockEnv();
+  try {
+    migrateOwnedLocked();
+    const { plain } = splitOwned(env);
+    const disk = {};
+    if (fs.existsSync(ENV_PATH)) for (const l of fs.readFileSync(ENV_PATH, "utf8").split("\n")) {
+      const m = l.match(/^([A-Z0-9_]+)=(.*)$/); if (m) disk[m[1]] = m[2];
+    }
+    if (disk.STATE_MIGRATED === "1") plain.STATE_MIGRATED = "1";
+    // the store id pairs the env file to its state dir; the DISK value is freshest
+    // (migrateOwnedLocked may have just backfilled it inside this same lock)
+    if (disk.STATE_STORE_ID) plain.STATE_STORE_ID = disk.STATE_STORE_ID;
+    writeEnvFile(plain);
+  } finally { unlockEnv(); }
+};
+
+// The owner-side write for a single key: locked, against the freshest disk state (pass
+// undefined to delete). Owned keys land in their own state file; plain keys in the env
+// file. This is how AUTOPAY_* toggles, watch watermarks, and formation manifests land,
+// so a stale env copy can neither revert nor erase them (independent-review finding).
+const updateEnvKey = (key, value) => {
+  lockEnv();
+  try {
+    const fileEnv = migrateOwnedLocked();
+    if (isOwnedKey(key)) {
+      const storeId = requireStateDirLocked(fileEnv.STATE_STORE_ID,
+        fileEnv.STATE_MIGRATED === "1" && !fileEnv.STATE_STORE_ID);
+      writeOwnedFile(key, value);
+      if (fileEnv.STATE_MIGRATED !== "1" || fileEnv.STATE_STORE_ID !== storeId) {
+        fileEnv.STATE_MIGRATED = "1"; fileEnv.STATE_STORE_ID = storeId; writeEnvFile(fileEnv);
+      }
+    } else {
+      if (value === undefined) delete fileEnv[key]; else fileEnv[key] = value;
+      writeEnvFile(fileEnv);
+    }
+  } finally { unlockEnv(); }
+};
+
+/**
+ * Which pool-ledger contract this run targets: LEDGER=v3 selects the v3 contract
+ * (reconstructible accruals + on-ledger settlements, registerV3.cjs); LEDGER=v4 the v4
+ * contract (v3 plus the accrual `kind` inside the unique key and the unique byJoin
+ * settlement index, registerV4.cjs); default is the original v1 ledger. Every script
+ * maps the "poolLedger" app name to this id, so the document type names stay identical
+ * across versions.
+ */
+const activeContractId = (env) => {
+  // an unsupported nonempty selector is a configuration typo, never a silent fallback
+  // to the v1 namespace (independent-review finding); validated HERE so every caller
+  // gets the same protection
+  if (process.env.LEDGER && !["v1", "v3", "v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER)) {
+    throw new Error(`unsupported LEDGER value "${process.env.LEDGER}" (use v1, v3, v4, v5, v6, v7, or v8)`);
+  }
+  if (process.env.LEDGER === "v3") {
+    if (!env.CONTRACT_V3_ID) throw new Error("LEDGER=v3 but CONTRACT_V3_ID is missing; run registerV3.cjs first");
+    return env.CONTRACT_V3_ID;
+  }
+  if (process.env.LEDGER === "v4") {
+    if (!env.CONTRACT_V4_ID) throw new Error("LEDGER=v4 but CONTRACT_V4_ID is missing; run registerV4.cjs first");
+    return env.CONTRACT_V4_ID;
+  }
+  if (process.env.LEDGER === "v5") {
+    if (!env.CONTRACT_V5_ID) throw new Error("LEDGER=v5 but CONTRACT_V5_ID is missing; run registerV5.cjs first");
+    return env.CONTRACT_V5_ID;
+  }
+  if (process.env.LEDGER === "v6") {
+    if (!env.CONTRACT_V6_ID) throw new Error("LEDGER=v6 but CONTRACT_V6_ID is missing; run registerV6.cjs first");
+    return env.CONTRACT_V6_ID;
+  }
+  if (process.env.LEDGER === "v7") {
+    if (!env.CONTRACT_V7_ID) throw new Error("LEDGER=v7 but CONTRACT_V7_ID is missing; run registerV7.cjs first");
+    return env.CONTRACT_V7_ID;
+  }
+  if (process.env.LEDGER === "v8") {
+    if (!env.CONTRACT_V8_ID) throw new Error("LEDGER=v8 but CONTRACT_V8_ID is missing; run registerV8.cjs first");
+    return env.CONTRACT_V8_ID;
+  }
+  return env.CONTRACT_ID;
+};
+// isV3 means "the v3 feature set or later" (bps-carrying accruals, on-ledger
+// settlements); each later version is a strict superset, so it answers true for all of
+// them. isV4 gates what v4 added (the accrual `kind` in the unique key) and answers
+// true for v5 too; isV5 gates v5's own additions (pool status, join provenance and
+// reward scripts, delegateTo).
+const isV3 = () => ["v3", "v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER);
+const isV4 = () => ["v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER);
+const isV5 = () => ["v5", "v6", "v7", "v8"].includes(process.env.LEDGER);
+// isV6 means "the pledgeSlot reservation exists" (true for v7 and v8 too); isV7 gates
+// what v7 added (slot economics on the pool, sizeless mutable claims), which v8 keeps,
+// so it answers true for v8; isV8 gates v8's own addition (the completion receipt)
+const isV6 = () => ["v6", "v7", "v8"].includes(process.env.LEDGER);
+const isV7 = () => ["v7", "v8"].includes(process.env.LEDGER);
+const isV8 = () => process.env.LEDGER === "v8";
+// the cast-governance namespace: CAST=v3 selects the v3 contract (formatVersion,
+// missed-vote attestations); default is the v2 snapshot-first contract
+const activeCastId = (env) => {
+  if (process.env.CAST && !["v2", "v3"].includes(process.env.CAST)) {
+    throw new Error(`unsupported CAST value "${process.env.CAST}" (use v2 or v3)`);
+  }
+  if (process.env.CAST === "v3") {
+    if (!env.CAST_V3_CONTRACT_ID) throw new Error("CAST=v3 but CAST_V3_CONTRACT_ID is missing; run registerCastV3.cjs first");
+    return env.CAST_V3_CONTRACT_ID;
+  }
+  return env.CAST_V2_CONTRACT_ID;
+};
+const isCastV3 = () => process.env.CAST === "v3";
+
+module.exports = { ENV_PATH, STATE_DIR, loadEnv, saveEnv, updateEnvKey, lockEnv, unlockEnv,
+  acquireOpLock, releaseOpLock,
+  adoptStateDir, activeContractId, isV3, isV4, isV5, isV6, isV7, isV8, activeCastId, isCastV3 };
