@@ -83,7 +83,7 @@ const fetchCollateral = async (proTxHex) => {
   return { txid: info.collateralHash, vout: Number(info.collateralIndex) };
 };
 
-/** The masternode's #187 share table from protx info (CN-4). Returns null when the node
+/** The masternode's #187 share table from protx info (registration verification). Returns null when the node
  *  is not a shared registration (vanilla DIP3 exposes no shares), so the caller can fall
  *  back to an existence-only check; otherwise a normalized array of
  *  { amountDuffs, rewardAddress, refundAddress }. The reward destination follows the #187

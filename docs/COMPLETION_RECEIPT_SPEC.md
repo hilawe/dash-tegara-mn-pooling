@@ -39,11 +39,11 @@ The receipt is operator-signed. With the owner-binding below, consensus establis
 It does NOT prove that the L1 registration matched the manifest, that the member shares exist or
 match, that the claimed `l1Verification` level was actually performed, that principal
 destinations protect principal, or that retail sub-funders have direct covenant protection
-(CN-5). A third party VERIFIES the allocation by recomputing the hash from the receipt's OWN
+(the retail split boundary). A third party VERIFIES the allocation by recomputing the hash from the receipt's OWN
 embedded rows (self-contained) and, for a live cross-check, by fetching the pool's `share`
 documents and confirming they still match, noting that shares are mutable so a later divergence
 means churn, not a false receipt. The receipt adds public immutability and discoverability; it
-does not raise CN-4's or CN-5's trust level. Every doc that describes it repeats this ceiling.
+does not raise the underlying L1 trust level. Every doc that describes it repeats this ceiling.
 
 ## The contract (pool-ledger v8 = v7 + one document type)
 
@@ -98,14 +98,14 @@ bound, fix it there and re-pin. Notes on the schema decisions:
   party verifies from the receipt alone. A hash-only receipt is NOT durably verifiable, because
   the shares it would be checked against are mutable and drift after completion. `allocationHash`
   is the compact content id over those bytes.
-- `l1Verification` is a SCOPED enum (M5/C-B): `amount-reward-verified` is CN-4's real strength
+- `l1Verification` is a SCOPED enum (M5/C-B): `amount-reward-verified` is the check's real strength
   (node existence, count, total, and the (amount, reward-destination) pair multiset, NOT owner
   keys or refund scripts), `node-existence-only` is the non-shared-node fallback, and
-  `demo-unverified` is the override path. `verificationMethodVersion` lets a future stronger CN-4
+  `demo-unverified` is the override path. `verificationMethodVersion` lets a future stronger registration verification
   (owner keys + refund scripts, complete tuples) add a new level without re-meaning old receipts.
 - `participantCount` is 1..8 DIRECT covenant participants and is ENFORCED in formation before
   COMMIT (M6/C-F); it is NOT a general Platform-allocation count. v8 formation is the direct
-  co-owner flow. The receipt does not represent retail beneficial owners and must not imply CN-5
+  co-owner flow. The receipt does not represent retail beneficial owners and must not imply the retail split
   is solved.
 
 ## Canonical allocation preimage (M4/C-C; the exact bytes, pure and harness-tested, do FIRST)
@@ -171,7 +171,7 @@ contract.
 and the same pattern at line 297 (claim scripts). That bound accepts ODD-length hex, and
 `Buffer.from(oddHex, "hex")` silently truncates the trailing half-byte, so a malformed script can
 pass validation and be stored a byte short. Tighten both to require whole bytes, e.g.
-`/^([0-9a-f]{2}){1,34}$/` (1 to 34 byte-pairs = 2 to 68 chars). This is in the CN-4-reviewed
+`/^([0-9a-f]{2}){1,34}$/` (1 to 34 byte-pairs = 2 to 68 chars). This is in the reviewed
 formation code; fix it with the v8 build (or as a standalone commit first, since it is independent
 of the receipt work).
 
@@ -183,7 +183,7 @@ count the covenant tier does not permit.
 
 ### Thread the verification level out of PREFLIGHT (a)
 
-CN-4's PREFLIGHT (a) already decides the level; capture it as a variable
+PREFLIGHT (a) already decides the level; capture it as a variable
 (`amount-reward-verified` / `node-existence-only` / `demo-unverified`) for the receipt.
 
 ### Persist a FROZEN RECEIPT DRAFT after preflight, before the flip (FU-2)

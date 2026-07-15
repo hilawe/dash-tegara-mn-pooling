@@ -42,6 +42,10 @@ lives.
   is and is not attested.
 - This code has been through repeated independent review, and the review discipline is part of
   the method, but it is still a prototype and has not been audited for production use.
+- Several of the protocol gaps this implementation works around were independently identified
+  and prioritized in a public memo from the CrowdNode successor project to Dash Core Group
+  (July 2026), among them cancel-safe pooled registration and locking Platform withdrawals to
+  the L1 payout array. This codebase demonstrates, in running form, why those asks matter.
 
 ## Running the offline pieces
 

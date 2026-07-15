@@ -61,7 +61,7 @@ const allocateBps = (owners, target) => {
   return alloc;
 };
 
-/** CN-4 full L1 registration verification: compare a completion manifest's committed
+/** registration verification full L1 registration verification: compare a completion manifest's committed
  *  participation against the #187 share table the masternode was ACTUALLY registered
  *  with. Both sides arrive normalized to [{ amountDuffs: string, rewardAddress: string }]
  *  (the caller derives the manifest side's addresses from its reward scripts and reads
@@ -77,7 +77,7 @@ const allocateBps = (owners, target) => {
  *  result is `incomparable` (a valid #187 reward is P2PKH/P2SH and always resolves, so an
  *  unresolved entry is suspicious); the caller must FAIL CLOSED on that, not proceed.
  *
- *  What this does NOT verify, so it is the recorded CN-4 residual and it is BROADER than a
+ *  What this does NOT verify, so it is the recorded registration verification residual and it is BROADER than a
  *  mere owner permutation (review finding): the manifest records no per-member share
  *  OWNER KEY ID and no per-member REFUND (principal) destination, so those two fields are
  *  not checked at all. A registration with ARBITRARY owner keys and ARBITRARY refund

@@ -23,7 +23,7 @@
  *   done [prune <olderThanDays>]        list or prune the retained finalized manifests
  *
  * The completion protocol (shaped by the independent reviews, including the holistic
- * round's CN-4):
+ * round's registration-verification requirement):
  *   1. COMMIT: aggregate the pending pledges BY OWNER, allocate weights over the exact
  *      fill, resolve each owner's reward script (the member-supplied v5 script wins,
  *      else a wallet derivation off the persistent FORMATION_ADDR_INDEX counter), and
@@ -329,7 +329,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     installConsumedFilter(await client.getWalletAccount());
     const operator = await client.platform.identities.get(env.IDENTITY_ID);
 
-    // PREFLIGHT (a) as a function, the L1 REGISTRATION CHECK (holistic-round F4 / CN-4,
+    // PREFLIGHT (a) as a function, the L1 REGISTRATION CHECK (holistic-round F4,
     // full): the claimed node must exist on Core AND, when it is a #187 shared
     // registration, its share table must match the manifest (participant count,
     // collateral total, amounts, and reward destinations) before any Platform settlement
@@ -349,9 +349,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           col = await fetchCollateral(proTxHex.toLowerCase());
         } catch (e) {
           throw new Error(`Core does not know masternode ${proTxHex} (${(e && e.message) || e}); ` +
-            "refusing to settle a pool on an unverified registration (CN-4). The manifest is kept.");
+            "refusing to settle a pool on an unverified registration (registration verification). The manifest is kept.");
         }
-        // CN-4 full check: when the node is a #187 shared registration, verify its share
+        // full registration-verification check: when the node is a #187 shared registration, verify its share
         // table (participant count, collateral total, amounts, reward destinations)
         // against the manifest, not just that the node exists. A non-shared node (vanilla
         // DIP3) exposes no share table, so fall back to the existence-only claim honestly.
@@ -387,18 +387,18 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             return "demo-unverified";
           }
           throw new Error("L1 registration reward destinations could not be verified against the " +
-            `manifest (CN-4): ${res.reason}. Refusing to settle; the manifest is kept. Set ` +
+            `manifest (registration verification): ${res.reason}. Refusing to settle; the manifest is kept. Set ` +
             "FORMATION_ALLOW_UNVERIFIED=demo only for a known demo registration.");
         }
         if (!res.ok) {
-          throw new Error("L1 registration does NOT match the committed manifest (CN-4): " +
+          throw new Error("L1 registration does NOT match the committed manifest (registration verification): " +
             res.mismatches.join("; ") + ". Refusing to settle; the manifest is kept. Resolve with " +
             "the members, then `abandon " + poolIdStr + "` and re-form.");
         }
-        console.log(`L1 registration verified on Core against the manifest (CN-4): ${shareTable.length} ` +
+        console.log(`L1 registration verified on Core against the manifest (registration verification): ${shareTable.length} ` +
           `share(s), ${DASHfmt(target)} DASH total, (amount, reward) pairing matches. NOTE: share owner ` +
           "keys and refund (principal) destinations are NOT recorded in the manifest, so they are " +
-          "unverified (the recorded CN-4 residual)");
+          "unverified (the recorded registration verification residual)");
         return "amount-reward-verified";
       }
       if (process.env.FORMATION_ALLOW_UNVERIFIED === "demo") {
@@ -407,7 +407,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         return "demo-unverified";
       }
       throw new Error("no FORK_RPC_URL to verify the L1 registration against, and the explicit demo " +
-        "override (FORMATION_ALLOW_UNVERIFIED=demo) is not set; refusing (CN-4)");
+        "override (FORMATION_ALLOW_UNVERIFIED=demo) is not set; refusing (registration verification)");
     };
 
     // The v8 frozen receipt draft key (spec FU-2): every receipt field, including the
@@ -799,14 +799,14 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       };
       for (const o of manifest.owners) await identityFor(o.owner);
 
-      // PREFLIGHT (a): the CN-4 L1 registration check, extracted to
+      // PREFLIGHT (a): the registration verification L1 registration check, extracted to
       // decideL1Verification above so the `receipt` recovery path runs the identical
       // check. It throws to refuse (the manifest is kept) and returns the scoped
       // verification level the v8 receipt records.
       const l1Level = await decideL1Verification(proTxHex, manifest, target, poolIdStr);
 
       // PREFLIGHT (b), the CANCEL-OR-MUTATE-AFTER-COMMIT CHECK (holistic-round F3 /
-      // CN-4, extended by review F-C1): every committed pledge must still exist on the
+      // registration verification, extended by review F-C1): every committed pledge must still exist on the
       // ledger AND still say what the manifest snapshotted (owner, pool, slot, script,
       // amount), or its owner's share must already exist (resume evidence that
       // settlement passed them). Mutable claims (v7) made bare existence meaningless: a
@@ -823,7 +823,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         if (ownerShare.length > 0) continue; // settlement already passed this owner
         // v6/v7 committed claims are pledgeSlot documents; v5 and earlier are
         // membershipRequests. A claim that vanished after COMMIT means the member left
-        // before the registration could have included them (CN-4).
+        // before the registration could have included them (registration verification).
         const claimType = isV6() ? "poolLedger.pledgeSlot" : "poolLedger.membershipRequest";
         for (const reqId of o.reqIds) {
           const req = await client.platform.documents.get(claimType, {
@@ -833,7 +833,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             throw new Error(`committed pledge ${reqId} (owner ${o.owner}) is GONE from the ledger: ` +
               "the member cancelled after COMMIT, so the committed allocation no longer has their " +
               "participation. Refusing to settle. Resolve with the members, then `abandon " +
-              `${poolIdStr}\` and re-form (CN-4).`);
+              `${poolIdStr}\` and re-form (registration verification).`);
           }
           const snap = snapshotOf.get(reqId);
           if (!snap) continue; // legacy manifest, noted above
@@ -1076,7 +1076,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // pool is live WITHOUT a receipt (a crash between the flip and the receipt, or a
       // pre-v8 completion migrated forward), publishes it from the FROZEN RECEIPT
       // DRAFT, or rebuilds the draft from the retained FORMATION_DONE_ manifest (the
-      // verification level is re-decided by the SAME CN-4 preflight check).
+      // verification level is re-decided by the SAME preflight check).
       if (!isV8()) throw new Error("the receipt command needs LEDGER=v8");
       const [poolIdStr] = args;
       if (!poolIdStr) throw new Error("usage: receipt <poolId>");
@@ -1210,7 +1210,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         validateReceiptDraft(draft, poolIdStr, manifest); // self-check before persisting
         updateEnvKey(draftKey, JSON.stringify(draft));
         console.log("receipt draft REBUILT from the retained manifest (allocation from the frozen " +
-          `commitment, level ${level} re-decided by the same CN-4 check)`);
+          `commitment, level ${level} re-decided by the same registration verification check)`);
       }
       await writeReceiptIdempotent(pool, poolIdStr, draft);
       // full finalization, not just the draft clear (review major): retain the
