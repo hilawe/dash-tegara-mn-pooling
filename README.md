@@ -26,6 +26,12 @@ lives.
   reviewed step), pool formation with frozen completion manifests and on-ledger completion
   receipts, a reward credit rail, member churn with matched settlements, a governance stack with
   snapshot-first cast receipts, and offline test harnesses for every pure core.
+- Seed-loss recovery runs on [dash-rawkey-signer](https://github.com/hilawe/dash-rawkey-signer),
+  a small standalone library that signs Dash Platform state transitions as an identity using a
+  raw private key, with no hierarchical-deterministic wallet seed. A member who has lost their
+  wallet seed acts on their identity (withdrawals, votes) using only the recovery keys they added
+  while they still had it (`recoverClient.cjs`). The library was extracted from this codebase and
+  is useful on its own to any Platform project that needs wallet-free signing.
 - `DESIGN.md` records the architecture and the trust model.
 - `docs/TEGARA_REFERENCE.md` is the whole-build consolidation.
 - `docs/COMPLETION_RECEIPT_SPEC.md` is the design record of the on-ledger completion receipt
@@ -34,9 +40,12 @@ lives.
 ## What is honest to say about it
 
 - The trustless Layer 1 custody construction is not deployed on any public Dash network today.
-  Tegara builds on the covenant proposal rather than substituting a weaker custody construction,
-  because a traditional multisig with pre-signed refunds is unsound on Dash (first-party
-  transaction malleability, no SegWit).
+  The shared-collateral covenant it depends on is an OPEN, UNMERGED proposal (dashpay/dips#187,
+  still open as of July 2026), and even after a merge its consensus changes would wait on a
+  future hard fork to activate. Tegara builds on that proposal rather than substituting a weaker
+  custody construction, because a traditional multisig with pre-signed refunds is unsound on
+  Dash (first-party transaction malleability, no SegWit). If the proposal changes shape or is
+  rejected, the Layer 1 half of this design changes with it.
 - The receipts and ledgers prove what the operator recorded, immutably and uniquely. They do not
   by themselves prove what happened on Layer 1. Each document type's comments state exactly what
   is and is not attested.
