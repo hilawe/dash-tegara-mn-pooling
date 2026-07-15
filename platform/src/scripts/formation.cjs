@@ -248,7 +248,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
   // persisting) and to a loaded one (before it drives anything).
   const validateManifest = (m, poolIdStr, proTxHex, po) => {
     const fail = (why) => { throw new Error(`the completion manifest failed validation (${why}); ` +
-      "restore .env.local.prev or remove the FORMATION_ key after verifying state by hand"); };
+      "restore its .val.prev generation in .env.local.state/ or remove the FORMATION_ key after verifying state by hand (a restored generation still passes this validation)"); };
     if (!m || typeof m !== "object" || Array.isArray(m) || m.v !== 1) fail("version/shape");
     if (m.poolId !== poolIdStr) fail("pool id");
     if (m.realHash !== proTxHex.toLowerCase()) {
@@ -528,7 +528,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // then, when the frozen manifest is at hand, every derivable field against it.
     const validateReceiptDraft = (draft, poolIdStr, manifest) => {
       const fail = (why) => { throw new Error(`the frozen receipt draft failed validation (${why}); ` +
-        "restore .env.local.prev or remove the RECEIPT_DRAFT_ key after verifying state by hand"); };
+        "restore its .val.prev generation in .env.local.state/ or remove the RECEIPT_DRAFT_ key after verifying state by hand (a restored generation still passes full draft validation and the pool comparison)"); };
       if (!draft || typeof draft !== "object" || Array.isArray(draft) || draft.v !== 1) fail("version/shape");
       if (draft.poolId !== poolIdStr) fail("pool id");
       if (typeof draft.proTxHash !== "string" || !/^([0-9a-f]{2}){32}$/.test(draft.proTxHash)) fail("proTxHash");
@@ -719,7 +719,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       let manifest = null;
       const rawManifest = loadEnv()[manifestKey];
       if (rawManifest !== undefined) {
-        try { manifest = JSON.parse(rawManifest); } catch { throw new Error("the committed manifest is corrupt; restore .env.local.prev"); }
+        try { manifest = JSON.parse(rawManifest); } catch { throw new Error("the committed manifest is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated before use)"); }
         validateManifest(manifest, poolIdStr, proTxHex, po);
         console.log("resuming the COMMITTED completion (driving from the manifest, not live state)");
       } else {
@@ -916,7 +916,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         const rawDraft = loadEnv()[draftKey];
         if (rawDraft !== undefined) {
           try { receiptDraft = JSON.parse(rawDraft); } catch {
-            throw new Error("the frozen receipt draft is corrupt; restore .env.local.prev");
+            throw new Error("the frozen receipt draft is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated against the manifest and pool before use)");
           }
           // FULL fail-closed validation, not just the rows check (review major): a
           // parseable-but-damaged draft drives an immutable write, so every field is
@@ -1096,7 +1096,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       let draft = null;
       if (envNow[draftKey] !== undefined) {
         try { draft = JSON.parse(envNow[draftKey]); } catch {
-          throw new Error("the frozen receipt draft is corrupt; restore .env.local.prev");
+          throw new Error("the frozen receipt draft is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated against the manifest and pool before use)");
         }
       }
       const rawManifest = envNow[activeKey] !== undefined ? envNow[activeKey] : envNow[doneKey];
@@ -1104,7 +1104,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       let manifest = null;
       if (rawManifest !== undefined) {
         try { manifest = JSON.parse(rawManifest); } catch {
-          throw new Error("the retained manifest is corrupt; restore .env.local.prev");
+          throw new Error("the retained manifest is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated before use)");
         }
         validateManifest(manifest, poolIdStr, manifest.realHash, po);
       }
@@ -1115,6 +1115,25 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       }))[0] || null;
       if (existing) {
         const o = existing.toObject();
+        // bind the receipt to CURRENT pool state before accepting anything or touching
+        // local state (round-3 review): a receipt for a still-forming pool, or one whose
+        // hash contradicts what the pool is actually live under, is an anomaly that must
+        // stop loudly, never be printed as valid or allowed to clear recovery intent
+        const poolHashNow = Buffer.from(po.proTxHash);
+        if (core.isFormingHash(poolHashNow)) {
+          throw new Error("a completionReceipt exists but the pool is still FORMING; that receipt " +
+            "was not written by this flow (the flip precedes the receipt). Local state is kept, " +
+            "resolve by hand.");
+        }
+        if (po.status !== undefined && po.status !== "live") {
+          throw new Error(`a completionReceipt exists but the pool status is "${po.status}", not ` +
+            "live; local state is kept, resolve by hand");
+        }
+        if (!poolHashNow.equals(Buffer.from(o.proTxHash))) {
+          throw new Error(`the receipt records proTxHash ${Buffer.from(o.proTxHash).toString("hex")} ` +
+            `but the pool is live under ${poolHashNow.toString("hex")}; the receipt contradicts the ` +
+            "pool, local state is kept, resolve by hand");
+        }
         const check = core.verifyReceiptAllocation(activeContractId(env), {
           allocationRows: Buffer.from(o.allocationRows),
           allocationHash: Buffer.from(o.allocationHash),

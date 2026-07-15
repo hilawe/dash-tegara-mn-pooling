@@ -207,12 +207,16 @@ const setRaw = (v) => { const env = loadEnv(); env[rawKey] = v; saveEnv(env, { j
   // in the same lock (review TOCTOU finding: with both sides locking, a journal
   // mutation can never commit between a foreign save's reload and write; the interleave
   // is impossible-by-refusal, which is what these two cases pin down)
-  fs.mkdirSync(`${ENV_PATH}.lock`);
+  // the lock lives inside the shared state dir when one exists (round-3 review: a
+  // sibling of the env FILE is container-private under the documented bind mounts)
+  const lockAt = fs.existsSync(`${ENV_PATH}.state`)
+    ? path.join(`${ENV_PATH}.state`, "env.lock") : `${ENV_PATH}.lock`;
+  fs.mkdirSync(lockAt);
   throws("lock refused (journal mutation)", () => journal.reserve(CID, MID,
-    "5q9PxYWDPkeeUh7RfCf5wDDbTTNKgBotG5cUuQGk4o5w", 1n, 100n), /holds the \.env\.local lock/);
+    "5q9PxYWDPkeeUh7RfCf5wDDbTTNKgBotG5cUuQGk4o5w", 1n, 100n), /holds the env lock/);
   throws("lock refused (foreign saveEnv)", () => saveEnv({ SOME: "thing" }),
-    /holds the \.env\.local lock/);
-  fs.rmdirSync(`${ENV_PATH}.lock`);
+    /holds the env lock/);
+  fs.rmdirSync(lockAt);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
