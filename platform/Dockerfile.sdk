@@ -1,0 +1,11 @@
+# A Linux container to run the dash SDK against the local dashmate devnet.
+# The macOS host cannot reach the gateway's cert address (the colima VM IP) and cannot do TLS SNI to
+# an IP, so we run the SDK inside the VM (docker --network host) where 192.168.5.2:2443 is reachable
+# and the regenerated gateway cert (with IP SANs) validates via the mounted dashmate CA.
+FROM node:20-bookworm-slim
+WORKDIR /app
+COPY package.json tsconfig.json ./
+RUN npm install --no-audit --no-fund
+COPY src ./src
+RUN npx tsc
+CMD ["node", "src/scripts/ping.cjs"]
