@@ -1,9 +1,11 @@
 /**
  * Offline schema test for the v9 draft (plain `node`, no network). Three nets, per the
  * draft review's rounds:
- *   1. buildV8 is pinned against a REVIEWED BASELINE HASH of the construction the live
- *      v8 contract was published from, so a drift in buildV8 (or in the base contract
- *      it derives from) cannot silently move both sides of the v8-to-v9 comparison.
+ *   1. buildV8 is pinned against a REVIEWED BASELINE HASH of the canonical SOURCE
+ *      construction (which carries two post-publish source-only bound tightenings; the
+ *      live ledger retains the looser published values, see the contractV8.cjs
+ *      header), so a drift in buildV8 (or in the base contract it derives from)
+ *      cannot silently move both sides of the v8-to-v9 comparison.
  *   2. every type v9 does not intend to change must deep-equal its v8 form, and the
  *      types it DOES change (pool, completionReceipt, pledgeSlot) are pinned as
  *      COMPLETE expected objects or exact patches, not spot-checks.
@@ -21,11 +23,16 @@ const ok = (name, cond) => {
   if (cond) { passed++; }
   else { failed++; console.error("FAIL:", name); }
 };
-const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// key-order-insensitive deep equality (an external review noted the earlier
+// JSON.stringify form could fail on a semantically harmless key reorder; note
+// deepStrictEqual THROWS on mismatch, so it must be wrapped, not compared)
+const assert = require("assert");
+const eq = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
 
 // the sha256 of the SEMANTIC v8 schema (buildV8 output with every description string
-// stripped) at the reviewed extraction, which was deep-compare-verified identical to the
-// pre-refactor inline construction registerV8 published from. Descriptions are excluded
+// stripped) at the reviewed extraction. It pins the canonical SOURCE construction, not
+// the live ledger schema (the source carries two post-publish source-only bound
+// tightenings; the ledger keeps its looser published values). Descriptions are excluded
 // on purpose: they are prose, and the public derived face genericizes provenance tags
 // inside them, so hashing them would fork the baseline between the two faces of the same
 // source; the net pins SEMANTIC drift (types, bounds, indices, required, positions,
@@ -90,8 +97,8 @@ const EXPECTED_V9_POOL = {
   const v8 = buildV8(poolLedgerContract);
   const v9 = buildV9(poolLedgerContract);
 
-  // ---- net 1: the v8 baseline is the published construction (semantic form) ----
-  ok("buildV8 matches the reviewed published baseline (semantic sha256)",
+  // ---- net 1: the v8 baseline is the reviewed canonical source (semantic form) ----
+  ok("buildV8 matches the reviewed canonical source baseline (semantic sha256)",
     crypto.createHash("sha256").update(JSON.stringify(stripDescriptions(v8))).digest("hex") === V8_BASELINE_SHA256);
 
   // ---- net 2: exact diff. NO new or removed types; only three types change ----

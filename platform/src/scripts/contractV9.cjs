@@ -94,6 +94,10 @@
  *   - The receipt is NOT self-contained under v9: third-party verification fetches the
  *     receipt and its immutable pool (v8 embedded the pool constants instead; that
  *     duplication was the contradiction surface, round three).
+ *   - ONE OPERATOR PER CONTRACT INSTANCE: owner-only creation makes the contract owner
+ *     the sole operator of that instance, so a second operator publishes their OWN
+ *     contract rather than sharing this one. That is the design, not a limitation to
+ *     work around, and operator tooling should say so before a second operator appears.
  *
  * ADOPTION CHECKLIST for whenever v9 publishes (none of this runs today; the sites are
  * the review-verified real ones, not examples):
@@ -105,7 +109,8 @@
  *   - ONE SHARED receipt-to-pool verifier module carrying the FOUR duties above;
  *     every liveness/node consumer routes through it, never through raw receipt
  *     presence, and the standalone allocation verifier is subsumed by (or explicitly
- *     defers to) it.
+ *     defers to) it. When resolving many receipts to their pools, batch the pool
+ *     fetches with the `$id in [...]` query form instead of one fetch per receipt.
  *   - THE RECEIPT PIPELINE ITSELF migrates to the pared shape: formation's
  *     receiptPropertiesFromDraft still emits the removed nodeType/operatorFeeBps/
  *     targetDuffs (a v9 broadcast would be schema-rejected), verifyReceiptAgainstDraft
