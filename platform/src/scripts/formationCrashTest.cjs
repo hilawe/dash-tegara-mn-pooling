@@ -436,6 +436,41 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   assertReceiptCorrect("abandon-archive receipt", receipts()[0]);
   ok("finalization CLEARED the abandon archive (round-7 re-check)",
     !fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_ABANDONED_") && f.endsWith(".val")));
+  ok("archive recovery RETAINED a FORMATION_DONE_ record (F-E re-check)",
+    fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_DONE_") && f.endsWith(".val")));
+}
+
+// ---- adversarial case J: abandon FAILS CLOSED on a damaged manifest (a soundness review): a
+//      parse failure must refuse, never fall open to an empty participant list and clear state ----
+{
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" }); // manifest committed, forming
+  const manFile = fs.readdirSync(STATE_DIR).find((f) => /^FORMATION_[0-9A-F]{20}\.val$/.test(f));
+  fs.writeFileSync(path.join(STATE_DIR, manFile), "{ not json"); // corrupt the committed manifest
+  const ab = runChild(["abandon", POOL]);
+  ok("abandon REFUSES on a corrupt manifest (fail closed)", ab.code !== 0 && /unparseable|corrupt/.test(ab.out));
+  ok("the corrupt manifest was NOT cleared", fs.existsSync(path.join(STATE_DIR, manFile)));
+}
+
+// ---- adversarial case K: idempotent abandon with NO state returns cleanly (re-check-2:
+//      the fail-closed extraction must not throw when there is simply nothing to abandon) ----
+{
+  writeSeed(); // a forming pool with pledgeSlots but NO committed manifest/draft
+  const ab = runChild(["abandon", POOL]);
+  ok("abandon with no committed manifest/draft returns cleanly", ab.code === 0 && /no committed manifest/.test(ab.out));
+}
+
+// ---- adversarial case L: repeated `receipt` on a DONE source does NOT rewrite DONE
+//      (re-check-2: rewriting resets the prune-age mtime and postpones pruning) ----
+{
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH]); // leaves FORMATION_DONE_
+  const doneFile = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("FORMATION_DONE_") && f.endsWith(".val"));
+  const mtime0 = fs.statSync(path.join(STATE_DIR, doneFile)).mtimeMs;
+  runChild(["receipt", POOL]);
+  runChild(["receipt", POOL]);
+  const mtime1 = fs.statSync(path.join(STATE_DIR, doneFile)).mtimeMs;
+  ok("repeated receipt inspection does not rewrite the DONE record", mtime0 === mtime1);
 }
 
 // ---- adversarial case H: a STALE archive whose committed hash != the live pool hash is
@@ -486,6 +521,32 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   const pr = runChild(["done", "prune", "0"]); // cutoff 0 days: everything is "old enough"
   ok("prune keeps a DONE with a surviving sibling draft", pr.code === 0 && /kept .* frozen draft/.test(pr.out));
   ok("the DONE manifest survived the prune", fs.existsSync(path.join(STATE_DIR, doneFile)));
+}
+
+// ---- adversarial case I: a FOREIGN share (any identity, not a participant) must NOT wedge
+//      completion or abandon (a soundness review). Before the fix, one planted share broke the flip readback
+//      (bpsSum != 10000) and the abandon guard (any share blocks), stranding the pool. ----
+const plantForeignShare = () => {
+  const l = ledger();
+  l.docs.push({ id: newId(), type: "share", ownerId: newId(), data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    shareBps: 1, contributionDuffs: 0, l1RewardScript: "76a914" + "99".repeat(20) + "88ac", $createdAt: 5 } });
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+};
+{
+  writeSeed();
+  plantForeignShare();
+  const r = runChild(["complete", POOL, REAL_HASH]);
+  ok("a foreign share does NOT wedge completion (a soundness review)", r.code === 0 && receipts().length === 1);
+  assertReceiptCorrect("foreign-share-present receipt", receipts()[0]);
+}
+{
+  writeSeed();
+  const halted = runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
+  ok("foreign-abandon setup: manifest committed, forming", halted.code === 0 && !poolLiveUnderRealHash());
+  plantForeignShare(); // a foreign share on a forming pool with only the manifest committed
+  const ab = runChild(["abandon", POOL]);
+  ok("a foreign share does NOT block abandon (a soundness review)", ab.code === 0 && /CLEARED/.test(ab.out));
 }
 
 fs.rmSync(ROOT, { recursive: true, force: true });

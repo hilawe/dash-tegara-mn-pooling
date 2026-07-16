@@ -132,6 +132,10 @@ class Client {
       identities: {
         get: async (id) => { tick(); return { getId: () => idOf(id) }; },
       },
+      contracts: {
+        // the a soundness-review finding contract-owner guard reads the contract's owner; the seed carries it
+        get: async (_id) => { tick(); const l = loadLedger(); return { getOwnerId: () => idOf(l.contractOwner) }; },
+      },
       documents: {
         get: async (type, query = {}) => {
           tick();

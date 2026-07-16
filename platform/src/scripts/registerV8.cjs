@@ -102,7 +102,10 @@ const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
     description: "the fixed slot size in duffs, a creation-time constant of a forming pool; absent means this pool has no slot book",
   };
   v8.pool.properties.slotCount = {
-    type: "integer", minimum: 1, maximum: 10000, position: 7,
+    // F-G re-check: the live contract keeps maximum 10000 (immutable), with the client
+    // enforcing the tighter MAX_SLOT_COUNT ceiling at create; a future re-publish uses 512
+    // at consensus so a legit book can never exceed the completion scan bound.
+    type: "integer", minimum: 1, maximum: 512, position: 7,
     description: "how many equal slots divide the target (slotCount * slotDuffs = target), a creation-time constant",
   };
   v8.pledgeSlot = {
@@ -147,7 +150,11 @@ const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
         description: "sha256 of allocationRows, the compact content id; recompute from the rows to verify" },
       participantCount: { type: "integer", minimum: 1, maximum: 8, position: 8,
         description: "DIRECT covenant participants (enforced 1..8 by formation before COMMIT); not a general Platform-allocation count" },
-      targetDuffs: { type: "integer", minimum: 1, position: 9 },
+      // F-L: two-sided bound like every other integer field. The LIVE v8 contract is
+      // immutable and predates this, so it keeps the looser minimum-only bound (defended in
+      // depth by validateReceiptDraft's targetDuffs===TARGETS[nodeType] and owner-only
+      // creation); this maximum applies to any future re-publish (the evo target is the max).
+      targetDuffs: { type: "integer", minimum: 1, maximum: 400000000000, position: 9 },
       l1Verification: { type: "string", maxLength: 24, position: 10,
         enum: ["amount-reward-verified", "node-existence-only", "demo-unverified"],
         description: "the L1 verification level actually performed at completion (scoped; owner keys and refund scripts are the recorded residual)" },

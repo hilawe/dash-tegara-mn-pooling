@@ -451,6 +451,30 @@ const updateEnvKey = (key, value) => {
   } finally { unlockEnv(); }
 };
 
+// Atomically reserve N consecutive FORMATION_ADDR_INDEX values and return the base (F-H):
+// the counter is a GLOBAL owned key, and the per-pool operation lock does NOT serialize two
+// completions of DIFFERENT pools, so a split lock-free read + later write let both read the
+// same base and derive colliding wallet-fallback reward addresses (the F8 collision the
+// counter exists to prevent). This read-advance-return runs entirely under the env lock, so
+// concurrent reservers get disjoint ranges. The key is owned (FORMATION_ prefix), so the
+// freshest value is its .val file.
+const reserveAddrIndex = (n) => {
+  const key = "FORMATION_ADDR_INDEX";
+  lockEnv();
+  try {
+    const fileEnv = migrateOwnedLocked();
+    let base = parseInt(readOwnedFiles()[key] || "0", 10);
+    if (!Number.isSafeInteger(base) || base < 0) base = 0;
+    const storeId = requireStateDirLocked(fileEnv.STATE_STORE_ID,
+      fileEnv.STATE_MIGRATED === "1" && !fileEnv.STATE_STORE_ID);
+    writeOwnedFile(key, String(base + n));
+    if (fileEnv.STATE_MIGRATED !== "1" || fileEnv.STATE_STORE_ID !== storeId) {
+      fileEnv.STATE_MIGRATED = "1"; fileEnv.STATE_STORE_ID = storeId; writeEnvFile(fileEnv);
+    }
+    return base;
+  } finally { unlockEnv(); }
+};
+
 /**
  * Which pool-ledger contract this run targets: LEDGER=v3 selects the v3 contract
  * (reconstructible accruals + on-ledger settlements, registerV3.cjs); LEDGER=v4 the v4
@@ -520,6 +544,6 @@ const activeCastId = (env) => {
 };
 const isCastV3 = () => process.env.CAST === "v3";
 
-module.exports = { ENV_PATH, STATE_DIR, loadEnv, saveEnv, updateEnvKey, lockEnv, unlockEnv,
+module.exports = { ENV_PATH, STATE_DIR, loadEnv, saveEnv, updateEnvKey, reserveAddrIndex, lockEnv, unlockEnv,
   acquireOpLock, releaseOpLock,
   adoptStateDir, activeContractId, isV3, isV4, isV5, isV6, isV7, isV8, activeCastId, isCastV3 };

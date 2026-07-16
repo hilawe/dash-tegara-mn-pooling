@@ -165,6 +165,35 @@ ok("rewardScriptHex lowercased in canonical form", !gPre.toString("utf8").includ
 ok("rows sorted by decoded id, not base58 string", // OB decodes before OA even though "5" < "8" too; assert the actual order
   gPre.toString("utf8").indexOf(OB) < gPre.toString("utf8").indexOf(OA));
 
+// F-K: the golden ids above happen to have identical base58-string and decoded-byte order,
+// so a string-sort reimplementation would pass the whole suite. Pin the ONE rule most likely
+// to be reimplemented wrongly with a DISAGREEING pair: SID0 (44 chars) sorts BEFORE SID1 by
+// base58 string, but AFTER it by decoded 32-byte value. The canonical order must be [SID1, SID0].
+{
+  const SID0 = "ChfRNchubqXjf2bxaYQzv7QhczADa7PtYECn6763NEvb"; // 44 chars, string-smaller
+  const SID1 = "tQTBGHg5TTmgx7pDSVdfdVWnLBSX61K6yCfhNUViTq9";  // 43 chars, byte-smaller
+  ok("sort pair: base58-string vs decoded-byte order genuinely disagree",
+    SID0 < SID1 && Buffer.compare(core.decodeId32(SID1), core.decodeId32(SID0)) < 0);
+  const sortManifest = {
+    v: 1, poolId: GP, realHash: "aa".repeat(32), target: "100000000000",
+    owners: [
+      { owner: SID0, amountDuffs: "50000000000", bps: 5000, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
+      { owner: SID1, amountDuffs: "50000000000", bps: 5000, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
+    ],
+  };
+  const sPre = core.allocationPreimage(GC, sortManifest).toString("utf8");
+  ok("canonical order places the byte-smaller id first (SID1 before SID0)", sPre.indexOf(SID1) < sPre.indexOf(SID0));
+  // a STRING-sorted variant of the same rows must be REJECTED by the verifier
+  const arr = core.buildAllocationArray(GC, sortManifest);
+  arr[5] = [...arr[5]].reverse(); // now [SID0, SID1] = base58-string order, non-canonical
+  const stringSorted = Buffer.from(JSON.stringify(arr), "utf8");
+  const r = core.verifyReceiptAllocation(GC, {
+    allocationRows: stringSorted, allocationHash: core.allocationHash(stringSorted),
+    poolId: GP, targetDuffs: "100000000000", participantCount: 2,
+  });
+  ok("a string-sorted (non-canonical) variant is rejected", !r.ok && /sort|order/i.test(r.reason || ""));
+}
+
 // determinism and reorder-invariance
 ok("same manifest hashes equal", core.allocationHash(core.allocationPreimage(GC, goldenManifest()))
   .equals(core.allocationHash(core.allocationPreimage(GC, goldenManifest()))));
