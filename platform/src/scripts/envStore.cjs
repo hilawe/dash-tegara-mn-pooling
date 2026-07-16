@@ -268,7 +268,11 @@ const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIP
 // were written; a plain key could be clobbered back out, re-opening the silent-republish
 // window. Reads still resolve either way, because loadEnv overlays owned files ON TOP of
 // the env file (a value seeded plainly is surfaced until an owner write migrates it).
-const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE", "CONTRACT_V8_PENDING", "CONTRACT_V8_ID"];
+// The v9 pair is owned for the same reason even though v9 is an unpublished draft: the
+// draft's publish flow already writes them, and an unprotected pending marker re-opens
+// the exact silent-republish window the v8 pair closes (v9 draft review, finding 3).
+const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE", "CONTRACT_V8_PENDING", "CONTRACT_V8_ID",
+  "CONTRACT_V9_PENDING", "CONTRACT_V9_ID"];
 const isOwnedKey = (k) => OWNED_KEYS.includes(k) || OWNED_PREFIXES.some((p) => k.startsWith(p));
 
 // The shared writer-side gate (review finding R4): any write that puts owned state into

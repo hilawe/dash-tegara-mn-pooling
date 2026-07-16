@@ -146,11 +146,18 @@ updateEnvKey("PLAIN_KEY", "v3");
   // saveEnv that never saw them cannot clobber them out (round-7 re-check-2 P1)
   updateEnvKey("CONTRACT_V8_PENDING", "1");
   updateEnvKey("CONTRACT_V8_ID", "theId");
+  // the v9 pair is owned for the same reason (v9 draft review, finding 3)
+  updateEnvKey("CONTRACT_V9_PENDING", "1");
+  updateEnvKey("CONTRACT_V9_ID", "theV9Id");
   saveEnv({ MNEMONIC: "m", SOME: "plain" }); // a foreign save with a stale snapshot
   ok("CONTRACT_V8_PENDING survives a foreign saveEnv", loadEnv().CONTRACT_V8_PENDING === "1");
   ok("CONTRACT_V8_ID survives a foreign saveEnv", loadEnv().CONTRACT_V8_ID === "theId");
+  ok("CONTRACT_V9_PENDING survives a foreign saveEnv", loadEnv().CONTRACT_V9_PENDING === "1");
+  ok("CONTRACT_V9_ID survives a foreign saveEnv", loadEnv().CONTRACT_V9_ID === "theV9Id");
   updateEnvKey("CONTRACT_V8_PENDING", undefined);
   updateEnvKey("CONTRACT_V8_ID", undefined);
+  updateEnvKey("CONTRACT_V9_PENDING", undefined);
+  updateEnvKey("CONTRACT_V9_ID", undefined);
   updateEnvKey("RECEIPT_DRAFT_RACE", undefined);
   fs.writeFileSync(path.join(STATE_DIR, "store.id"), "ffffffffffffffff");
   throws("owner write against a foreign dir refuses",
