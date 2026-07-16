@@ -30,7 +30,7 @@ const path = require("path");
 const { pathToFileURL } = require("url");
 const Dash = require("dash");
 const { installConsumedFilter } = require("./walletGuard.cjs");
-const { loadEnv, saveEnv } = require("./envStore.cjs");
+const { loadEnv, updateEnvKey, acquireOpLock, releaseOpLock } = require("./envStore.cjs");
 
 const HASH32 = { type: "array", byteArray: true, minItems: 32, maxItems: 32 };
 const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
@@ -175,15 +175,41 @@ const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
   }];
   const client = new Dash.Client(clientOpts);
 
+  // serialize concurrent register runs (round-7 re-check P1): two starts can both load a
+  // marker-free env and both publish; a registration-wide op lock makes the second wait.
+  // registerV8 requires the shared state dir regardless (it persists owned keys through
+  // updateEnvKey, which needs it), so acquire the registration-wide lock unconditionally;
+  // its absence is a clear "mount .env.local.state" refusal, the same requirement the
+  // pending/ID writes below have.
+  let heldRegLock = false;
   try {
+    acquireOpLock("registerV8"); heldRegLock = true;
     installConsumedFilter(await client.getWalletAccount());
     const identity = await client.platform.identities.get(env.IDENTITY_ID);
-    if (env.CONTRACT_V8_ID) { console.log("v8 contract already published:", env.CONTRACT_V8_ID); return; }
+    if (loadEnv().CONTRACT_V8_ID) { console.log("v8 contract already published:", loadEnv().CONTRACT_V8_ID); return; }
+    env.CONTRACT_V8_PENDING = loadEnv().CONTRACT_V8_PENDING; // re-read under the lock
+    // DURABLE PUBLISH INTENT (round-7 P2): publishing consumes the identity nonce, so a
+    // crash AFTER publish but BEFORE the id is persisted must NOT silently republish (that
+    // burns another nonce and leaves an orphaned paid contract under an ambiguous
+    // namespace). A pending marker recorded before the broadcast makes that state loud:
+    // the resume refuses and points the operator at the possible orphan to reconcile by
+    // hand. (registerV3..V7 share this write-after-publish shape; recorded as follow-on.)
+    if (env.CONTRACT_V8_PENDING === "1" && process.env.REGISTER_V8_FORCE !== "1") {
+      throw new Error("a prior v8 publish recorded intent (CONTRACT_V8_PENDING) but no CONTRACT_V8_ID, " +
+        "so a previous run may have published a contract whose id was never saved. Check the publishing " +
+        "identity's contracts for an orphan before republishing; if none exists, re-run with " +
+        "REGISTER_V8_FORCE=1 to publish a fresh one.");
+    }
+    updateEnvKey("CONTRACT_V8_PENDING", "1"); // intent, before the irreversible broadcast
     console.log("publishing the pool-ledger v8 contract ...");
     const contract = await client.platform.contracts.create(v8, identity);
     await client.platform.contracts.publish(contract, identity);
+    // persist ONLY the new id through the locked single-key writer (round-6): a full
+    // saveEnv of the snapshot loaded before the network awaits above would replace plain
+    // keys from a stale copy and could erase a concurrent onboarding write (e.g. FUNDER_ID)
     env.CONTRACT_V8_ID = contract.getId().toString();
-    saveEnv(env);
+    updateEnvKey("CONTRACT_V8_ID", env.CONTRACT_V8_ID);
+    updateEnvKey("CONTRACT_V8_PENDING", undefined); // intent discharged
     console.log("\n=== POOL-LEDGER V8 PUBLISHED ===");
     console.log("contract id:", env.CONTRACT_V8_ID);
     console.log("(v7 + the immutable owner-only completionReceipt; run with LEDGER=v8)");
@@ -192,6 +218,7 @@ const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
     if (e && e.stack) console.error(e.stack.split("\n").slice(0, 6).join("\n"));
     process.exitCode = 1;
   } finally {
+    if (heldRegLock) releaseOpLock("registerV8");
     if (client.disconnect) await client.disconnect();
   }
 })();
