@@ -1,9 +1,17 @@
 /**
  * Pure builder for the pool-ledger v8 schema, extracted VERBATIM from registerV8.cjs so
  * the construction is importable offline (the v9 builder derives from it and the schema
- * test deep-compares the two). No network, no env, no side effects. The LIVE v8 contract
- * was published from this exact construction; do not edit the deltas here, a change
- * would silently diverge the source from the published immutable schema.
+ * test deep-compares the two). No network, no env, no side effects.
+ *
+ * PRECISION on "the v8 source" vs "the live v8 contract": this builder is the canonical
+ * SOURCE construction, which since the publish has folded two SOURCE-ONLY bound
+ * tightenings recorded for the next version (slotCount maximum 512 and the receipt
+ * targetDuffs maximum; see their inline comments). The LIVE on-chain v8 is immutable and
+ * retains the looser values it was published with (slotCount 10000, minimum-only
+ * targetDuffs), with the client enforcing the tighter bounds. The schema test's baseline
+ * hash pins THIS SOURCE, not the ledger. Do not edit the deltas here beyond that: any
+ * further change silently diverges the source from what v9 derives from and fails the
+ * baseline net.
  */
 const HASH32 = { type: "array", byteArray: true, minItems: 32, maxItems: 32 };
 const SCRIPT = { type: "array", byteArray: true, minItems: 1, maxItems: 34 };
