@@ -9,8 +9,9 @@
   },
   "scripts": {
     "build": "tsc",
+    "pretest": "tsc",
     "contract:print": "node --loader ts-node/esm src/scripts/printContract.ts",
-    "test": "node src/scripts/envStoreTest.cjs && node src/scripts/envStoreCrashTest.cjs && node src/scripts/compoundJournalTest.cjs && node src/scripts/formationCoreTest.cjs && node src/scripts/delegateTallyTest.cjs && node src/scripts/castVerifyTest.cjs && node src/scripts/railStateTest.cjs && node src/scripts/matchJournalTest.cjs && node src/scripts/formationCrashTest.cjs"
+    "test": "node src/scripts/envStoreTest.cjs && node src/scripts/envStoreCrashTest.cjs && node src/scripts/compoundJournalTest.cjs && node src/scripts/formationCoreTest.cjs && node src/scripts/delegateTallyTest.cjs && node src/scripts/castVerifyTest.cjs && node src/scripts/railStateTest.cjs && node src/scripts/matchJournalTest.cjs && node src/scripts/formationCrashTest.cjs && node src/scripts/contractV9Test.cjs"
   },
   "dependencies": {
     "dash": "^7.0.0",
