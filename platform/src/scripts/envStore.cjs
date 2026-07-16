@@ -110,48 +110,67 @@ const loadEnv = () => {
   return env;
 };
 
-// LOCK PLACEMENT (round-3 review blocker): the documented container recipe bind-mounts
-// exactly TWO paths, the .env.local FILE and the .env.local.state DIRECTORY. Anything
-// created merely BESIDE the env file (a sibling like .env.local.lock) lands in each
-// container's private overlay, so two containers would each acquire their "own" lock
-// and interleave freely. Both lock families therefore live INSIDE the state dir
-// whenever it exists (the shared surface every documented run mounts), and fall back
-// to the env-file sibling only for the pre-adoption host bootstrap, where a single
-// host filesystem makes the sibling shared anyway.
-const lockHome = () => (fs.existsSync(STATE_DIR) ? STATE_DIR : path.dirname(ENV_PATH));
-const envLockPath = () => (fs.existsSync(STATE_DIR)
-  ? path.join(STATE_DIR, "env.lock") : `${ENV_PATH}.lock`);
+// LOCK PLACEMENT (round-3 blocker, resolved round-5): the documented container recipe
+// bind-mounts exactly TWO paths, the .env.local FILE and the .env.local.state DIRECTORY.
+// A lock created merely BESIDE the env file (a sibling) lands in each container's private
+// overlay, so two containers would each hold their "own" lock and interleave freely on
+// the SHARED env file and state dir. STATE_DIR is the only path mounted as a shared
+// DIRECTORY, so BOTH lock families live there UNCONDITIONALLY and fail closed when it is
+// absent (round-5 re-check: any conditional/memoized "home" lets one process resolve the
+// sibling while another resolves the state dir). This is not a regression:
+// `requireStateDirLocked` already refuses every owned write without STATE_DIR and the
+// design never creates it implicitly at runtime, so STATE_DIR is present for the whole of
+// any real run, or the run refuses state operations regardless.
+const envLockPath = () => path.join(STATE_DIR, "env.lock");
+const requireLockHome = () => {
+  if (!fs.existsSync(STATE_DIR)) {
+    throw new Error(`the shared state directory ${STATE_DIR} does not exist, so a cross-process ` +
+      "lock cannot be placed; create it on the host (mkdir -p) and mount it into every run " +
+      "(see tegara/platform/README.md)");
+  }
+};
 
 // The env-file lock. compoundJournal.cjs holds it across every journal mutation, and
 // FOREIGN saveEnv calls hold it across their reload-and-write so a journal mutation can
 // never commit in between and be clobbered (independent-review TOCTOU finding,
 // 2026-07-12). Contention is a loud refusal, never a wait, so a clobber is impossible
 // and a collision is visible.
-// 30 s (review F-G1, recalibrated from the reviewer's 5 s suggestion): no lock region
-// holds across an await (verified), so real hold times are milliseconds; 30 s still
-// clears a paused container or a slow bind mount.
-const LOCK_STALE_MS = 30000;
-let heldEnvLockPath = null;
+// OWNERSHIP-SAFE, NO AUTO-STEAL (round-5 re-check blocker): the earlier 30 s stale
+// takeover broke mutual exclusion under a container pause or host suspension (process A
+// pauses mid-hold past the timeout, B steals and enters, A resumes and both write, and a
+// path-only unlock could then remove B's lock). The env lock now uses the SAME owner-token
+// discipline as the operation lock: a held lock is never stolen automatically, release
+// removes the lock only when the token is this process's own, and a stale lock is cleared
+// by the operator by hand. The hold is a synchronous, no-await region (microseconds), so a
+// crash mid-hold is extraordinarily unlikely, and recovery is one `rmdir`.
+let heldEnvLock = null; // { token, path }
 const lockEnv = () => {
+  requireLockHome();
   const p = envLockPath();
-  try { fs.mkdirSync(p); heldEnvLockPath = p; return; } catch (e) {
+  try {
+    fs.mkdirSync(p);
+  } catch (e) {
     if (e.code !== "EEXIST") throw e;
-    let age = Infinity;
-    try { age = Date.now() - fs.statSync(p).mtimeMs; } catch { /* raced away; fall through */ }
-    if (age > LOCK_STALE_MS) {
-      try { fs.rmdirSync(p); } catch { /* another process cleaned it */ }
-      try { fs.mkdirSync(p); heldEnvLockPath = p; return; } catch { /* lost the retry race */ }
-    }
-    throw new Error(`another run holds the env lock (${p}); ` +
-      "retry shortly, or remove it if no other run is alive");
+    let ageSec = "unknown";
+    try { ageSec = Math.round((Date.now() - fs.statSync(p).mtimeMs) / 1000); } catch { /* raced */ }
+    throw new Error(`another run holds the env lock (${p}, ~${ageSec}s old). If it is alive, retry ` +
+      "shortly. If it crashed, verify no other run is alive, then remove the lock directory by hand; " +
+      "it is never stolen automatically.");
   }
+  const token = `${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+  fs.writeFileSync(path.join(p, "owner"), token);
+  heldEnvLock = { token, path: p };
 };
 const unlockEnv = () => {
-  // release the path actually acquired: the state dir can be adopted between an
-  // acquire and a release, and releasing a recomputed path would strand the real lock
-  const p = heldEnvLockPath || envLockPath();
-  heldEnvLockPath = null;
-  try { fs.rmdirSync(p); } catch { /* already gone */ }
+  const held = heldEnvLock;
+  heldEnvLock = null;
+  if (!held) return;
+  try {
+    const owner = fs.readFileSync(path.join(held.path, "owner"), "utf8");
+    if (owner !== held.token) return; // a successor now owns it; never remove theirs
+    fs.unlinkSync(path.join(held.path, "owner"));
+    fs.rmdirSync(held.path);
+  } catch { /* already gone, or not ours */ }
 };
 
 // A long-held per-OPERATION lock, distinct from the short env-file lock above: one
@@ -165,9 +184,22 @@ const unlockEnv = () => {
 // stale could steal it twice; a slow-but-live completion could be stolen from and then
 // its release would unlock the thief's successor). A crashed run's lock is cleaned up
 // by the operator, explicitly, with the age shown.
-const opLockPath = (name) => path.join(lockHome(), `oplock-${name}`);
-const opLockTokens = new Map();
+// the operation lock ALWAYS lives in the shared STATE_DIR, unconditionally (round-5
+// re-check blocker): STATE_DIR is the ONLY path the documented container recipe mounts
+// as a shared DIRECTORY (the env file is mounted alone, so its parent is container-
+// private), so a home that ever falls back to the env-file sibling would let two
+// containers hold "the same" lock in two private overlays. A completion needs STATE_DIR
+// anyway (it reads and writes owned FORMATION_/RECEIPT_DRAFT_ keys there), so if the dir
+// is absent the lock FAILS CLOSED rather than serializing nothing.
+const opLockPath = (name) => path.join(STATE_DIR, `oplock-${name}`);
+// name -> { token, path }: the acquired PATH is stored, so release removes exactly the
+// directory that was acquired, never stranding the real lock
+const opLockHeld = new Map();
 const acquireOpLock = (name) => {
+  if (!fs.existsSync(STATE_DIR)) {
+    throw new Error(`the shared state directory ${STATE_DIR} does not exist, so a completion-protocol ` +
+      "lock cannot be shared across processes; refusing (mount .env.local.state, per the run recipe)");
+  }
   const p = opLockPath(name);
   try {
     fs.mkdirSync(p);
@@ -175,24 +207,29 @@ const acquireOpLock = (name) => {
     if (e.code !== "EEXIST") throw e;
     let ageMin = "unknown";
     try { ageMin = Math.round((Date.now() - fs.statSync(p).mtimeMs) / 60000); } catch { /* raced */ }
-    throw new Error(`another completion-protocol run holds the operation lock for this pool (${p}, ` +
+    // a TYPED contention error (round-7 re-check): callers that convert "held" into a
+    // benign mid-flight skip (done prune) must NOT swallow a real fs error (permissions,
+    // a vanished dir) the same way, so mark this one so only it is treated as contention.
+    const held = new Error(`another completion-protocol run holds the operation lock for this pool (${p}, ` +
       `~${ageMin} min old). If that run is still alive, wait for it. If it crashed, verify no ` +
       "formation process is running, then remove the lock directory by hand; it is never stolen " +
       "automatically.");
+    held.code = "OPLOCK_CONTENDED";
+    throw held;
   }
   const token = `${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
   fs.writeFileSync(path.join(p, "owner"), token);
-  opLockTokens.set(name, token);
+  opLockHeld.set(name, { token, path: p });
 };
 const releaseOpLock = (name) => {
-  const p = opLockPath(name);
-  const token = opLockTokens.get(name);
-  opLockTokens.delete(name);
+  const held = opLockHeld.get(name);
+  opLockHeld.delete(name);
+  if (!held) return;
   try {
-    const owner = fs.readFileSync(path.join(p, "owner"), "utf8");
-    if (token === undefined || owner !== token) return; // not ours to release
-    fs.unlinkSync(path.join(p, "owner"));
-    fs.rmdirSync(p);
+    const owner = fs.readFileSync(path.join(held.path, "owner"), "utf8");
+    if (owner !== held.token) return; // not ours to release
+    fs.unlinkSync(path.join(held.path, "owner"));
+    fs.rmdirSync(held.path);
   } catch { /* already gone, or not ours */ }
 };
 
@@ -225,7 +262,13 @@ const writeEnvFile = (out) => {
 // preserves from disk instead of its own possibly-stale copy. Owners write through
 // updateEnvKey (or pass journalOwner while already holding the lock).
 const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIPT_DRAFT_"];
-const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE"];
+// CONTRACT_V8_PENDING and CONTRACT_V8_ID are OWNED (round-7 re-check P1, tightened in the
+// second re-check): the register publish-intent marker AND the resulting contract id must
+// both survive a concurrent foreign saveEnv from a process that loaded state before they
+// were written; a plain key could be clobbered back out, re-opening the silent-republish
+// window. Reads still resolve either way, because loadEnv overlays owned files ON TOP of
+// the env file (a value seeded plainly is surfaced until an owner write migrates it).
+const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE", "CONTRACT_V8_PENDING", "CONTRACT_V8_ID"];
 const isOwnedKey = (k) => OWNED_KEYS.includes(k) || OWNED_PREFIXES.some((p) => k.startsWith(p));
 
 // The shared writer-side gate (review finding R4): any write that puts owned state into

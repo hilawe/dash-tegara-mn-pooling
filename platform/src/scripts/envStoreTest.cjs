@@ -142,6 +142,15 @@ updateEnvKey("PLAIN_KEY", "v3");
   ok("in-family deletion kept a .prev generation", fs.existsSync(path.join(STATE_DIR, "COMPOUND_DEL.val.prev")));
   ok("a WATCH_ key survives a journal save that omitted it", loadEnv().WATCH_W !== undefined);
   ok("a RECEIPT_DRAFT_ survives a journal save that omitted it", loadEnv().RECEIPT_DRAFT_RACE === "frozen");
+  // the register publish-intent marker AND the contract id are owned, so a stale foreign
+  // saveEnv that never saw them cannot clobber them out (round-7 re-check-2 P1)
+  updateEnvKey("CONTRACT_V8_PENDING", "1");
+  updateEnvKey("CONTRACT_V8_ID", "theId");
+  saveEnv({ MNEMONIC: "m", SOME: "plain" }); // a foreign save with a stale snapshot
+  ok("CONTRACT_V8_PENDING survives a foreign saveEnv", loadEnv().CONTRACT_V8_PENDING === "1");
+  ok("CONTRACT_V8_ID survives a foreign saveEnv", loadEnv().CONTRACT_V8_ID === "theId");
+  updateEnvKey("CONTRACT_V8_PENDING", undefined);
+  updateEnvKey("CONTRACT_V8_ID", undefined);
   updateEnvKey("RECEIPT_DRAFT_RACE", undefined);
   fs.writeFileSync(path.join(STATE_DIR, "store.id"), "ffffffffffffffff");
   throws("owner write against a foreign dir refuses",
