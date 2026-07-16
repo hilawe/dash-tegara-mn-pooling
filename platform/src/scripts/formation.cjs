@@ -64,8 +64,16 @@ const crypto = require("crypto");
 const Dash = require("dash");
 const { installConsumedFilter } = require("./walletGuard.cjs");
 const { Identifier } = require("@dashevo/wasm-dpp");
-const { fetchAll } = require("./query.cjs");
-const { loadEnv, updateEnvKey, activeContractId, isV5, isV6, isV7, isV8,
+const { fetchAll, fetchUpTo } = require("./query.cjs");
+// F-G: bound both the LEGITIMATE slot count (enforced at pool creation) and the pledgeSlot
+// claim scan. A hostile member can create up to ~10000 out-of-range slotNo claims, and an
+// unbounded fetchAll would materialize them all (100s of round-trips) with a giant error
+// string. MAX_SLOT_COUNT caps a legit book at creation; MAX_PLEDGE_CLAIMS is the scan
+// ceiling, set ABOVE MAX_SLOT_COUNT so a full legit book plus a grief-detection window fits
+// before truncation refuses (a truncated scan means far more claims than any legit book).
+const MAX_SLOT_COUNT = 512;
+const MAX_PLEDGE_CLAIMS = MAX_SLOT_COUNT + 128;
+const { loadEnv, updateEnvKey, reserveAddrIndex, activeContractId, isV5, isV6, isV7, isV8,
   acquireOpLock, releaseOpLock } = require("./envStore.cjs");
 const journal = require("./compoundJournal.cjs");
 const core = require("./formationCore.cjs");
@@ -208,15 +216,23 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
   // pool is abandoned); no value moves either way, exact fill refuses first.
   const pendingJoinRows = async (poolId, po) => {
     if (isV6()) {
-      const claims = (await fetchAll(client, "poolLedger.pledgeSlot", {
-        where: [["poolId", "==", poolId]],
-      })).map((d) => ({ d, o: d.toObject() }));
+      const { docs: claimDocs, truncated } = await fetchUpTo(client, "poolLedger.pledgeSlot",
+        MAX_PLEDGE_CLAIMS, { where: [["poolId", "==", poolId]] });
+      if (truncated) {
+        throw new Error(`this pool has more than ${MAX_PLEDGE_CLAIMS} pledgeSlot claims, far beyond any ` +
+          "legitimate slot book; refusing to enumerate (a hostile flood of out-of-range claims). Resolve " +
+          "by having the claim owners cancel, then re-run.");
+      }
+      const claims = claimDocs.map((d) => ({ d, o: d.toObject() }));
       let poolSize = null;
       if (claims.length > 0) {
         const target = core.TARGETS[po.nodeType];
         const describe = (c) => `claim ${c.d.getId().toString()} (slot ${c.o.slotNo}` +
           `${c.o.slotDuffs !== undefined ? `, slotDuffs ${c.o.slotDuffs}` : ""}) by ` +
           c.d.getOwnerId().toString();
+        // bound the listed detail (F-G): show a handful, not the whole (possibly flooded) set
+        const listSome = (arr) => arr.slice(0, 10).map(describe).join("\n  ") +
+          (arr.length > 10 ? `\n  ...and ${arr.length - 10} more` : "");
         let size, slotCount;
         if (isV7()) {
           // v7: the pool's own fields are the single source of truth (A1), and a claim
@@ -240,7 +256,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
               `that divides the ${DASHfmt(target)} DASH target, so the slot book does not follow the ` +
               "advertised model. v6 claims are PERMANENT in this SDK (an immutable document cannot " +
               "be deleted), so the recovery is abandoning this pool and re-forming on v7 (F-C4). " +
-              "The full book:\n  " + claims.map(describe).join("\n  "));
+              "The full book:\n  " + listSome(claims));
           }
           slotCount = Number(target / size);
         }
@@ -252,7 +268,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             ? "each can be deleted only by its owner (funderClient cancel <claimId>)."
             : "v6 claims are PERMANENT in this SDK; recovery is abandoning this pool and re-forming on v7.";
           throw new Error(`out-of-range slot claims (this pool has slots 0..${slotCount - 1}): ` +
-            remedy + "\n  " + outOfRange.map(describe).join("\n  "));
+            remedy + "\n  " + listSome(outOfRange));
         }
         poolSize = size;
       }
@@ -322,6 +338,16 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     }
     if (amountSum.toString() !== m.target) fail(`amounts sum ${amountSum}, target ${m.target}`);
     if (bpsSum !== 10000) fail(`weights sum ${bpsSum}, expected 10000`);
+    // F-D: the frozen slot economics must still match the (mutable) pool document. Compared
+    // against the po passed in, which the resume/pre-flip paths pass freshly fetched, so an
+    // operator-credentialed change to slotDuffs/slotCount after COMMIT is caught before the
+    // flip rather than silently producing a receipt that disagrees with the live slot book.
+    if (m.slotDuffs !== undefined && Number(po.slotDuffs) !== m.slotDuffs) {
+      fail(`slotDuffs ${po.slotDuffs} != committed ${m.slotDuffs} (the pool's slot size changed)`);
+    }
+    if (m.slotCount !== undefined && Number(po.slotCount) !== m.slotCount) {
+      fail(`slotCount ${po.slotCount} != committed ${m.slotCount} (the pool's slot count changed)`);
+    }
     // per-claim snapshots (F-C1): optional for legacy manifests, but when present they
     // must be complete (one per committed request id) and well-formed, or the manifest
     // cannot be trusted to drive the mutation-detecting preflight
@@ -340,6 +366,24 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         if (c.rewardScriptHex !== null && (typeof c.rewardScriptHex !== "string" || !/^([0-9a-f]{2}){1,34}$/.test(c.rewardScriptHex))) fail("claim reward script");
       }
       if (seenClaimIds.size !== seenReqs.size) fail("claim snapshots do not cover every committed request id");
+      // a soundness-review finding: RELATIONALLY bind each claim to the owner allocation it belongs to. Global
+      // completeness and uniqueness (above) do not prove a claim belongs to the owner whose
+      // reqIds list it, nor that an owner's claim amounts sum to its allocation, so a tampered
+      // manifest could keep the claims internally consistent while shifting the owner split
+      // (and the receipt would then commit an allocation the checked claims do not support).
+      const claimById = new Map(m.claims.map((c) => [c.id, c]));
+      for (const o of m.owners) {
+        let claimSum = 0n, allAmounts = true;
+        for (const r of o.reqIds) {
+          const c = claimById.get(r);
+          if (!c) fail(`owner ${o.owner} reqId ${r} has no claim snapshot`);
+          if (c.owner !== o.owner) fail(`claim ${r} is owned by ${c.owner}, not the allocation owner ${o.owner}`);
+          if (c.amountDuffs === null) allAmounts = false; else claimSum += BigInt(c.amountDuffs);
+        }
+        if (allAmounts && claimSum.toString() !== o.amountDuffs) {
+          fail(`owner ${o.owner} claim amounts sum to ${claimSum} but its allocation is ${o.amountDuffs}`);
+        }
+      }
     }
     // v8: the receipt's participantCount is the DIRECT covenant-participant bound
     // (spec M6/C-F), so a manifest outside 1..8 owners must never COMMIT (build path,
@@ -364,6 +408,25 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
   try {
     installConsumedFilter(await client.getWalletAccount());
     const operator = await client.platform.identities.get(env.IDENTITY_ID);
+
+    // CONTRACT-OWNER BINDING (a soundness review): the receipt document type is creation-restricted to the
+    // CONTRACT owner (creationRestrictionMode:1), a restriction Platform enforces only at
+    // receipt broadcast, AFTER shares settle and the pool flips. If the executing operator
+    // is not the contract owner, completion would irreversibly flip a live pool it can then
+    // never write a receipt for, stranding it outside the receipt protocol (and no one else
+    // can recover it, since recovery requires owning the pool). So fail LOUDLY up front, on
+    // every mutating command, before any ledger write. v8 is single-operator; this turns a
+    // misconfiguration into a clean refusal instead of a bricked pool.
+    if (["create", "complete", "receipt", "abandon"].includes(cmd)) {
+      const contract = await client.platform.contracts.get(activeContractId(env));
+      if (!contract) throw new Error(`the active contract ${activeContractId(env)} is not on the ledger`);
+      if (contract.getOwnerId().toString() !== operator.getId().toString()) {
+        throw new Error(`this operator (${operator.getId().toString()}) does not own the pool-ledger ` +
+          `contract ${activeContractId(env)} (owner ${contract.getOwnerId().toString()}); refusing, ` +
+          "because only the contract owner can write completion receipts (creationRestrictionMode). " +
+          "Point at your own contract, or publish one with registerV8.cjs.");
+      }
+    }
 
     // PREFLIGHT (a) as a function, the L1 REGISTRATION CHECK (holistic-round F4,
     // full): the claimed node must exist on Core AND, when it is a #187 shared
@@ -427,7 +490,10 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         // each owner's reward script where the manifest did not already record one
         const net = process.env.NETWORK === "regtest" ? "testnet" : (process.env.NETWORK || "testnet");
         const toAddr = (o) => {
-          if (o.rewardAddress && o.rewardAddress !== "(member-supplied script)") return o.rewardAddress;
+          // ALWAYS derive from rewardScriptHex, the field the RECEIPT commits to (a soundness review): the
+          // stored rewardAddress is display-only and unvalidated, so trusting it could verify
+          // an L1 destination different from the reward script the receipt embeds, stamping
+          // amount-reward-verified on bytes that were never checked against Core.
           try {
             // Script.toAddress() returns boolean FALSE (not a throw) for a non-address
             // script, so check the value before stringifying (review finding)
@@ -502,7 +568,13 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (Buffer.from(o.proTxHash).toString("hex") !== draft.proTxHash) bad.push("proTxHash differs");
       if (Number(o.slotIndex) !== draft.slotIndex) bad.push(`slotIndex ${o.slotIndex} != ${draft.slotIndex}`);
       if (o.nodeType !== draft.nodeType) bad.push(`nodeType ${o.nodeType} != ${draft.nodeType}`);
-      if (Number(o.operatorFeeBps) !== draft.operatorFeeBps) bad.push("operatorFeeBps differs");
+      // NOTE (F-I): operatorFeeBps is NOT compared here. The fee is pinned to the pool
+      // pre-flip (requireDraftMatchesPool with requireFee while forming) and written into
+      // the receipt from that draft, so a freshly-created receipt trivially matches. This
+      // function is only ever reached with an EXISTING receipt (pool already live), where
+      // the pool fee is legitimately mutable and historical, and a draft REBUILT on resume
+      // sources the current (drifted) fee; comparing it would falsely reject a valid
+      // immutable receipt. The `receipt` command's reconcile already excludes fee likewise.
       if (Number(o.formatVersion) !== 1) bad.push("formatVersion is not 1");
       if (Number(o.participantCount) !== draft.participantCount) bad.push("participantCount differs");
       if (Number(o.targetDuffs) !== draft.targetDuffs) bad.push("targetDuffs differs");
@@ -724,9 +796,19 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         if (target % slotDuffs !== 0n) {
           throw new Error(`slot size ${slotDuffs} does not divide the ${DASHfmt(target)} DASH target`);
         }
+        const slotCount = Number(target / slotDuffs);
+        // CREATE ceiling (F-G re-check): bound slotCount at creation so a LEGITIMATE book
+        // can never exceed the completion scan cap (MAX_SLOT_COUNT < MAX_PLEDGE_CLAIMS). A
+        // larger slotDuffs (fewer, bigger slots) is always available; 512 co-owners of one
+        // masternode is already far past any real pool. Without this, a tiny SLOT_DUFFS
+        // could mint thousands of valid slots that the bounded scan would then reject.
+        if (slotCount > MAX_SLOT_COUNT) {
+          throw new Error(`slot size ${slotDuffs} yields ${slotCount} slots, above the ${MAX_SLOT_COUNT} ` +
+            "ceiling; use a larger slot size (fewer, bigger slots).");
+        }
         slotFields = {
           slotDuffs: journal.toSafeNumber(slotDuffs, "slot size"),
-          slotCount: Number(target / slotDuffs),
+          slotCount,
         };
       }
       const doc = await client.platform.documents.create("poolLedger.pool", operator, {
@@ -864,10 +946,13 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         }
         // the fallback derivation index is a PERSISTENT counter (owned FORMATION_ key),
         // never the loop index: restarting at 0 per completion handed different members
-        // of different pools the SAME addresses (holistic-round F8, review)
-        const idxKey = "FORMATION_ADDR_INDEX";
-        let addrIdx = parseInt(loadEnv()[idxKey] || "0", 10);
-        if (!Number.isSafeInteger(addrIdx) || addrIdx < 0) addrIdx = 0;
+        // of different pools the SAME addresses (holistic-round F8, review). ATOMICALLY
+        // reserve the range up front (F-H): the counter is global and the per-pool op lock
+        // does not serialize two different-pool completions, so a split read+write could
+        // hand two pools the same base and re-collide. reserveAddrIndex advances it under
+        // the env lock and returns a base disjoint from any concurrent reserver.
+        const fallbackCount = alloc.filter((a) => !memberScript.get(a.owner)).length;
+        let addrIdx = fallbackCount > 0 ? reserveAddrIndex(fallbackCount) : 0;
         for (let i = 0; i < alloc.length; i++) {
           const supplied = memberScript.get(alloc[i].owner);
           if (supplied) {
@@ -880,9 +965,14 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             alloc[i].rewardAddress = addr;
           }
         }
-        updateEnvKey(idxKey, String(addrIdx));
         manifest = {
           v: 1, poolId: poolIdStr, realHash: proTxHex.toLowerCase(), target: target.toString(),
+          // freeze the slot economics (F-D): slotDuffs/slotCount are creation-time constants
+          // of the pool (v7+), but the pool document is mutable, so an operator-credentialed
+          // replace could change them after COMMIT undetected; freezing them lets
+          // validateManifest catch a drift against the live pool before the flip.
+          ...(po.slotDuffs !== undefined ? { slotDuffs: Number(po.slotDuffs) } : {}),
+          ...(po.slotCount !== undefined ? { slotCount: Number(po.slotCount) } : {}),
           owners: alloc.map((a) => ({ owner: a.owner, amountDuffs: a.amount.toString(), bps: a.bps,
             reqIds: a.reqIds, rewardScriptHex: a.rewardScriptHex, rewardAddress: a.rewardAddress })),
           // per-claim SNAPSHOTS (review F-C1): mutable claims mean bare existence proves
@@ -1101,22 +1191,21 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         }
       }
 
-      // readback BEFORE the flip: the pool must be fully formed while still private, and
-      // each share must still MATCH THE MANIFEST field-by-field (round-6). The bps sum
-      // alone is not enough: a share owner can replace their contributionDuffs or
-      // l1RewardScript after the preflight while leaving shareBps at 10000-conserving
-      // values, and the receipt (built from the manifest) would then contradict the live
-      // shares. Fetched with fetchAll so a book beyond one Platform page is complete.
-      const sharesBack = await fetchAll(client, "poolLedger.share", { where: [["poolId", "==", pool.getId()]] });
-      const bpsSum = sharesBack.reduce((s, d) => s + Number(d.toObject().shareBps), 0);
-      if (bpsSum !== 10000) throw new Error(`share weights sum to ${bpsSum} bps, expected 10000; not flipping`);
-      const byOwnerShare = new Map(sharesBack.map((d) => [d.getOwnerId().toString(), d.toObject()]));
-      if (byOwnerShare.size !== manifest.owners.length) {
-        throw new Error(`the ledger has ${byOwnerShare.size} share owner(s) but the manifest committed ` +
-          `${manifest.owners.length}; not flipping (the manifest and draft are kept)`);
-      }
+      // readback BEFORE the flip, SCOPED TO THE MANIFEST PARTICIPANTS (a soundness review): query EACH
+      // manifest owner's share by (poolId, $ownerId) and verify it field-by-field. Summing
+      // ALL pool shares and requiring the total to be exactly 10000 (the old check) let ANY
+      // funded identity plant one foreign share on the pool and wedge the flip forever, a
+      // permanent availability DoS. The receipt commits to the MANIFEST allocation, not the
+      // live share set, so a NON-participant share carries no weight and must not block. Each
+      // participant's share is still verified field-by-field (round-6), so a mutated real
+      // share is still caught. This also bounds the readback to <=8 indexed lookups instead
+      // of an unbounded fetchAll over an attacker-inflatable collection (F-G).
+      let participantBps = 0;
       for (const o of manifest.owners) {
-        const so = byOwnerShare.get(o.owner);
+        const found = await client.platform.documents.get("poolLedger.share", {
+          where: [["poolId", "==", pool.getId()], ["$ownerId", "==", Identifier.from(o.owner)]],
+        });
+        const so = found[0] ? found[0].toObject() : null;
         if (!so) throw new Error(`owner ${o.owner} has no share on the ledger; not flipping`);
         const ledgerScript = Buffer.from(so.l1RewardScript).toString("hex");
         if (Number(so.shareBps) !== o.bps || BigInt(so.contributionDuffs).toString() !== o.amountDuffs
@@ -1125,7 +1214,15 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             `${Number(so.shareBps)} bps, ${so.contributionDuffs} duffs, script ${ledgerScript}; manifest: ` +
             `${o.bps} bps, ${o.amountDuffs} duffs, script ${o.rewardScriptHex}); not flipping, resolve by hand`);
         }
+        participantBps += Number(so.shareBps);
       }
+      // the PARTICIPANTS' shares must sum to exactly 10000 (each already matches its manifest
+      // bps, and the manifest bps sum to 10000, so this holds; kept as a live cross-check)
+      if (participantBps !== 10000) {
+        throw new Error(`the manifest participants' share weights sum to ${participantBps} bps, ` +
+          "expected 10000; not flipping (the manifest and draft are kept)");
+      }
+      const participantShareCount = manifest.owners.length;
       if (HALT === "shares") { console.log("[test hook] halting after SETTLE, before the flip"); return; }
 
       // phase 3, FLIP LAST: no reader ever sees a live pool without its shares.
@@ -1136,7 +1233,22 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // until the receipt is confirmed, so "live without receipt" is a recoverable
       // state, not a permanent one. FORMATION_NO_MIXED=1 forces the sequential path
       // (used by the live idempotence-resume probe).
+      // F-D: re-assert the frozen slot economics against a FRESH pool object immediately
+      // before ANY flip, closing a mid-run operator-credentialed slot change that a
+      // load-time validateManifest would miss. Called for the first fetch here AND after
+      // the mixed-transition fallback re-fetch (re-check: that path is also a flip path).
+      const requireSlotsMatchFresh = (fo) => {
+        if (manifest.slotDuffs !== undefined && Number(fo.slotDuffs) !== manifest.slotDuffs) {
+          throw new Error(`the pool's slotDuffs changed to ${fo.slotDuffs} (committed ${manifest.slotDuffs}) ` +
+            "before the flip; not flipping (the manifest and draft are kept)");
+        }
+        if (manifest.slotCount !== undefined && Number(fo.slotCount) !== manifest.slotCount) {
+          throw new Error(`the pool's slotCount changed to ${fo.slotCount} (committed ${manifest.slotCount}) ` +
+            "before the flip; not flipping (the manifest and draft are kept)");
+        }
+      };
       let fresh = await getPool(poolIdStr);
+      requireSlotsMatchFresh(fresh.toObject());
       let freshHash = Buffer.from(fresh.toObject().proTxHash);
       if (core.isFormingHash(freshHash)) {
         // FLIP-FIRST ordering guard (round-4 blocker): a receipt must never exist while
@@ -1195,8 +1307,11 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             console.log(`MIXED-TRANSITION PROBE hit the one-transition limit; falling back to the ` +
               "sequential flip-then-receipt path (the draft and manifest are retained)");
             // the failed broadcast may have touched the local document objects, so the
-            // sequential path re-fetches the pool before mutating anything
+            // sequential path re-fetches the pool before mutating anything, and re-asserts
+            // the slot economics against THIS fresh object too (F-D re-check: a slot change
+            // during the mixed attempt must not slip through the fallback flip)
             fresh = await getPool(poolIdStr);
+            requireSlotsMatchFresh(fresh.toObject());
             freshHash = Buffer.from(fresh.toObject().proTxHash);
             // RE-QUERY for a receipt immediately before the sequential flip (round-4
             // re-check): a credentialed external writer could have created one DURING
@@ -1253,7 +1368,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // confirmed; the frozen draft is cleared with it. ONE shared routine with the
       // `receipt` recovery path, so no path can leave a completion half-finalized.
       const doneKey = finalizeCompletion(poolIdStr, manifest);
-      console.log(`\n=== FORMATION COMPLETE: ${sharesBack.length} share(s), weights sum 10000 bps, ` +
+      console.log(`\n=== FORMATION COMPLETE: ${participantShareCount} share(s), weights sum 10000 bps, ` +
         `flip done last${isV8() ? ", receipt confirmed" : ""}, finalized manifest retained as ${doneKey} ===`);
       return;
     }
@@ -1307,6 +1422,10 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const rawManifest = envNow[activeKey] !== undefined ? envNow[activeKey]
         : (envNow[doneKey] !== undefined ? envNow[doneKey] : abandonedManifest);
       const manifestIsActive = envNow[activeKey] !== undefined;
+      // whether the source needs FINALIZING (active or archive), vs an already-final DONE.
+      // re-check-2: an existing-DONE source must NOT trigger a finalize, because rewriting
+      // DONE on every `receipt` inspection resets its mtime and postpones prune indefinitely.
+      const manifestFromArchive = !manifestIsActive && envNow[doneKey] === undefined && abandonedManifest !== undefined;
       let manifest = null;
       if (rawManifest !== undefined) {
         try { manifest = JSON.parse(rawManifest); } catch {
@@ -1419,11 +1538,14 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             "receipt's attested value from completion time; it has no independent local source)");
         }
         // reconcile a half-finalized completion (review major): a confirmed matching
-        // receipt with an active manifest or leftover draft means a crash interrupted
-        // finalization; finish it here so a later `complete` cannot rebuild from
-        // current pool values and falsely contradict this receipt
-        if (manifestIsActive || draft) {
-          finalizeCompletion(poolIdStr, manifestIsActive ? manifest : null);
+        // receipt with an UNFINALIZED local source (active manifest, an abandoned archive,
+        // or a leftover draft) means a crash interrupted finalization; finish it here so a
+        // later `complete` cannot rebuild from current pool values and falsely contradict
+        // this receipt. F-E re-check folded the abandoned-archive source; re-check-2 EXCLUDES
+        // an already-final DONE source (manifestFromArchive/manifestIsActive gate), because
+        // re-finalizing rewrites DONE and resets its prune-age mtime on every inspection.
+        if (manifestIsActive || manifestFromArchive || draft) {
+          finalizeCompletion(poolIdStr, manifest || null);
           console.log("  local completion state finalized (manifest retained as done, draft cleared)");
         }
         return;
@@ -1473,8 +1595,10 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       await writeReceiptIdempotent(pool, poolIdStr, draft);
       // full finalization, not just the draft clear (review major): retain the
       // manifest as done and clear the active key, so `complete` never rebuilds
-      // against an already-confirmed receipt
-      finalizeCompletion(poolIdStr, manifestIsActive ? manifest : null);
+      // against an already-confirmed receipt. F-E re-check: pass `manifest || null` so a
+      // receipt published from the ABANDONED ARCHIVE still writes DONE before the archive
+      // is cleared, rather than dropping the durable record.
+      finalizeCompletion(poolIdStr, manifest || null);
       console.log("receipt published and confirmed; the live-without-receipt window is closed");
       return;
     }
@@ -1491,24 +1615,60 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (!core.isFormingHash(Buffer.from(pool.toObject().proTxHash))) {
         throw new Error("the pool is LIVE; abandoning its manifest would orphan real state, refusing");
       }
-      // a crash during SETTLE leaves shares on a still-FORMING pool, and the manifest
-      // is the ONLY record explaining them; deleting it would let a later completion
-      // build a fresh allocation blind to those shares (re-check blocker). Abandon is
-      // for the pre-settlement states only.
-      const existingShares = await client.platform.documents.get("poolLedger.share", {
-        where: [["poolId", "==", pool.getId()]],
-      });
-      if (existingShares.length > 0) {
-        throw new Error(`${existingShares.length} share(s) already exist on this forming pool (a ` +
-          "completion got past SETTLE); the manifest is their only explanation, refusing to delete " +
-          "it. Resume `complete` with the committed hash, or unwind the shares with their owners first.");
-      }
       const key = manifestKeyOf(poolIdStr);
       const draftKey = receiptDraftKeyOf(poolIdStr);
       const envHere = loadEnv();
       const hasManifest = envHere[key] !== undefined;
       const hasDraft = isV8() && envHere[draftKey] !== undefined;
+      // nothing to abandon: return cleanly BEFORE the participant extraction (re-check-2:
+      // the extraction would otherwise fall into the draft parser and throw on absent state)
       if (!hasManifest && !hasDraft) { console.log("no committed manifest for this pool"); return; }
+
+      // the OWNERS this manifest/draft explains (a soundness review): a crash during SETTLE leaves
+      // PARTICIPANT shares on a still-forming pool, and the manifest is their only
+      // explanation, so abandon must refuse then. But a FOREIGN share (any identity can
+      // plant one) is not explained by the manifest and must NOT block abandon, or it
+      // becomes a permanent wedge. Scope the share check to the participants only.
+      // FAIL CLOSED on a damaged source (a soundness review): a parse failure here must NOT
+      // yield an empty participant list, or abandon would clear state without checking any
+      // participant share, destroying a manifest that may explain settled shares (and on
+      // v1-v7 there is no archive to recover from). Refuse instead.
+      const participantOwners = (() => {
+        // require a NONEMPTY owner set (re-check-2): a legitimate manifest/draft always has
+        // >=1 owner, so an empty (or unparseable) array is damage and must fail closed, not
+        // yield zero participant checks that let abandon clear the source blind.
+        if (hasManifest) {
+          let owners;
+          try { owners = JSON.parse(envHere[key]).owners; } catch { owners = undefined; }
+          if (!Array.isArray(owners) || owners.length === 0) throw new Error("the committed manifest is " +
+            "unparseable or empty; refusing to abandon (cannot tell which shares it explains). Restore its " +
+            ".val.prev generation or resolve by hand.");
+          return owners.map((o) => o.owner);
+        }
+        // draft-only case: extract owners from the frozen allocation rows
+        let rows;
+        try { rows = JSON.parse(Buffer.from(JSON.parse(envHere[draftKey]).allocationRowsHex, "hex").toString("utf8"))[5]; }
+        catch { rows = undefined; }
+        if (!Array.isArray(rows) || rows.length === 0) throw new Error("the frozen receipt draft is " +
+          "unparseable or empty; refusing to abandon. Restore its .val.prev generation or resolve by hand.");
+        return rows.map((r) => r[0]);
+      })();
+      const participantSharesOnLedger = async () => {
+        const present = [];
+        for (const owner of participantOwners) {
+          const found = await client.platform.documents.get("poolLedger.share", {
+            where: [["poolId", "==", pool.getId()], ["$ownerId", "==", Identifier.from(owner)]],
+          });
+          if (found.length > 0) present.push(owner);
+        }
+        return present;
+      };
+      const settledEarly = await participantSharesOnLedger();
+      if (settledEarly.length > 0) {
+        throw new Error(`${settledEarly.length} PARTICIPANT share(s) already exist on this forming pool ` +
+          "(a completion got past SETTLE); the manifest is their only explanation, refusing to delete it. " +
+          "Resume `complete` with the committed hash, or unwind the shares with their owners first.");
+      }
 
       // RE-FETCH pool and shares immediately before the mutation (round-7 P1): the checks
       // above ran before this point, and the op lock excludes only the completion-protocol
@@ -1522,12 +1682,10 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         throw new Error("the pool went LIVE since this run started; abandoning now would orphan a live " +
           "pool's recovery inputs. Run `receipt` to publish from the retained manifest instead. Kept.");
       }
-      const sharesNow = await client.platform.documents.get("poolLedger.share", {
-        where: [["poolId", "==", pool.getId()]],
-      });
-      if (sharesNow.length > 0) {
-        throw new Error(`${sharesNow.length} share(s) appeared on this forming pool since this run started; ` +
-          "the manifest is their only explanation, refusing to delete it. Kept.");
+      const settledNow = await participantSharesOnLedger(); // participant-scoped (a soundness review), like the early check
+      if (settledNow.length > 0) {
+        throw new Error(`${settledNow.length} PARTICIPANT share(s) appeared on this forming pool since this ` +
+          "run started; the manifest is their only explanation, refusing to delete it. Kept.");
       }
 
       // ARCHIVE before clearing (round-7 P1): a residual microscopic window remains
@@ -1535,20 +1693,25 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // persist the manifest and draft under FORMATION_ABANDONED_ (an owned FORMATION_
       // key) FIRST. `receipt` consults this archive if the pool is later found live under
       // the archived hash, so even a lost race stays recoverable rather than stranded.
+      // v8 ONLY (F-J): the archive exists solely for the v8 `receipt` recovery path, which
+      // is the only reader and the only cleaner. On v1-v7 it would be written but never read
+      // or cleared, a permanent state leak, so skip it there.
       const abandonedKey = "FORMATION_ABANDONED_" + journal.suffixFor(activeContractId(env), poolIdStr);
-      updateEnvKey(abandonedKey, JSON.stringify({
-        manifest: hasManifest ? envHere[key] : null,
-        draft: hasDraft ? envHere[draftKey] : null,
-        at: poolNow.proTxHash ? Buffer.from(poolNow.proTxHash).toString("hex") : null,
-      }));
+      if (isV8()) {
+        updateEnvKey(abandonedKey, JSON.stringify({
+          manifest: hasManifest ? envHere[key] : null,
+          draft: hasDraft ? envHere[draftKey] : null,
+          at: poolNow.proTxHash ? Buffer.from(poolNow.proTxHash).toString("hex") : null,
+        }));
+      }
       // the frozen receipt draft goes WITH the manifest it froze (follow-up review): draft
       // first, manifest second, so no interleaving leaves a draft without its manifest.
       if (hasDraft) updateEnvKey(draftKey, undefined);
       if (hasManifest) updateEnvKey(key, undefined);
       console.log(`${hasManifest ? "committed manifest" : "leftover receipt draft"}${hasManifest && hasDraft
-        ? " and frozen receipt draft" : ""} CLEARED (archived to ${abandonedKey} for recovery). The frozen ` +
-        "allocation is abandoned; pledges still on the ledger remain pending (members can cancel or keep " +
-        "them for a re-formation).");
+        ? " and frozen receipt draft" : ""} CLEARED${isV8() ? ` (archived to ${abandonedKey} for recovery)` : ""}. ` +
+        "The frozen allocation is abandoned; pledges still on the ledger remain pending (members can cancel " +
+        "or keep them for a re-formation).");
       return;
     }
 
