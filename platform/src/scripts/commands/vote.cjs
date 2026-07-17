@@ -30,8 +30,17 @@ module.exports = async (ctx) => {
       const suffix = delegateTarget ? ` (targeted at ${delegateTarget})` : "";
       if (mine) {
         const prev = mine.toObject().choice;
-        mine.set("choice", choice);
-        if (isV5()) mine.set("delegateTo", delegateTarget ? Identifier.from(delegateTarget).toBuffer() : undefined);
+        // Replace the WHOLE data map via setData. Two reasons, both learned live:
+        // set(field, undefined) panics the wasm boundary ("Option::unwrap_throw()
+        // on a None value", first hit by a member re-vote through the UI), and a
+        // stale delegateTo MUST be cleared on every un-targeted re-vote, because
+        // the tally consults it whenever choice is "delegate", so a member going
+        // delegate(X) -> yes -> delegate would silently follow X again.
+        const o = mine.toObject();
+        mine.setData({
+          poolId: Buffer.from(o.poolId), proposalHash: Buffer.from(o.proposalHash), choice,
+          ...(isV5() && delegateTarget ? { delegateTo: Identifier.from(delegateTarget).toBuffer() } : {}),
+        });
         await client.platform.documents.broadcast({ replace: [mine] }, identity);
         console.log(`${who}'s preference on ${proposalHex.slice(0, 16)}... changed ${prev} -> ${choice}${suffix}`);
       } else {
