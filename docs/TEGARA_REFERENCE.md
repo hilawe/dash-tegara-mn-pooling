@@ -1,4 +1,16 @@
-# Tegara, the design and results of a non-custodial pooled-collateral reference implementation for Dash
+# Tegara, the design and results of a pooled-collateral reference implementation for Dash
+
+> CORRECTION 2026-07-17 (findings a soundness-review finding..a soundness-review finding). A full-architecture review, confirmed by a second
+> independent review, corrected two claims this document and its title carried. First, the member
+> join/exit handover is Platform ACCOUNTING ONLY: it re-owns a recorded share, it does not exchange
+> value between members, and it cannot settle members holding unrelated keys, so the "complete
+> self-sovereign member lifecycle" framing is withdrawn (a real member-signed value settlement is
+> planned as a future design round). Second, the version list and forward-work section below predate the
+> current ledger: v8 is LIVE and reviewed (the working default), and a v9 source draft exists,
+> unpublished. What remains genuinely open: the member-signed value settlement, the retail
+> sub-group boundary (the retail split boundary), the trusted L1-to-L2 relay, and public activation of the
+> collateral-sharing rule. The blocked claims are the lifecycle-complete ones, not the v8 core or
+> the L1 covenant prototype, which stand.
 
 One document for the whole build. It consolidates the design decisions, the shipped
 mechanisms, the live results, the review history, and the honest limits of the Tegara
