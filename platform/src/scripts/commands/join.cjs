@@ -10,6 +10,13 @@ module.exports = async (ctx) => {
         throw new Error(`usage: ${cmd} <poolId> <amountDuffs>`);
       }
       const pool = await getPool(poolIdStr);
+      // membership needs a live pool (F8): a forming pool has no shares to move yet, so a
+      // join or exit against one can never match. Refuse rather than leave a dead request.
+      const poolStatus = pool.toObject().status;
+      if (poolStatus !== undefined && poolStatus !== "live") {
+        throw new Error(`pool ${poolIdStr} is "${poolStatus}", not live; ${cmd} needs a live pool ` +
+          `(reserve a slot on a forming pool instead)`);
+      }
       if (cmd === "exit") {
         const held = (await myShares()).filter((s) =>
           Identifier.from(Buffer.from(s.toObject().poolId)).toString() === poolIdStr);

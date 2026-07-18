@@ -1,11 +1,21 @@
 /**
  * The Track A membership matching engine, exercised against the live pool-ledger contract.
  *
- * Pairs a leaving sub-funder with a joining one so the pool's recorded capital never has to
- * unwind on L1: the joiner's contribution replaces the leaver's, share for share. The engine
- * itself is pure accounting (a read plus a pairing rule that anyone can run and verify); every
- * state change stays self-sovereign, made by the identity that owns the document. The full
- * lifecycle is exercised: pending -> matched -> settled, with the share handed over in between.
+ * SCOPE, corrected 2026-07-17 (findings a soundness-review finding, a soundness-review finding; see the private findings log). This is an
+ * ACCOUNTING-ONLY research demonstration, NOT a complete member settlement. Two limits are
+ * load-bearing and must not be overstated. (1) It moves Platform SHARE OWNERSHIP only: a join
+ * carries an amount but no payment, asset lock, or transaction reference, and settlement changes
+ * no L1 owner key, refund script, or collateral, so no value is exchanged between the two members
+ * (a soundness review). (2) It signs BOTH members' transitions from ONE wallet (the run's own MNEMONIC), so it
+ * can only settle members whose identities derive from that single wallet; it cannot settle
+ * members holding unrelated keys (a soundness review). A real member-signed value settlement across unrelated
+ * wallets is unresolved design work (a future design round). Do not describe the output
+ * below as a self-sovereign or complete membership handover.
+ *
+ * What the demo DOES show: the pool's recorded share layout can be re-owned without unwinding it,
+ * the pairing rule is pure and independently checkable, and the pending -> matched -> settled
+ * state machine is crash-recoverable. The share moves from leaver to joiner as an accounting
+ * record, share for share.
  *
  *   1. the operator creates a fresh pool; funder1 creates a share (5000 bps),
  *   2. funder1 submits an exit membershipRequest, funder2 submits a join for the same amount,
