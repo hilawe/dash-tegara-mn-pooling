@@ -344,7 +344,7 @@ const verifyReceiptAllocation = (contractId, receipt) => {
   } catch (e) {
     // a CONSTANT reason: interpolating the caught value could itself throw (a Symbol, or an object
     // whose `message` getter throws), which would defeat the fail-closed guarantee
-    return bad("verification aborted on malformed input");
+    return bad("verification stopped on malformed input");
   }
 };
 

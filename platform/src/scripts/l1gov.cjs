@@ -107,7 +107,7 @@ const fetchL1Vote = async (proTxHex, proposalHex) => {
   const votes = await forkRpc("gobject",
     ["getcurrentvotes", proposalHex, info.collateralHash, String(info.collateralIndex)]);
   const funding = [];
-  // a record that does not parse is remembered but does not abort the scan: a future
+  // a record that does not parse is remembered but does not stop the scan: a future
   // Core adding a signal or field must not hide a perfectly valid funding vote later
   // in the map. If NO funding vote parses and something was unparseable, that is an
   // error, not "no vote".
