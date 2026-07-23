@@ -510,7 +510,7 @@ async function creditFromJournal(client, env, state, transaction) {
       // first (authoritative when the wording matches), then a descending window below the
       // chainlock height wide enough to absorb a larger consensus-view lag than the 1-2
       // blocks seen live. A failure at any candidate falls through to the next rather than
-      // aborting; the alreadyLanded guard keeps a credited entry from being retried.
+      // stopping; the alreadyLanded guard keeps a credited entry from being retried.
       let lastErr = null;
       const tried = new Set();
       const attempt = async (height) => {

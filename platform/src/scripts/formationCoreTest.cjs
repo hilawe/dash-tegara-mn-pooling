@@ -386,7 +386,7 @@ for (const [name, thrown] of [
   const r = {}; Object.defineProperty(r, "allocationRows", { get() { throw thrown(); } });
   let threw = false, res = null;
   try { res = core.verifyReceiptAllocation(GC, r); } catch (e) { threw = true; }
-  ok(`verify: a throwing accessor (${name}) fails closed, not a throw`, !threw && res && !res.ok && /aborted/.test(res.reason));
+  ok(`verify: a throwing accessor (${name}) fails closed, not a throw`, !threw && res && !res.ok && /stopped/.test(res.reason));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
