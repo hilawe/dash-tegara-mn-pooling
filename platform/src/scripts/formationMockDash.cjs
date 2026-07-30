@@ -7,7 +7,7 @@
  * crash matrix, but the boundaries here are the RECEIPT FLOW's awaits and local-state
  * writes): every platform call ticks the shared fault counter in global.__TEGARA_FAULT
  * (the child runner also ticks it from envStore.updateEnvKey), and when the counter
- * passes the armed threshold the process HARD-EXITS with code 97, bypassing every
+ * passes the armed threshold the process HARD-EXITS with code 97, skipping every
  * finally block, exactly like a real crash (so an op lock stays held, a draft stays
  * frozen, and the orchestrator must handle both, which is the point).
  *

@@ -1,6 +1,6 @@
 /**
  * The failure-injection crash matrix for the v8 formation RECEIPT state machine (round 1's
- * Lens-3 recommendation, and the mechanical base round 4 hunts above). It does for the
+ * Lens-3 recommendation, and the mechanical base round 4 looks for above). It does for the
  * receipt flow what envStoreCrashTest does for the state store: stop REAL execution at
  * every mutating boundary (each Platform op AND each local durable write), then assert the
  * state either RESUMES to the same receipt or STOPS LOUDLY without clearing recovery
@@ -8,12 +8,12 @@
  *
  * Mechanism: a child process runs the real formation.cjs with `dash` swapped for an
  * in-memory mock ledger (formationMockDash.cjs) and a fault counter that hard-exits 97
- * after boundary K (bypassing every finally, exactly like a real crash, so the op lock
+ * after boundary K (skipping every finally, exactly like a real crash, so the op lock
  * stays held and drafts stay frozen). The parent, per K: seed a fresh forming pool,
  * `complete` with a crash at K, then DRIVE RECOVERY the way an operator would (clear a
  * crash-held op lock, re-run `complete`, and run `receipt`), and assert the invariants.
  *
- * Adversarial cases (round 3's awkward-to-run-live re-check items) follow the matrix:
+ * Independent cases (round 3's awkward-to-run-live re-check items) follow the matrix:
  * two stale op-lock waiters, draft recovery against a stale .val.prev, and an existing
  * receipt against a wrong/forming pool.
  *
@@ -323,7 +323,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   }
 }
 
-// ---- adversarial case: a legitimate POOL FEE CHANGE after completion must NOT make
+// ---- independent case: a legitimate POOL FEE CHANGE after completion must NOT make
 //      `receipt` falsely reject the (historical-fee) receipt (round-5 P2) ----
 {
   writeSeed();
@@ -338,22 +338,22 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("receipt readback notes the historical fee, not a contradiction", /2000 bps/.test(r.out) && !/contradict/i.test(r.out));
 }
 
-// ---- adversarial case A: two stale op-lock waiters never both proceed ----
+// ---- independent case A: two stale op-lock waiters never both proceed ----
 {
   writeSeed();
   runChild(["complete", POOL, REAL_HASH]); // land a completed pool + receipt
-  // forge a foreign op-lock with an owner token, as a crashed run would leave
+  // fabricate a foreign op-lock with an owner token, as a crashed run would leave
   const suffix = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("FORMATION_DONE_")).replace("FORMATION_DONE_", "").replace(".val", "");
   const lockDir = path.join(STATE_DIR, `oplock-${suffix}`);
   fs.mkdirSync(lockDir, { recursive: true });
   fs.writeFileSync(path.join(lockDir, "owner"), "ghost-pid");
   const blocked = runChild(["receipt", POOL]);
-  ok("held op lock blocks a second run (no auto-steal)", blocked.code !== 0 && /operation lock/.test(blocked.out));
+  ok("held op lock blocks a second run (no auto-divert)", blocked.code !== 0 && /operation lock/.test(blocked.out));
   ok("the blocked run left the foreign lock in place", fs.existsSync(lockDir));
   fs.rmSync(lockDir, { recursive: true, force: true });
 }
 
-// ---- adversarial case B: a receipt whose pool is still forming is refused ----
+// ---- independent case B: a receipt whose pool is still forming is refused ----
 {
   writeSeed();
   // hand-inject a schema-valid receipt for a pool that never flipped (a squatter-style anomaly)
@@ -371,7 +371,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("a receipt on a still-forming pool is refused loudly", r.code !== 0 && /forming/i.test(r.out));
 }
 
-// ---- adversarial case C: a corrupt draft is refused, never written blind ----
+// ---- independent case C: a corrupt draft is refused, never written blind ----
 //      DETERMINISTIC (round-6): reach a state that certainly HAS a draft (halt after the
 //      flip, which freezes the draft and retains it), then corrupt it.
 {
@@ -385,7 +385,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("a corrupt draft writes no receipt", receipts().length === 0);
 }
 
-// ---- adversarial case D0: a fee change BEFORE the flip must REFUSE (round-6 re-check:
+// ---- independent case D0: a fee change BEFORE the flip must REFUSE (round-6 re-check:
 //      the receipt records the completion-time fee, so a pre-flip drift must never let a
 //      stale draft fee freeze into the immutable receipt) ----
 {
@@ -401,7 +401,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("pre-flip fee drift did not flip the pool", !poolLiveUnderRealHash() && receipts().length === 0);
 }
 
-// ---- adversarial case D: a legitimate POOL FEE CHANGE while the pool is live WITHOUT a
+// ---- independent case D: a legitimate POOL FEE CHANGE while the pool is live WITHOUT a
 //      receipt (draft present) must NOT brick recovery (round-6: requireDraftMatchesPool
 //      used to reject on fee) ----
 {
@@ -416,7 +416,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   assertReceiptCorrect("fee-recovery receipt", receipts()[0]); // records the HISTORICAL 2000 fee
 }
 
-// ---- adversarial case E: abandon ARCHIVES before clearing, and receipt RECOVERS from
+// ---- independent case E: abandon ARCHIVES before clearing, and receipt RECOVERS from
 //      the archive if the pool went live during/after the abandon (round-7 P1) ----
 {
   writeSeed();
@@ -440,7 +440,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
     fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_DONE_") && f.endsWith(".val")));
 }
 
-// ---- adversarial case J: abandon FAILS CLOSED on a damaged manifest (a soundness review): a
+// ---- independent case J: abandon FAILS CLOSED on a damaged manifest (a soundness review): a
 //      parse failure must refuse, never fall open to an empty participant list and clear state ----
 {
   writeSeed();
@@ -452,7 +452,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("the corrupt manifest was NOT cleared", fs.existsSync(path.join(STATE_DIR, manFile)));
 }
 
-// ---- adversarial case K: idempotent abandon with NO state returns cleanly (re-check-2:
+// ---- independent case K: idempotent abandon with NO state returns cleanly (re-check-2:
 //      the fail-closed extraction must not throw when there is simply nothing to abandon) ----
 {
   writeSeed(); // a forming pool with pledgeSlots but NO committed manifest/draft
@@ -460,7 +460,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("abandon with no committed manifest/draft returns cleanly", ab.code === 0 && /no committed manifest/.test(ab.out));
 }
 
-// ---- adversarial case L: repeated `receipt` on a DONE source does NOT rewrite DONE
+// ---- independent case L: repeated `receipt` on a DONE source does NOT rewrite DONE
 //      (re-check-2: rewriting resets the prune-age mtime and postpones pruning) ----
 {
   writeSeed();
@@ -473,7 +473,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("repeated receipt inspection does not rewrite the DONE record", mtime0 === mtime1);
 }
 
-// ---- adversarial case H: a STALE archive whose committed hash != the live pool hash is
+// ---- independent case H: a STALE archive whose committed hash != the live pool hash is
 //      IGNORED, so it cannot make a valid receipt read as contradictory (round-7 re-check P2) ----
 {
   writeSeed();
@@ -492,7 +492,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
     r.code === 0 && /canonical, hash recomputed and matches/.test(r.out) && receipts().length === 1);
 }
 
-// ---- adversarial case F: abandon REFUSES if the pool went live before the mutation
+// ---- independent case F: abandon REFUSES if the pool went live before the mutation
 //      (re-fetch guard), keeping the manifest for `receipt` ----
 {
   writeSeed();
@@ -509,21 +509,21 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("receipt then publishes from the kept manifest", r.code === 0 && receipts().length === 1);
 }
 
-// ---- adversarial case G: done prune KEEPS a DONE whose sibling DRAFT survives (round-7
+// ---- independent case G: done prune KEEPS a DONE whose sibling DRAFT survives (round-7
 //      P2, the pre-round-6 half-finalized DONE+DRAFT legacy state) ----
 {
   writeSeed();
   runChild(["complete", POOL, REAL_HASH]); // clean: writes DONE, clears active + draft
   const doneFile = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("FORMATION_DONE_") && f.endsWith(".val"));
   const suffix = doneFile.replace("FORMATION_DONE_", "").replace(".val", "");
-  // forge the legacy crash state: DONE (old) + a leftover DRAFT, no active key
+  // fabricate the legacy crash state: DONE (old) + a leftover DRAFT, no active key
   fs.writeFileSync(path.join(STATE_DIR, `RECEIPT_DRAFT_${suffix}.val`), '{"v":1}');
   const pr = runChild(["done", "prune", "0"]); // cutoff 0 days: everything is "old enough"
   ok("prune keeps a DONE with a surviving sibling draft", pr.code === 0 && /kept .* frozen draft/.test(pr.out));
   ok("the DONE manifest survived the prune", fs.existsSync(path.join(STATE_DIR, doneFile)));
 }
 
-// ---- adversarial case I: a FOREIGN share (any identity, not a participant) must NOT wedge
+// ---- independent case I: a FOREIGN share (any identity, not a participant) must NOT wedge
 //      completion or abandon (a soundness review). Before the fix, one planted share broke the flip readback
 //      (bpsSum != 10000) and the abandon guard (any share blocks), stranding the pool. ----
 const plantForeignShare = () => {
