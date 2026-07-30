@@ -207,6 +207,44 @@ eq("inside a suspension the position is UNRECOGNIZED",
      suspensions: [{ start: { kind: "observed", banHeight: H0 - 1 }, endHeight: H0, endReason: "RANGE_END" }] } }),
    { status: "UNRECOGNIZED", bindingRef: 0 });
 
+// ---- NO PREPARED CAPTURE CAN ARRIVE THROUGH THE CONTEXT (round 8 finding 5) ----
+// The exported recognizeAt re-derives from the checkpoints in front of it and has no prepared
+// parameter, so a caller cannot preload bounds through the context by ANY means. Four earlier
+// designs each placed authority in a marker on the caller's object (a flag, an array identity,
+// a WeakMap brand, a module-private Symbol slot), and the round-8 defeat was a Proxy whose get
+// trap answered any SYMBOL key with a fabricated capture, so a height outside every real epoch
+// came back RECOGNIZED. These cases pin the honest outcome.
+{
+  const outside = span.to + 1;               // genuinely past the last epoch -> DEFERRED
+  const below = span.from - 1;               // genuinely before the first    -> UNRECOGNIZED
+  // sanity, so the cases below are not vacuous
+  eq("baseline: a height past the epochs is DEFERRED", recognizeAt(outside, ctx),
+     { status: "DEFERRED", bindingRef: null });
+
+  // a Proxy that answers EVERY property read, symbol keys included, with a fabricated capture
+  // whose bounds cover all heights. The round-8 slot read ctx[PREPARED] would have taken this.
+  const fabricated = { bounds: [{ fromCoreHeight: 0, toCoreHeight: Number.MAX_SAFE_INTEGER }],
+                       susIntervals: [] };
+  const anyKeyProxy = new Proxy(ctxOf(positive), {
+    get(target, key, recv) {
+      if (typeof key === "symbol") return fabricated;
+      return Reflect.get(target, key, recv);
+    },
+  });
+  eq("a Proxy answering any symbol key cannot preload bounds: still DEFERRED",
+     recognizeAt(outside, anyKeyProxy), { status: "DEFERRED", bindingRef: null });
+  eq("and a below-epoch height stays UNRECOGNIZED through the same Proxy",
+     recognizeAt(below, anyKeyProxy), { status: "UNRECOGNIZED", bindingRef: null });
+
+  // the plainer inputs the earlier designs fell to, inert now: own properties under guessed
+  // key names whose value is a fabricated capture
+  const withOwnProp = ctxOf(positive);
+  withOwnProp.prepared = fabricated;
+  withOwnProp.PREPARED = fabricated;
+  eq("an own prepared/PREPARED property does not preload bounds",
+     recognizeAt(outside, withOwnProp), { status: "DEFERRED", bindingRef: null });
+}
+
 // ---- canonicalization guards ----
 ok("canonical form sorts keys", canonicalize({ b: 1, a: 2 }).toString() === '{"a":2,"b":1}');
 throws("a non-safe JSON number is refused", () => canonicalize({ n: 1e300 }), /unsafe JSON number/);
