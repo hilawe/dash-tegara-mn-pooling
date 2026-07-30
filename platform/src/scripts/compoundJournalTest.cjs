@@ -204,7 +204,7 @@ const setRaw = (v) => { const env = loadEnv(); env[rawKey] = v; saveEnv(env, { j
   ok("updateEnvKey deletes", loadEnv()[AK] === undefined);
 
   // 17. a held lock refuses a second mutator, loudly, and FOREIGN saveEnv participates
-  // in the same lock (review TOCTOU finding: with both sides locking, a journal
+  // in the same lock (review read-then-use window finding: with both sides locking, a journal
   // mutation can never commit between a foreign save's reload and write; the interleave
   // is impossible-by-refusal, which is what these two cases pin down)
   // the lock lives inside the shared state dir when one exists (round-3 review: a

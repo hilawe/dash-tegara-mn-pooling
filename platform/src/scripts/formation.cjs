@@ -66,7 +66,7 @@ const { installConsumedFilter } = require("./walletGuard.cjs");
 const { Identifier } = require("@dashevo/wasm-dpp");
 const { fetchAll, fetchUpTo } = require("./query.cjs");
 // F-G: bound both the LEGITIMATE slot count (enforced at pool creation) and the pledgeSlot
-// claim scan. A hostile member can create up to ~10000 out-of-range slotNo claims, and an
+// claim scan. A malformed member can create up to ~10000 out-of-range slotNo claims, and an
 // unbounded fetchAll would materialize them all (100s of round-trips) with a giant error
 // string. MAX_SLOT_COUNT caps a legit book at creation; MAX_PLEDGE_CLAIMS is the scan
 // ceiling, set ABOVE MAX_SLOT_COUNT so a full legit book plus a grief-detection window fits
@@ -220,7 +220,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         MAX_PLEDGE_CLAIMS, { where: [["poolId", "==", poolId]] });
       if (truncated) {
         throw new Error(`this pool has more than ${MAX_PLEDGE_CLAIMS} pledgeSlot claims, far beyond any ` +
-          "legitimate slot book; refusing to enumerate (a hostile flood of out-of-range claims). Resolve " +
+          "legitimate slot book; refusing to enumerate (a malformed flood of out-of-range claims). Resolve " +
           "by having the claim owners cancel, then re-run.");
       }
       const claims = claimDocs.map((d) => ({ d, o: d.toObject() }));
@@ -368,7 +368,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (seenClaimIds.size !== seenReqs.size) fail("claim snapshots do not cover every committed request id");
       // a soundness-review finding: RELATIONALLY bind each claim to the owner allocation it belongs to. Global
       // completeness and uniqueness (above) do not prove a claim belongs to the owner whose
-      // reqIds list it, nor that an owner's claim amounts sum to its allocation, so a tampered
+      // reqIds list it, nor that an owner's claim amounts sum to its allocation, so a altered
       // manifest could keep the claims internally consistent while shifting the owner split
       // (and the receipt would then commit an allocation the checked claims do not support).
       const claimById = new Map(m.claims.map((c) => [c.id, c]));
@@ -1199,7 +1199,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // live share set, so a NON-participant share carries no weight and must not block. Each
       // participant's share is still verified field-by-field (round-6), so a mutated real
       // share is still caught. This also bounds the readback to <=8 indexed lookups instead
-      // of an unbounded fetchAll over an attacker-inflatable collection (F-G).
+      // of an unbounded fetchAll over an dishonest party-inflatable collection (F-G).
       let participantBps = 0;
       for (const o of manifest.owners) {
         const found = await client.platform.documents.get("poolLedger.share", {

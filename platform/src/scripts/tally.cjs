@@ -86,7 +86,7 @@ const canonicalMembers = (tally) =>
 /**
  * Strict validation of canonical member rows BEFORE reconstruction (batch-4 review,
  * major): a snapshot's tallyRows arrive from the ledger, not from this process, so a
- * hostile-but-valid-JSON byte string must be classified as a deviation, never crash
+ * malformed-but-valid-JSON byte string must be classified as a deviation, never crash
  * the verifier or reconstruct nonsense (duplicate owners, bps off 10000, NaN weights
  * from unknown choices). Returns the rows; throws with a specific reason.
  */

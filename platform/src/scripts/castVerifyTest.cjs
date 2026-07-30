@@ -2,7 +2,7 @@
  * The offline table-driven harness over the cast-verification decision core
  * (castVerify.cjs), the batch-4 lens-3 idea both packet reviewers endorsed. Runs the
  * full decision surface from castReceiptV2.cjs's header (every snapshot/vote/receipt
- * combination, the hostile-rows cases, the hash and timestamp legs, the anomaly
+ * combination, the malformed-rows cases, the hash and timestamp legs, the anomaly
  * notes, and the freshness classes) with plain node, no devnet, no fork node, same
  * pattern as railStateTest.cjs and matchJournalTest.cjs.
  *
@@ -330,7 +330,7 @@ T("no snapshot but a vote exists", mkState({ l1: mkVote("yes") }),
     receipts: [mkReceipt(snap, "yes")], l1: vote,
     observations: [mkObs(vote, { owner: NOT_OP, createdAt: (T0 - 1000) * 1000 })] }),
   { dev: 0, stale: 0, notes: 0, logHas: "0 by current pool members" });
-  T("carpet attack: a matched pre-snapshot member hash cannot fail verification",
+  T("carpet failure mode: a matched pre-snapshot member hash cannot fail verification",
     mkState({ tally, snapshots: [snap], receipts: [mkReceipt(snap, "yes")], l1: vote,
       // a member pre-published the operator's eventual vote hash BEFORE the snapshot
       // (snapshot createdAt is (T0-600)*1000, so this is earlier)

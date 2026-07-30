@@ -10,7 +10,7 @@
  *      old one, and timing disputes have a permanent trail.
  *   2. OPERATOR-BOUND CREATION (creationRestrictionMode 1, owner-only): only the
  *      contract owner (the operator identity that publishes this contract) can create
- *      documents, so a hostile identity can no longer occupy a receipt slot or forge
+ *      documents, so a malformed identity can no longer occupy a receipt slot or fabricate
  *      an "attestation". Enforcement is probed live after publish; if this Platform
  *      version did not enforce it, the fallback is the v1 client-side owner check,
  *      and the probe result is recorded either way.

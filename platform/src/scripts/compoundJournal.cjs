@@ -119,7 +119,7 @@ const parseJournal = (raw, contractId, memberId, key) => {
 /** Every mutation is lock -> reload -> validate -> mutate -> save, so concurrent runs on
  *  one filesystem always merge through the freshest on-disk state. The lock is the
  *  shared env-file lock in envStore, which FOREIGN saveEnv calls also hold across their
- *  own reload-and-write (review TOCTOU finding), so neither side can clobber the other;
+ *  own reload-and-write (review read-then-use window finding), so neither side can clobber the other;
  *  contention surfaces as a loud refusal. */
 const mutate = (contractId, memberId, fn) => {
   lockEnv();

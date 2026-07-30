@@ -274,7 +274,7 @@ const allocationHash = (bytes) => {
  *  correspondence. Does NOT prove the shares still exist or match (honesty ceiling). */
 const verifyReceiptAllocation = (contractId, receipt) => {
   const bad = (reason) => ({ ok: false, reason });
-  // the whole body runs under a guard so ANY unexpected throw on hostile input (a crafted object, a
+  // the whole body runs under a guard so ANY unexpected throw on malformed input (a crafted object, a
   // proxied typed array, a getter that throws) fails CLOSED rather than crashing the caller
   try {
   const wantContract = toId32(contractId);
@@ -284,7 +284,7 @@ const verifyReceiptAllocation = (contractId, receipt) => {
   if (!Buffer.isBuffer(rowsBytes) && !(rowsBytes instanceof Uint8Array)) return bad("allocationRows is not bytes");
   const rowsBuf = Buffer.from(rowsBytes);
   if (rowsBuf.length > ALLOC_MAX_BYTES) return bad(`allocationRows ${rowsBuf.length} bytes exceeds the ${ALLOC_MAX_BYTES}-byte schema bound`);
-  // accept the hash as bytes or a 64-hex string; anything else fails CLOSED, never throws (hostile input)
+  // accept the hash as bytes or a 64-hex string; anything else fails CLOSED, never throws (malformed input)
   const ah = receipt.allocationHash;
   let claimedHash = null;
   if (Buffer.isBuffer(ah) || ah instanceof Uint8Array) claimedHash = Buffer.from(ah);

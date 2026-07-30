@@ -147,7 +147,7 @@ function buildV10(poolLedgerContract) {
   // Retail-only v10 drops exactly the three types the decision names:
   //   - `share`: the open self-created direct-tier membership document. On a retail
   //     contract every membership is a slotShare moved by paid purchase; an open type a
-  //     confused or hostile client can write to is junk surface (the earlier "reader
+  //     confused or malformed client can write to is junk surface (the earlier "reader
   //     duty" posture was sound but untidy, and the decision retires it).
   //   - `membershipRequest` and `pledgeSlot`: the direct-tier join machinery; retail
   //     issuance is born-live operator minting (spec section 2), so neither has a

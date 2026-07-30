@@ -77,7 +77,7 @@ const { loadEnv, activeContractId, activeCastId, isCastV3, isV5 } = require("./e
 const { fetchAll, fetchUpTo } = require("./query.cjs");
 
 // the observation fetch is PER CURRENT MEMBER (byProposalObserver index), so
-// non-member or hostile-member spam cannot crowd real member evidence out of the
+// non-member or malformed-member spam cannot crowd real member evidence out of the
 // window (batch-6 review). Each member's set is capped; a member self-spamming past
 // the cap truncates only their own slot, reported loudly. MAX_MEMBER_SLOTS bounds
 // total work for a pathologically large pool; the aggregate bound passed to
@@ -316,14 +316,14 @@ const platformHeight = async (client) => {
     // Fetch observations PER CURRENT MEMBER (batch-6 second review): only members'
     // observations produce the loud ordering/orphan notes, so pulling each member's
     // set directly (byProposalObserver index, oldest-first, per-member cap) means
-    // non-member or hostile-member spam cannot crowd real member evidence out of a
+    // non-member or malformed-member spam cannot crowd real member evidence out of a
     // bounded proposal-wide window. Each member's own set is bounded and any
     // truncation is loud; a member self-spamming only truncates their own slot.
     let observationDocs = [];
     const observationFetchTruncatedOwners = [];
     let observationMemberSlotsSkipped = 0;
     // deterministic member order (code-unit), so the ceiling and any skipped-slot
-    // report are reproducible and not attacker-gameable
+    // report are reproducible and not dishonest party-gameable
     const memberOwnerIds = [...new Set(shares.map((x) => x.owner))]
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     const fetchSlots = memberOwnerIds.slice(0, MAX_MEMBER_SLOTS);

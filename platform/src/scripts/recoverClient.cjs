@@ -22,7 +22,7 @@
  * carried an inline low-level signer as the proof of concept, and that signer was
  * extracted into the standalone library `dash-rawkey-signer` (its own clean-room-designed
  * project), which this file now CONSUMES for both writes. The library derives the
- * required key from the protocol (including a contract's per-document security level,
+ * required key from the protocol (including a contract's per-document soundness level,
  * stricter than the inline version's purpose match), refuses wrong keys with typed
  * errors, and returns signed bytes; this file keeps the reads, the SDK nonce bumps, and
  * a broadcast through the PUBLIC DAPI client surface, so no `dash/build/...` internal
@@ -36,7 +36,7 @@ const Dash = require("dash");
 const { Identifier } = require("@dashevo/wasm-dpp");
 
 const PURPOSE = { 0: "authentication", 1: "encryption", 2: "decryption", 3: "transfer" };
-const SECURITY = { 0: "master", 1: "critical", 2: "high", 3: "medium" };
+const SOUNDNESS = { 0: "master", 1: "critical", 2: "high", 3: "medium" };
 
 (async () => {
   const cmd = process.argv[2] || "status";
@@ -106,7 +106,7 @@ const SECURITY = { 0: "master", 1: "critical", 2: "high", 3: "medium" };
         const w = wanted.find((x) => x.pub === kh);
         if (w) { w.key = k; }
         console.log(`  key ${k.getId()}: ${PURPOSE[k.getPurpose()] || k.getPurpose()} / ` +
-          `${SECURITY[k.getSecurityLevel()] || k.getSecurityLevel()}` +
+          `${SOUNDNESS[k.getSoundnessLevel()] || k.getSoundnessLevel()}` +
           `${isDisabled(k) ? " / DISABLED" : ""}${w ? `  <- MY ${w.label} RECOVERY KEY` : ""}`);
       }
       let allGood = true;
@@ -141,7 +141,7 @@ const SECURITY = { 0: "master", 1: "critical", 2: "high", 3: "medium" };
       // low-level version this file used to carry was the proof of concept it was
       // extracted from). The library owns the whole authorization-and-signing story:
       // it derives the REQUIRED key from the protocol (TRANSFER for withdrawals,
-      // AUTHENTICATION at the contract's security level for documents), matches the
+      // AUTHENTICATION at the contract's soundness level for documents), matches the
       // supplied raw key against the identity snapshot, refuses wrong-purpose or
       // disabled keys with typed errors, clamps the core fee to the protocol floor,
       // and returns signed BYTES. This file keeps only the reads, the nonce bumps

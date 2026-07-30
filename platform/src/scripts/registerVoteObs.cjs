@@ -58,7 +58,7 @@ const voteObsContract = {
       { name: "byProposal", properties: [{ proposalHash: "asc" }, { $createdAt: "asc" }] },
       // per-observer, per-proposal listing (batch-6 second review): verify fetches
       // each CURRENT MEMBER's observations directly through this index instead of a
-      // proposal-wide earliest-first pull, so non-member (or hostile-member) spam
+      // proposal-wide earliest-first pull, so non-member (or malformed-member) spam
       // cannot crowd real member evidence out of a bounded fetch window
       { name: "byProposalObserver",
         properties: [{ proposalHash: "asc" }, { $ownerId: "asc" }, { $createdAt: "asc" }] },
