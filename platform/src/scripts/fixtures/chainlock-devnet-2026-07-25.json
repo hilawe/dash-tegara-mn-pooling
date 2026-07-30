@@ -1,0 +1,33 @@
+{
+ "capturedFrom": "live dashmate devnet (regtest chain), 2026-07-25, container dashmate_33203a5d_local_3-core-1",
+ "chainlock": {
+  "blockhash": "13cd8681769d40b4f0835a84e0fa64072a73608e0c250f7798ffc56cf686e1de",
+  "height": 8358,
+  "hex": "a6200000dee186f66cc5ff98770f250c8e60732a0764fae0845a83f0b4409d768186cd1398167c9ef82123e1b5f26755c80774a6b3c2371b0653609b35080781b38aee1087307494c4a7eb299e44f4043560580b153598bfe784e0e11894e9d825a5e47008796a319d9141ecf411e2afa807966992f039135fa016d175bc9322b28c7969",
+  "known_block": true,
+  "signature": "98167c9ef82123e1b5f26755c80774a6b3c2371b0653609b35080781b38aee1087307494c4a7eb299e44f4043560580b153598bfe784e0e11894e9d825a5e47008796a319d9141ecf411e2afa807966992f039135fa016d175bc9322b28c7969"
+ },
+ "constructionFromSource": {
+  "msgHash": "the ChainLocked block hash  [8c9f166a3:src/chainlock/signing.cpp:163-164]",
+  "requestId": "dsha256(compactSize(\"clsig\") || \"clsig\" || int32LE(height))  [8c9f166a3:src/chainlock/clsig.cpp:14-19]",
+  "signHash": "dsha256(uint8 llmqType || quorumHash || requestId || msgHash), all uint256 in INTERNAL byte order  [8c9f166a3:src/llmq/signhash.cpp:14-22]",
+  "verify": "llmq::VerifyRecoveredSig against the signing quorum public key  [8c9f166a3:src/chainlock/clsig.cpp:21-29]"
+ },
+ "quorums": [
+  {
+   "height": 8328,
+   "members": 3,
+   "quorumHash": "5342bfbef957346dc43ca34d80e2481449e16a800e62e108cf34ab5648e86bbc",
+   "quorumPublicKey": "86739e2f9e6f298042c84aac9bc0a77eaa976fcc040717501adcc758737a324b271e2f1bf950b2b5c4dbf7229fe68689",
+   "type": "llmq_test"
+  },
+  {
+   "height": 8304,
+   "members": 3,
+   "quorumHash": "75b22bf4fdc7a02665f34a6b94980b8330ad05081464fe5328f4905435d9714c",
+   "quorumPublicKey": "a823336e5c032aae94c909108af5b175da985c3d480ad242334ec3fafc757bcf4383396723cb9048533fdc127ca32463",
+   "type": "llmq_test"
+  }
+ ],
+ "why": "A REAL ChainLock plus the live quorum set, pinned so verifyCoreWalk can be built and VALIDATED against genuine data rather than implemented blind. Naive IETF-basic BLS verification over the construction read from 8c9f166a3 did NOT verify (112 byte-order/llmqType combinations tried), so the remaining unknown is the exact Dash BLS scheme/hash-to-curve or the signing-quorum selection rule, not the sign-hash construction."
+}
