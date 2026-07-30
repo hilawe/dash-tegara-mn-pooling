@@ -1,0 +1,2034 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tegara:auditEnvelope:v1",
+  "title": "Tegara fixed-slot audit envelope, version 1 (companion v1.21)",
+  "description": "Closed machine-readable schema for the v1 audit envelope of LIFECYCLE_JOURNAL_AND_SEAM_DESIGN.md revision 27. Every object is closed (additionalProperties false); every union is tagged. Semantic constraints the schema language cannot express (array orders including smlEntries, epoch and payload byte-matching, the coverage-interval equation, the network name binding to the Core genesis hash, journal reconstruction, reward-decision re-derivation, ownership binding, largest-remainder conservation, the exclusive claim profiles) are normative in the design note and enforced by check_vectors.py.",
+  "$defs": {
+    "hex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "hexBytes": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{2})+$"
+    },
+    "base58Id": {
+      "type": "string",
+      "pattern": "^[1-9A-HJ-NP-Za-km-z]{16,64}$"
+    },
+    "decimalString": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)$"
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "coreNetworkName": {
+      "enum": [
+        "mainnet",
+        "testnet",
+        "devnet",
+        "regtest"
+      ]
+    },
+    "eligibilityState": {
+      "enum": [
+        "PRESENT_VALID",
+        "PRESENT_INVALID",
+        "ABSENT_PRE_APPEARANCE",
+        "ABSENT_TERMINAL",
+        "ABSENT_UNKNOWN"
+      ]
+    },
+    "listWalkState": {
+      "enum": [
+        "ABSENT",
+        "PRESENT_VALID",
+        "PRESENT_INVALID"
+      ]
+    },
+    "inclusiveRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fromHeight",
+        "toHeight"
+      ],
+      "properties": {
+        "fromHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "toHeight": {
+          "$ref": "#/$defs/height"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "script",
+        "amountDuffs",
+        "outputIndex"
+      ],
+      "properties": {
+        "script": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "amountDuffs": {
+          "$ref": "#/$defs/decimalString"
+        },
+        "outputIndex": {
+          "$ref": "#/$defs/index"
+        }
+      }
+    },
+    "share": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "properties": {
+        "numerator": {
+          "$ref": "#/$defs/decimalString"
+        },
+        "denominator": {
+          "$ref": "#/$defs/decimalString"
+        }
+      }
+    },
+    "position": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "slotIndex",
+            "platformHeight",
+            "txIndex",
+            "docId",
+            "innerIndex"
+          ],
+          "properties": {
+            "kind": {
+              "const": "purchase"
+            },
+            "slotIndex": {
+              "$ref": "#/$defs/retailSlot"
+            },
+            "platformHeight": {
+              "$ref": "#/$defs/height"
+            },
+            "txIndex": {
+              "$ref": "#/$defs/index"
+            },
+            "docId": {
+              "$ref": "#/$defs/base58Id"
+            },
+            "innerIndex": {
+              "$ref": "#/$defs/index"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "slotIndex",
+            "platformHeight",
+            "txIndex",
+            "docId",
+            "innerIndex"
+          ],
+          "properties": {
+            "kind": {
+              "const": "creation"
+            },
+            "slotIndex": {
+              "$ref": "#/$defs/retailSlot"
+            },
+            "platformHeight": {
+              "$ref": "#/$defs/height"
+            },
+            "txIndex": {
+              "$ref": "#/$defs/index"
+            },
+            "docId": {
+              "$ref": "#/$defs/base58Id"
+            },
+            "innerIndex": {
+              "$ref": "#/$defs/index"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "slotIndex"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pre-creation"
+            },
+            "slotIndex": {
+              "$ref": "#/$defs/retailSlot"
+            }
+          }
+        }
+      ]
+    },
+    "ownershipChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "coreChainLockedHeight",
+        "transitionHash",
+        "seller",
+        "buyer",
+        "price"
+      ],
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "coreChainLockedHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "transitionHash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "seller": {
+          "$ref": "#/$defs/base58Id"
+        },
+        "buyer": {
+          "$ref": "#/$defs/base58Id"
+        },
+        "price": {
+          "$ref": "#/$defs/decimalString"
+        }
+      }
+    },
+    "book": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractId",
+        "poolId",
+        "operatorId",
+        "slotCount",
+        "shares"
+      ],
+      "properties": {
+        "contractId": {
+          "$ref": "#/$defs/base58Id"
+        },
+        "operatorId": {
+          "$ref": "#/$defs/base58Id"
+        },
+        "slotCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 512
+        },
+        "shares": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/share"
+          }
+        },
+        "poolId": {
+          "$ref": "#/$defs/base58Id"
+        }
+      }
+    },
+    "slotBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proTxHash",
+        "slotIndex",
+        "contractId",
+        "poolId",
+        "activationCoreHeight"
+      ],
+      "properties": {
+        "proTxHash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "slotIndex": {
+          "$ref": "#/$defs/l1SlotIndex"
+        },
+        "contractId": {
+          "$ref": "#/$defs/base58Id"
+        },
+        "poolId": {
+          "$ref": "#/$defs/base58Id"
+        },
+        "activationCoreHeight": {
+          "$ref": "#/$defs/height"
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpointId",
+        "epochId",
+        "epochRange",
+        "signedPayloadBytes",
+        "signature",
+        "signerPublicKey",
+        "algorithm",
+        "extractedBinding"
+      ],
+      "properties": {
+        "checkpointId": {
+          "$ref": "#/$defs/hex32"
+        },
+        "epochRange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fromCoreHeight",
+            "toCoreHeight"
+          ],
+          "properties": {
+            "fromCoreHeight": {
+              "$ref": "#/$defs/height"
+            },
+            "toCoreHeight": {
+              "$ref": "#/$defs/height"
+            }
+          }
+        },
+        "signedPayloadBytes": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "signature": {
+          "$ref": "#/$defs/hex64"
+        },
+        "signerPublicKey": {
+          "$ref": "#/$defs/ed25519Pub"
+        },
+        "algorithm": {
+          "enum": [
+            "ed25519"
+          ]
+        },
+        "extractedBinding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "books",
+            "bindings"
+          ],
+          "properties": {
+            "books": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/book"
+              }
+            },
+            "bindings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/slotBinding"
+              }
+            }
+          }
+        },
+        "epochId": {
+          "$ref": "#/$defs/index"
+        }
+      }
+    },
+    "suspensionStart": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "banHeight"
+          ],
+          "properties": {
+            "kind": {
+              "const": "observed"
+            },
+            "banHeight": {
+              "$ref": "#/$defs/height"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pre-base"
+            }
+          }
+        }
+      ]
+    },
+    "suspension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "endHeight",
+        "endReason"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/suspensionStart"
+        },
+        "endHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "endReason": {
+          "enum": [
+            "REVOKED",
+            "TERMINATED",
+            "RANGE_END"
+          ]
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "terminalHeight",
+        "observedThroughHeight",
+        "suspensions",
+        "transitions"
+      ],
+      "properties": {
+        "terminalHeight": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/height"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedThroughHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "suspensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/suspension"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "height",
+              "from",
+              "to"
+            ],
+            "properties": {
+              "height": {
+                "$ref": "#/$defs/height"
+              },
+              "from": {
+                "$ref": "#/$defs/listWalkState"
+              },
+              "to": {
+                "$ref": "#/$defs/listWalkState"
+              }
+            }
+          }
+        }
+      }
+    },
+    "basePackage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "baseMode",
+            "coreNetwork",
+            "baseBlock",
+            "chainlockWitness",
+            "ancestryProof",
+            "smlEntries",
+            "cbTxRaw",
+            "cbTxInclusionProof",
+            "listRoot",
+            "nodeStateAtBase"
+          ],
+          "properties": {
+            "kind": {
+              "const": "rooted"
+            },
+            "baseMode": {
+              "enum": [
+                "FIRST_APPEARANCE",
+                "RANGE_LOCAL"
+              ]
+            },
+            "coreNetwork": {
+              "$ref": "#/$defs/coreNetworkName"
+            },
+            "baseBlock": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "height",
+                "blockHash"
+              ],
+              "properties": {
+                "height": {
+                  "$ref": "#/$defs/height"
+                },
+                "blockHash": {
+                  "$ref": "#/$defs/hex32"
+                }
+              }
+            },
+            "chainlockWitness": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "ancestryProof": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "smlEntries": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/hexBytes"
+              }
+            },
+            "cbTxRaw": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "cbTxInclusionProof": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "listRoot": {
+              "$ref": "#/$defs/hex32"
+            },
+            "nodeStateAtBase": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "isValid"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "present"
+                    },
+                    "isValid": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "absent"
+                    }
+                  }
+                }
+              ]
+            },
+            "firstAppearance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pHeight",
+                "proRegTxRaw",
+                "proRegTxInclusionProof",
+                "additionDiffRaw"
+              ],
+              "properties": {
+                "pHeight": {
+                  "$ref": "#/$defs/height"
+                },
+                "proRegTxRaw": {
+                  "$ref": "#/$defs/hexBytes"
+                },
+                "proRegTxInclusionProof": {
+                  "$ref": "#/$defs/hexBytes"
+                },
+                "additionDiffRaw": {
+                  "$ref": "#/$defs/hexBytes"
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "baseMode": {
+                    "const": "FIRST_APPEARANCE"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "firstAppearance"
+                ],
+                "properties": {
+                  "nodeStateAtBase": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "absent"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "baseMode": {
+                    "const": "RANGE_LOCAL"
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "firstAppearance"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "coreNetwork",
+            "baseBlock",
+            "chainlockWitness",
+            "ancestryProof",
+            "activationParams"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pre-dml"
+            },
+            "coreNetwork": {
+              "$ref": "#/$defs/coreNetworkName"
+            },
+            "baseBlock": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "height",
+                "blockHash"
+              ],
+              "properties": {
+                "height": {
+                  "$ref": "#/$defs/height"
+                },
+                "blockHash": {
+                  "$ref": "#/$defs/hex32"
+                }
+              }
+            },
+            "chainlockWitness": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "ancestryProof": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "activationParams": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "deploymentName",
+                "activationHeight"
+              ],
+              "properties": {
+                "deploymentName": {
+                  "const": "dip3"
+                },
+                "activationHeight": {
+                  "$ref": "#/$defs/height"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "decoderLineageEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fromHeight",
+        "decoderId",
+        "artifactDigest",
+        "artifactRef",
+        "platformProtocolVersion",
+        "runtime",
+        "environmentDigest",
+        "executionProfile",
+        "entryPoint",
+        "inputFormat"
+      ],
+      "properties": {
+        "fromHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "decoderId": {
+          "type": "string",
+          "pattern": "^decoder-sha256-[0-9a-f]{16}$"
+        },
+        "artifactDigest": {
+          "$ref": "#/$defs/hex32"
+        },
+        "artifactRef": {
+          "type": "string",
+          "pattern": "^cas:sha256:[0-9a-f]{64}$"
+        },
+        "platformProtocolVersion": {
+          "$ref": "#/$defs/index"
+        },
+        "runtime": {
+          "enum": [
+            "oci-image-v1"
+          ]
+        },
+        "environmentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "executionProfile": {
+          "enum": [
+            "tegara-decoder-v1"
+          ]
+        },
+        "entryPoint": {
+          "enum": [
+            "decode.mjs"
+          ]
+        },
+        "inputFormat": {
+          "enum": [
+            "raw-committed-tx-bytes"
+          ]
+        }
+      }
+    },
+    "componentClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "verifiersNotRun"
+      ],
+      "properties": {
+        "claim": {
+          "enum": [
+            "AUTHENTICATED",
+            "TRUSTED_SOURCE"
+          ]
+        },
+        "verifiersNotRun": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "claimProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "components",
+        "aggregate"
+      ],
+      "properties": {
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recognition",
+            "baseProof",
+            "coreContinuityFinality",
+            "platformCommits",
+            "decoderCoverage",
+            "l1Backing",
+            "receiptValidity",
+            "bookConformance",
+            "conservation",
+            "transitionHashing",
+            "identifierConversion",
+            "schedule"
+          ],
+          "properties": {
+            "recognition": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "baseProof": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "coreContinuityFinality": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "platformCommits": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "decoderCoverage": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "l1Backing": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "receiptValidity": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "bookConformance": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "conservation": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "transitionHashing": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "identifierConversion": {
+              "$ref": "#/$defs/componentClaim"
+            },
+            "schedule": {
+              "$ref": "#/$defs/componentClaim"
+            }
+          }
+        },
+        "aggregate": {
+          "enum": [
+            "proof-verified-except-schedule",
+            "trusted-source",
+            "partial-evidence"
+          ]
+        }
+      }
+    },
+    "scheduleResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "requiredOutputs"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pool-scheduled"
+            },
+            "requiredOutputs": {
+              "type": "array",
+              "minItems": 0,
+              "items": {
+                "$ref": "#/$defs/expectedOutput"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "not-pool"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unavailable"
+            }
+          }
+        }
+      ]
+    },
+    "listWalkRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "height",
+        "blockHash",
+        "protxDiffRaw",
+        "cbTxRaw",
+        "cbTxInclusionProof",
+        "listRoot",
+        "targetNodeEntry",
+        "targetNodeState"
+      ],
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/height"
+        },
+        "blockHash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "protxDiffRaw": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "cbTxRaw": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "cbTxInclusionProof": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "listRoot": {
+          "$ref": "#/$defs/hex32"
+        },
+        "targetNodeEntry": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/hexBytes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetNodeState": {
+          "$ref": "#/$defs/listWalkState"
+        }
+      }
+    },
+    "coreLedgerRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "height",
+        "blockHash",
+        "scheduleResult",
+        "coinbase"
+      ],
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/height"
+        },
+        "blockHash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "scheduleResult": {
+          "$ref": "#/$defs/scheduleResult"
+        },
+        "coinbase": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "txRaw",
+                "inclusionProof",
+                "outputs"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "available"
+                },
+                "txRaw": {
+                  "$ref": "#/$defs/hexBytes"
+                },
+                "inclusionProof": {
+                  "$ref": "#/$defs/hexBytes"
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/output"
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "unavailable"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "innerDecision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "innerIndex",
+            "position",
+            "economics"
+          ],
+          "properties": {
+            "kind": {
+              "const": "retained-position"
+            },
+            "innerIndex": {
+              "$ref": "#/$defs/index"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            },
+            "economics": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "seller",
+                "buyer",
+                "price"
+              ],
+              "properties": {
+                "seller": {
+                  "$ref": "#/$defs/base58Id"
+                },
+                "buyer": {
+                  "$ref": "#/$defs/base58Id"
+                },
+                "price": {
+                  "$ref": "#/$defs/decimalString"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "innerIndex"
+          ],
+          "properties": {
+            "kind": {
+              "const": "irrelevant-document"
+            },
+            "innerIndex": {
+              "$ref": "#/$defs/index"
+            }
+          }
+        }
+      ]
+    },
+    "txDisposition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "txIndex",
+            "committedHash",
+            "rawBytes",
+            "inclusionProof",
+            "innerCount",
+            "decisions"
+          ],
+          "properties": {
+            "kind": {
+              "const": "decoded-batch"
+            },
+            "txIndex": {
+              "$ref": "#/$defs/index"
+            },
+            "committedHash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "rawBytes": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "inclusionProof": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "innerCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "decisions": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/innerDecision"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "txIndex",
+            "committedHash",
+            "rawBytes",
+            "inclusionProof"
+          ],
+          "properties": {
+            "kind": {
+              "const": "non-document-tx"
+            },
+            "txIndex": {
+              "$ref": "#/$defs/index"
+            },
+            "committedHash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "rawBytes": {
+              "$ref": "#/$defs/hexBytes"
+            },
+            "inclusionProof": {
+              "$ref": "#/$defs/hexBytes"
+            }
+          }
+        }
+      ]
+    },
+    "platformLedgerRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "height",
+        "blockHash",
+        "headerRaw",
+        "coreChainLockedHeight",
+        "committedTxCount",
+        "decoderId",
+        "txs",
+        "commitSignatures",
+        "validatorSetBytes",
+        "validatorTransitionProof"
+      ],
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/height"
+        },
+        "blockHash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "headerRaw": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "coreChainLockedHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "committedTxCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "decoderId": {
+          "type": "string",
+          "pattern": "^decoder-sha256-[0-9a-f]{16}$"
+        },
+        "txs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/txDisposition"
+          }
+        },
+        "commitSignatures": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "validatorSetBytes": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "validatorTransitionProof": {
+          "$ref": "#/$defs/hexBytes"
+        }
+      }
+    },
+    "lowerBoundJustification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "contractCreationHeight"
+          ],
+          "properties": {
+            "kind": {
+              "const": "contract-genesis"
+            },
+            "contractCreationHeight": {
+              "$ref": "#/$defs/height"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stateProof"
+          ],
+          "properties": {
+            "kind": {
+              "const": "absence-proof"
+            },
+            "stateProof": {
+              "$ref": "#/$defs/hexBytes"
+            }
+          }
+        }
+      ]
+    },
+    "closingBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platformHeight",
+        "coreChainLockedHeight"
+      ],
+      "properties": {
+        "platformHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "coreChainLockedHeight": {
+          "$ref": "#/$defs/height"
+        }
+      }
+    },
+    "allocation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "ownerAtH",
+            "snapshotPosition",
+            "closingBlock"
+          ],
+          "properties": {
+            "kind": {
+              "const": "resolved"
+            },
+            "ownerAtH": {
+              "$ref": "#/$defs/base58Id"
+            },
+            "snapshotPosition": {
+              "$ref": "#/$defs/position"
+            },
+            "closingBlock": {
+              "$ref": "#/$defs/closingBlock"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unclosed"
+            }
+          }
+        }
+      ]
+    },
+    "recognitionOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "bindingRef"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "RECOGNIZED",
+            "UNRECOGNIZED",
+            "DEFERRED"
+          ]
+        },
+        "bindingRef": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/index"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "exclusionReason": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "terminal"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pre-appearance"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "suspension"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "none"
+            }
+          }
+        }
+      ]
+    },
+    "anomaly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "evidenceRefs"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "SCHEDULE_LIST_DISAGREEMENT",
+            "COINBASE_MISMATCH"
+          ]
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "entitlement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "classification",
+            "exclusionReason",
+            "eligibility",
+            "scheduleSource",
+            "coinbaseEvidence",
+            "anomalies"
+          ],
+          "properties": {
+            "kind": {
+              "const": "classified"
+            },
+            "classification": {
+              "enum": [
+                "OWED",
+                "NOT_PAYEE",
+                "EXCLUDED",
+                "ANOMALY"
+              ]
+            },
+            "exclusionReason": {
+              "$ref": "#/$defs/exclusionReason"
+            },
+            "eligibility": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "listHeight",
+                "listRoot"
+              ],
+              "properties": {
+                "state": {
+                  "$ref": "#/$defs/eligibilityState"
+                },
+                "listHeight": {
+                  "$ref": "#/$defs/height"
+                },
+                "listRoot": {
+                  "$ref": "#/$defs/hex32"
+                }
+              }
+            },
+            "scheduleSource": {
+              "const": "trusted-core-node:masternode-payments"
+            },
+            "coinbaseEvidence": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "requiredOutputs",
+                "matchedOutputs",
+                "unexplainedOutputs"
+              ],
+              "properties": {
+                "requiredOutputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/expectedOutput"
+                  }
+                },
+                "matchedOutputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/output"
+                  }
+                },
+                "unexplainedOutputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/output"
+                  }
+                }
+              }
+            },
+            "anomalies": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anomaly"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unfinalized"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "missingInputs"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unknown"
+            },
+            "missingInputs": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "enum": [
+                  "schedule",
+                  "coinbase",
+                  "eligibility-base"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "conservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "grossDuffs",
+            "nonSlotComponents",
+            "slotAllocationBaseDuffs"
+          ],
+          "properties": {
+            "kind": {
+              "const": "calculated"
+            },
+            "grossDuffs": {
+              "$ref": "#/$defs/decimalString"
+            },
+            "nonSlotComponents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "duffs"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duffs": {
+                    "$ref": "#/$defs/decimalString"
+                  }
+                }
+              },
+              "maxItems": 0
+            },
+            "slotAllocationBaseDuffs": {
+              "$ref": "#/$defs/decimalString"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unavailable"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "not-applicable"
+            }
+          }
+        }
+      ]
+    },
+    "slotRewardRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slotIndex",
+        "allocation",
+        "share",
+        "allocatedDuffs"
+      ],
+      "properties": {
+        "slotIndex": {
+          "$ref": "#/$defs/retailSlot"
+        },
+        "allocation": {
+          "$ref": "#/$defs/allocation"
+        },
+        "share": {
+          "$ref": "#/$defs/share"
+        },
+        "allocatedDuffs": {
+          "$ref": "#/$defs/decimalString"
+        }
+      }
+    },
+    "slotFanout": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "records"
+          ],
+          "properties": {
+            "kind": {
+              "const": "slots"
+            },
+            "records": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/slotRewardRecord"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "none"
+            },
+            "reason": {
+              "enum": [
+                "UNRECOGNIZED",
+                "DEFERRED",
+                "UNFINALIZED",
+                "UNKNOWN",
+                "NOT_PAYEE",
+                "EXCLUDED",
+                "ANOMALY"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "heightRewardRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rewardCoreHeight",
+        "rewardCoreBlockHash",
+        "recognition",
+        "entitlement",
+        "conservation",
+        "slotFanout"
+      ],
+      "properties": {
+        "rewardCoreHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "rewardCoreBlockHash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "entitlement": {
+          "$ref": "#/$defs/entitlement"
+        },
+        "conservation": {
+          "$ref": "#/$defs/conservation"
+        },
+        "slotFanout": {
+          "$ref": "#/$defs/slotFanout"
+        },
+        "recognition": {
+          "$ref": "#/$defs/recognitionOutcome"
+        }
+      }
+    },
+    "slotEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slotIndex",
+        "docId",
+        "ownershipChain"
+      ],
+      "properties": {
+        "slotIndex": {
+          "$ref": "#/$defs/retailSlot"
+        },
+        "docId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/base58Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownershipChain": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ownershipChange"
+          }
+        }
+      }
+    },
+    "l1SlotIndex": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "retailSlot": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 511
+    },
+    "expectedOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "script",
+        "amountDuffs"
+      ],
+      "properties": {
+        "script": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "amountDuffs": {
+          "$ref": "#/$defs/decimalString"
+        }
+      }
+    },
+    "hex64": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "ed25519Pub": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeVersion",
+    "proofCodecProfile",
+    "verifierBundleDigest",
+    "network",
+    "contractId",
+    "poolProTxHash",
+    "poolId",
+    "poolL1SlotIndex",
+    "checkpointAuthority",
+    "checkpoints",
+    "adoptedEpochPins",
+    "basePackage",
+    "lifecycle",
+    "decoderLineage",
+    "claimProfile",
+    "validatedChainLock",
+    "coreHeaderChain",
+    "platformTrustRoot",
+    "coreAuditRange",
+    "platformAuditRange",
+    "coverage",
+    "slots",
+    "rewards"
+  ],
+  "properties": {
+    "envelopeVersion": {
+      "const": "1"
+    },
+    "proofCodecProfile": {
+      "enum": [
+        "tegara-proof-codecs-v1"
+      ]
+    },
+    "verifierBundleDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "network": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "coreNetwork",
+            "platformChainId",
+            "coreGenesisBlockHash",
+            "coreDevnetGenesisBlockHash"
+          ],
+          "properties": {
+            "coreNetwork": {
+              "const": "devnet"
+            },
+            "platformChainId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "coreGenesisBlockHash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "coreDevnetGenesisBlockHash": {
+              "$ref": "#/$defs/hex32"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "coreNetwork",
+            "platformChainId",
+            "coreGenesisBlockHash"
+          ],
+          "properties": {
+            "coreNetwork": {
+              "enum": [
+                "mainnet",
+                "testnet",
+                "regtest"
+              ]
+            },
+            "platformChainId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "coreGenesisBlockHash": {
+              "$ref": "#/$defs/hex32"
+            }
+          }
+        }
+      ]
+    },
+    "contractId": {
+      "$ref": "#/$defs/base58Id"
+    },
+    "poolProTxHash": {
+      "$ref": "#/$defs/hex32"
+    },
+    "checkpoints": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/checkpoint"
+      }
+    },
+    "basePackage": {
+      "$ref": "#/$defs/basePackage"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle"
+    },
+    "decoderLineage": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/decoderLineageEntry"
+      }
+    },
+    "claimProfile": {
+      "$ref": "#/$defs/claimProfile"
+    },
+    "validatedChainLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "height",
+        "blockHash",
+        "quorumPublicKeyMaterial",
+        "quorumDerivation"
+      ],
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/height"
+        },
+        "blockHash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "quorumPublicKeyMaterial": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "quorumDerivation": {
+          "$ref": "#/$defs/hexBytes"
+        }
+      }
+    },
+    "coreHeaderChain": {
+      "$ref": "#/$defs/hexBytes"
+    },
+    "platformTrustRoot": {
+      "$ref": "#/$defs/hexBytes"
+    },
+    "coreAuditRange": {
+      "$ref": "#/$defs/inclusiveRange"
+    },
+    "platformAuditRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fromHeight",
+        "toHeight",
+        "lowerBoundJustification"
+      ],
+      "properties": {
+        "fromHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "toHeight": {
+          "$ref": "#/$defs/height"
+        },
+        "lowerBoundJustification": {
+          "$ref": "#/$defs/lowerBoundJustification"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "listWalk",
+        "coreLedger",
+        "coreEndpointChainlockWitness",
+        "platformLedger"
+      ],
+      "properties": {
+        "listWalk": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/listWalkRow"
+          }
+        },
+        "coreLedger": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/coreLedgerRow"
+          }
+        },
+        "coreEndpointChainlockWitness": {
+          "$ref": "#/$defs/hexBytes"
+        },
+        "platformLedger": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/platformLedgerRow"
+          }
+        }
+      }
+    },
+    "slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/slotEntry"
+      }
+    },
+    "rewards": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/heightRewardRecord"
+      }
+    },
+    "checkpointAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publicKey"
+      ],
+      "properties": {
+        "publicKey": {
+          "$ref": "#/$defs/ed25519Pub"
+        }
+      }
+    },
+    "adoptedEpochPins": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "epochId",
+          "checkpointId"
+        ],
+        "properties": {
+          "epochId": {
+            "$ref": "#/$defs/index"
+          },
+          "checkpointId": {
+            "$ref": "#/$defs/hex32"
+          }
+        }
+      }
+    },
+    "poolId": {
+      "$ref": "#/$defs/base58Id"
+    },
+    "poolL1SlotIndex": {
+      "$ref": "#/$defs/l1SlotIndex"
+    }
+  }
+}
