@@ -440,7 +440,15 @@ ok("...and its digest differs from the other evidence set",
     const outputs = diff.cbTx.vout.map((o) => ({
       script: o.script, amountDuffs: o.valueDuffs, outputIndex: o.index,
     }));
+    // THE AUDITED NODE IS ONE OF THE REAL ENTRIES (round 9, MAJOR, a soundness-review finding). This fixture used to
+    // state `targetNodeEntry: null` and `targetNodeState: "ABSENT"` with no poolProTxHash at all,
+    // which is exactly the unbound shape the finding describes: it proved the list root and never
+    // asked what that list said about the member being audited. It now audits a node the capture's
+    // list actually contains, and the row's two target fields must be what the authenticated list
+    // says they are.
+    const target = diff.mnList[2];
     const env = {
+      poolProTxHash: target.proRegTxHash,
       // the capture is a diff from block 1, whose list is empty, so the base seeds as empty
       basePackage: { kind: "pre-dml", baseBlock: { height: height - 1, blockHash: diff.baseBlockHash } },
       coreHeaderChain: cap.blockHeaderRaw,
@@ -454,7 +462,8 @@ ok("...and its digest differs from the other evidence set",
           cbTxRaw: diff.cbTx.raw,
           cbTxInclusionProof: "00",
           listRoot: computeListRoot(diff.mnList),
-          targetNodeEntry: null, targetNodeState: "ABSENT",
+          targetNodeEntry: target.raw.toString("hex"),
+          targetNodeState: target.isValid ? "PRESENT_VALID" : "PRESENT_INVALID",
         }],
         coreLedger: [{
           height, blockHash: diff.blockHash,
@@ -526,6 +535,47 @@ ok("...and its digest differs from the other evidence set",
       ok("and the refusal is the MEMBERSHIP test, not the root comparison",
          /not among the transactions its own\s+proof establishes/.test(r4.reason || ""));
     }
+
+    // ---- THE AUDITED NODE IS DERIVED, NOT BELIEVED (round 9, MAJOR, a soundness-review finding) ----
+    // Every case here authenticates the SAME list root as the positive above. Only the two fields
+    // describing the audited member at that height differ, which is the finding's exact shape: no
+    // malformed wire encoding is needed, and before the fold each of these passed while the
+    // verifier reported that every list root matched its coinbase commitment.
+    const targetCase = (label, mutate, re) => {
+      const e = JSON.parse(JSON.stringify(env));
+      mutate(e);
+      const rr = verifyCoreWalk(e, { protocolVersion: cap.protocolVersionOffered });
+      ok(`${label}: refused rather than walked to the blocked result`,
+         rr.ran === true && typeof rr.reason === "string");
+      ok(`${label}: and the refusal names the rule`, re.test(rr.reason || ""));
+      ok(`${label}: and the derivation is NOT recorded as passed`,
+         !(rr.checks && rr.checks.targetStateDerived &&
+           rr.checks.targetStateDerived.passed === true));
+    };
+
+    // the finding's own trigger: a member the authenticated list holds, described as absent
+    targetCase("a present node described as ABSENT is refused",
+               (e) => {
+                 e.coverage.listWalk[0].targetNodeState = "ABSENT";
+                 e.coverage.listWalk[0].targetNodeEntry = null;
+               },
+               /authenticated list makes it PRESENT_VALID/);
+    // the inverse relabelling the finding names, valid described as invalid
+    targetCase("a valid node described as PRESENT_INVALID is refused",
+               (e) => { e.coverage.listWalk[0].targetNodeState = "PRESENT_INVALID"; },
+               /authenticated list makes it PRESENT_VALID/);
+    // the state can agree while the BYTES describe a different node, which is the same defect one
+    // field over, so the entry is compared too
+    targetCase("the right state carrying ANOTHER node's entry bytes is refused",
+               (e) => { e.coverage.listWalk[0].targetNodeEntry = diff.mnList[0].raw.toString("hex"); },
+               /targetNodeEntry is not the audited node's entry/);
+    targetCase("a null entry under a PRESENT state is refused",
+               (e) => { e.coverage.listWalk[0].targetNodeEntry = null; },
+               /targetNodeEntry is not the audited node's entry/);
+    // and a pool the list does not hold must be ABSENT, so claiming presence is refused
+    targetCase("an unlisted pool described as present is refused",
+               (e) => { e.poolProTxHash = "ab".repeat(32); },
+               /authenticated list makes it ABSENT/);
 
     // ---- THE CONTINUITY PAIR (round 7 MAJOR + round 8 a soundness-review finding) ----
     // Every case below reported diffChainContinuity as PASSED before this fold, with `proved`
@@ -638,6 +688,11 @@ ok("...and its digest differs from the other evidence set",
     script: o.script, amountDuffs: o.valueDuffs, outputIndex: o.index,
   }));
   const env = {
+    // AUDIT THE ENTRY THAT CAME FROM THE BASE, not from the delta (round 9, a soundness-review finding). The row's
+    // target fields must be derived from the list AFTER the delta is applied, and `first` is only
+    // in that list because the base package was seeded and read. Auditing it therefore ties the
+    // target derivation to the same base-seeding this section exists to prove.
+    poolProTxHash: first.proRegTxHash,
     // the moved entry is retained at the base, exactly as a rooted base package retains it
     basePackage: {
       kind: "rooted", baseBlock: { height: height - 1, blockHash: delta.baseBlockHash },
@@ -652,7 +707,8 @@ ok("...and its digest differs from the other evidence set",
         height, blockHash: delta.blockHash, protxDiffRaw: deltaRaw.toString("hex"),
         cbTxRaw: delta.cbTx.raw, cbTxInclusionProof: "00",
         listRoot: payload.merkleRootMNList,
-        targetNodeEntry: null, targetNodeState: "ABSENT",
+        targetNodeEntry: first.raw.toString("hex"),
+        targetNodeState: first.isValid ? "PRESENT_VALID" : "PRESENT_INVALID",
       }],
       coreLedger: [{
         height, blockHash: delta.blockHash,
@@ -913,7 +969,11 @@ ok("...and its digest differs from the other evidence set",
   const outputs = d.cbTx.vout.map((o) => ({
     script: o.script, amountDuffs: o.valueDuffs, outputIndex: o.index,
   }));
+  // the audited node is one the capture's list really holds, so the row's target fields are
+  // derived from the authenticated list rather than asserted (round 9, a soundness-review finding)
+  const envTarget = d.mnList[0];
   const envWith = (payloadHex) => ({
+    poolProTxHash: envTarget.proRegTxHash,
     basePackage: { kind: "pre-dml", baseBlock: { height: pl.height - 1, blockHash: d.baseBlockHash } },
     coreHeaderChain: cap.blockHeaderRaw,
     lifecycle: { observedThroughHeight: pl.height },
@@ -923,7 +983,9 @@ ok("...and its digest differs from the other evidence set",
       listWalk: [{
         height: pl.height, blockHash: d.blockHash, protxDiffRaw: payloadHex,
         cbTxRaw: d.cbTx.raw, cbTxInclusionProof: "00",
-        listRoot: computeListRoot(d.mnList), targetNodeEntry: null, targetNodeState: "ABSENT",
+        listRoot: computeListRoot(d.mnList),
+        targetNodeEntry: envTarget.raw.toString("hex"),
+        targetNodeState: envTarget.isValid ? "PRESENT_VALID" : "PRESENT_INVALID",
       }],
       coreLedger: [{
         height: pl.height, blockHash: d.blockHash,
