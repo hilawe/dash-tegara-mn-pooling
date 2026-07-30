@@ -260,6 +260,108 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
   })());
   ok("the real tree still extracts its single transaction",
      extractMerkleMatches(diff.cbTxMerkleTree).matched.length === 1);
+
+  // (3) THE TWO REFUSALS NO INPUT HAD EVER REACHED (round 7, MINOR, closed 2026-07-30). Both
+  // checks were present and neither was guarded: the real tree holds ONE transaction, so it
+  // extracts a single match and never descends to an internal node, and the oversized-count
+  // cases above stop at the count bound. Removing either check therefore left the whole suite
+  // green. These drive the function DIRECTLY with the smallest tree that reaches each branch,
+  // which is why they work where the round-7 attempt through a spliced envelope did not.
+  //
+  // The identical-branch case needs two transactions, so the tree is one level deep and the
+  // root is an internal node with both children present. Bits are read least-significant-first
+  // within each byte, so 0x07 is [1,1,1]: the root is a parent of a match, then each leaf is
+  // taken from the hash array. Giving both leaves the SAME hash is the condition Dash refuses,
+  // because two distinct transactions cannot share a txid, and a tree that repeats a branch can
+  // otherwise be used to claim a root for transactions that are not there.
+  const H = (b) => b.repeat(32);
+  throws("a tree whose two branches are identical is refused",
+    () => extractMerkleMatches({ nTransactions: 2, hashes: [H("aa"), H("aa")], bits: "07" }),
+    /repeats a branch/);
+  // the control that makes the case above meaningful: the SAME shape with distinct leaves is
+  // accepted, so the refusal is about the repetition and not about two-transaction trees
+  ok("the same two-leaf shape with distinct branches is accepted", (() => {
+    const r = extractMerkleMatches({ nTransactions: 2, hashes: [H("aa"), H("bb")], bits: "07" });
+    return r.matched.length === 2 && typeof r.merkleRoot === "string";
+  })());
+
+  // a tree covering no transactions has no root to extract; without this the width arithmetic
+  // below it runs on an empty tree
+  throws("a tree covering zero transactions is refused",
+    () => extractMerkleMatches({ nTransactions: 0, hashes: [], bits: "00" }),
+    /covers no transactions/);
+}
+
+// ---------------------------------------------------------------------------
+// THE MISSING-DELETE REFUSAL, driven directly (round 7, MINOR, closed 2026-07-30).
+//
+// The suite's delta case was labelled as exercising a deletion of a missing entry, but the
+// spliced payload it used inherited the capture's EMPTY deletedMNs, so the loop that raises this
+// error never ran and the case failed later on a root mismatch instead. Removing the check left
+// it green. applyDiffToList is exported and pure, so the honest way to guard the branch is to
+// hand it a diff that actually deletes something absent.
+//
+// It matters because the deletion set is how a diff shrinks the list. A diff that deletes an
+// entry the previous height does not hold is describing a different chain of lists than the one
+// being walked, and silently ignoring it would let the recomputed root be taken over a list the
+// evidence never supports.
+// ---------------------------------------------------------------------------
+{
+  const { applyDiffToList } = require("./mnListDiffCodec.cjs");
+  const entry = (h) => ({ proRegTxHash: h });
+  const A = "11".repeat(32), B = "22".repeat(32);
+
+  throws("deleting an entry the previous list does not hold is refused",
+    () => applyDiffToList([entry(A)], { mnList: [], deletedMNs: [B] }),
+    /deletes 2{64}, which the list at the previous height does not hold/);
+  throws("deleting from an EMPTY previous list is refused",
+    () => applyDiffToList([], { mnList: [], deletedMNs: [A] }),
+    /does not hold/);
+  // the control: deleting an entry that IS present works, so the rule refuses only the absent one
+  ok("deleting an entry the list holds removes it",
+     applyDiffToList([entry(A), entry(B)], { mnList: [], deletedMNs: [A] })
+       .map((e) => e.proRegTxHash).join() === B);
+  // and the delete is applied BEFORE the additions, so a diff may delete an entry and re-add it
+  ok("a delete followed by a re-add in the same diff yields the added entry",
+     applyDiffToList([entry(A)], { mnList: [entry(A)], deletedMNs: [A] })
+       .map((e) => e.proRegTxHash).join() === A);
+}
+
+// ---------------------------------------------------------------------------
+// TWO DECODER REFUSALS THAT EXISTED WITHOUT A FIXTURE (round 8, finding 4, closed 2026-07-30).
+// Both were implemented and neither was driven: the supported-range and short-read branches had
+// focused cases, these two did not, and the positive exact-consumption assertion does not guard
+// the trailing-byte refusal because a valid capture leaves nothing over either way. Removing
+// either check left the suite green.
+// ---------------------------------------------------------------------------
+{
+  const { parseStandaloneEntry } = require("./mnListDiffCodec.cjs");
+  const pv = fx.protocolVersionOffered;
+
+  // The extended address entry form. No capture exercises it, so the decoder declines by name
+  // rather than inventing a layout, and that decision is the thing worth guarding: a parser that
+  // quietly guessed the ExtNetInfo layout would produce entries nothing validates.
+  const extEntry = Buffer.concat([Buffer.from("0300", "hex"), Buffer.alloc(64)]);
+  throws("an entry declaring the extended address form is refused by name",
+    () => parseStandaloneEntry(extEntry, { protocolVersion: pv }),
+    /extended address form/);
+  // the control: the same shape at a version the decoder DOES handle gets past the version gate,
+  // so the refusal is about the form and not about short synthetic entries
+  ok("a non-ExtAddr entry version gets past the version gate", (() => {
+    try {
+      parseStandaloneEntry(Buffer.concat([Buffer.from("0200", "hex"), Buffer.alloc(64)]),
+                           { protocolVersion: pv });
+      return true;
+    } catch (e) { return !/extended address form/.test(e.message); }
+  })());
+
+  // Trailing bytes. A parser that stops early and reports success lets a caller believe it
+  // verified a section nobody read, so the whole payload must be consumed.
+  throws("a valid payload followed by one extra byte is refused",
+    () => parseMnListDiff(Buffer.concat([raw, Buffer.from([0])]), { protocolVersion: pv }),
+    /bytes remain after the frame/);
+  ok("the untouched payload still consumes exactly",
+     parseMnListDiff(raw, { protocolVersion: pv }).bytesRemaining === 0);
 }
 
 console.log(`mnListDiffCodecTest: ${pass} passed, ${fail} failed`);
