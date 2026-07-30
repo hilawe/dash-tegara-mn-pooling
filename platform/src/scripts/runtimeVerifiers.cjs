@@ -72,6 +72,15 @@ function hexBuf(h, what = "a hex field") {
   return Buffer.from(h, "hex");
 }
 
+// The transaction-domain constants the height-one parser enforces, each read from merged source
+// rather than inferred [8c9f166a3:src/consensus/amount.h:15,26, src/consensus/consensus.h:22,
+// src/primitives/transaction.h:217 and the type enum at :26,31].
+const MAX_MONEY = 21000000n * 100000000n;
+const MAX_TX_EXTRA_PAYLOAD = 10000;
+const SPECIAL_TX_VERSION = 3;
+const TRANSACTION_NORMAL = 0;
+const TRANSACTION_COINBASE = 5;
+
 const V2_LABEL = Buffer.from("tegara-fixedslot-checkpoint-v2", "utf8");
 const IDENTITY_LABEL = Buffer.from("TegaraCoreChainIdentity/v1", "utf8");
 const CORE_NETWORK_CODE = { mainnet: 0, testnet: 1, devnet: 2, regtest: 3 };
@@ -220,7 +229,16 @@ function readGenesisCoinbase(block) {
       return { error: `count is ${txCount}; a genesis block carries exactly one transaction` };
     }
     const txStart = r.off;
-    r.read(4, "transaction version and type");
+    // VERSION AND TYPE ARE TWO FIELDS, AND THE TYPE SELECTS THE LAYOUT (round 9, MUST-FIX,
+    // a soundness-review finding). This read four bytes and discarded both values, then required the parse to end
+    // after locktime. Dash's deserializer splits the same 32 bits into nVersion and nType and
+    // reads a vExtraPayload AFTER locktime whenever the version is at least SPECIAL_VERSION and
+    // the type is not TRANSACTION_NORMAL [8c9f166a3:src/primitives/transaction.h:326-330,215-217,
+    // and the type enum at :26]. A transaction declaring version 3 with a nonzero type, whose
+    // bytes simply stopped at locktime, was therefore ACCEPTED here as fully consumed while
+    // Dash's reader would still be looking for the payload and hit a short read.
+    const txVersion = r.u16("transaction version");
+    const txType = r.u16("transaction type");
     const vinCount = r.varint("tx input count");
     if (vinCount !== 1) return { error: "input count is not 1" };
     // THE INPUT MUST BE A COINBASE INPUT (round 6, MUST-FIX). This advanced past the prevout
@@ -234,11 +252,52 @@ function readGenesisCoinbase(block) {
     const scriptSig = r.read(r.varint("scriptSig length"), "scriptSig");
     r.read(4, "sequence");
     const voutCount = r.varint("tx output count");
+    // CONTEXT-FREE TRANSACTION VALIDITY (round 9, MUST-FIX, a soundness-review finding). The outputs were walked for
+    // their bytes and nothing else, so a coinbase declaring ZERO outputs parsed cleanly and the
+    // duty could complete over a transaction Dash refuses outright. Every rule below is Dash's,
+    // taken from the function it applies to every transaction in a block
+    // [8c9f166a3:src/consensus/tx_check.cpp, called at src/validation.cpp:3857]. No rule is added
+    // that Dash does not have, because a rule Dash lacks produces a false REJECTION of a valid
+    // block, which is the defect shape of round 9 finding 6.
+    //
+    // `allowEmptyTxOut` is true only for quorum-commitment and MNHF-signal transactions
+    // [tx_check.cpp:14-24], and a devnet genesis coinbase is neither
+    // [8c9f166a3:src/chainparams.cpp:43-64 builds it with nVersion 1 and the default normal type],
+    // so the nonempty rule applies to it.
+    if (voutCount === 0) {
+      return { error: "declares no outputs, which Dash refuses for an ordinary transaction" };
+    }
+    let valueOut = 0n;
     for (let i = 0; i < voutCount; i++) {
-      r.read(8, `output ${i} value`);
+      // values are signed 64-bit on the wire; negative and above-cap are both refused, and the
+      // RUNNING TOTAL is range-checked after each addition, exactly as Dash does
+      const value = r.read(8, `output ${i} value`).readBigInt64LE(0);
+      if (value < 0n) return { error: `output ${i} carries a negative value` };
+      if (value > MAX_MONEY) return { error: `output ${i} exceeds the maximum money value` };
+      valueOut += value;
+      if (valueOut < 0n || valueOut > MAX_MONEY) {
+        return { error: "the outputs sum above the maximum money value" };
+      }
       r.read(r.varint(`output ${i} script length`), `output ${i} script`);
     }
     r.read(4, "locktime");
+    // the extra payload, present only for the special-transaction layout described above
+    if (txVersion >= SPECIAL_TX_VERSION && txType !== TRANSACTION_NORMAL) {
+      const payloadLength = r.varint("vExtraPayload length");
+      if (payloadLength > MAX_TX_EXTRA_PAYLOAD) {
+        return { error: `carries a ${payloadLength}-byte extra payload, above the ` +
+                        `${MAX_TX_EXTRA_PAYLOAD}-byte maximum` };
+      }
+      r.read(payloadLength, "vExtraPayload");
+    }
+    // THE COINBASE SCRIPT LENGTH BOUND [8c9f166a3:src/consensus/tx_check.cpp:61-68]. minCbSize is
+    // 2 for an ordinary coinbase and 1 only when the type is TRANSACTION_COINBASE, which a devnet
+    // genesis coinbase is not.
+    const minCbSize = txType === TRANSACTION_COINBASE ? 1 : 2;
+    if (scriptSig.length < minCbSize || scriptSig.length > 100) {
+      return { error: `carries a ${scriptSig.length}-byte coinbase script, outside Dash's ` +
+                      `[${minCbSize}, 100] range` };
+    }
     // THE BLOCK MUST END HERE (round 6, MUST-FIX). The parse stopped after the first transaction
     // without requiring the buffer to be consumed, so a valid one-transaction block followed by
     // trailing bytes was accepted. A genesis block is exactly one transaction and nothing else.
@@ -249,10 +308,21 @@ function readGenesisCoinbase(block) {
 
     // scriptSig: the BIP34 height push, then the name push. Dash emits `CScript() << 1`, which
     // is OP_1 (0x51); a one-byte push of 0x01 is accepted as the equivalent encoding.
+    // THE BIP34 PREFIX IS COMPARED AS BYTES, NOT AS A SCRIPT NUMBER (round 9, MUST-FIX, a soundness-review finding).
+    // This used to accept a two-byte push of 0x01 alongside OP_1, and the comment called it "the
+    // equivalent encoding". It is equivalent as a SCRIPT NUMBER and not as BYTES, and Dash
+    // compares bytes: it builds `CScript expect = CScript() << nHeight` and requires the coinbase
+    // scriptSig to begin with exactly those bytes [8c9f166a3:src/validation.cpp:4003-4008]. For
+    // height 1 that is the single byte OP_1, because CScript's integer operator emits OP_1 through
+    // OP_16 for small values. The two-byte form decodes to the same number and does not match the
+    // prefix, so Dash refuses a block this parser accepted.
+    //
+    // The comparison is reached at height one on devnet: it runs when BIP34 is active and DIP0003
+    // is not, and devnet sets BIP34Height 1 against DIP0003Height 2
+    // [8c9f166a3:src/chainparams.cpp], so height 1 is exactly the window where it applies.
     let sp = 0;
     if (scriptSig[sp] === 0x51) sp += 1;
-    else if (scriptSig[sp] === 0x01 && scriptSig[sp + 1] === 0x01) sp += 2;
-    else return { error: "scriptSig does not begin with the BIP34 height-one push" };
+    else return { error: "scriptSig does not begin with the BIP34 height-one push OP_1" };
     const pushOp = scriptSig[sp];
     if (pushOp === undefined || pushOp === 0 || pushOp > 0x4b) {
       return { error: "scriptSig carries no direct devnet-name push after the height" };
