@@ -633,9 +633,13 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
     }
 
     let previousBlockHash = baseBlock.blockHash;
+    // the audited node's identity, required because every row states what this list says about it
+    const poolProTxHash = assertHex32(env.poolProTxHash, "poolProTxHash");
+
     let rootsChecked = 0;
     let coinbasesAuthenticated = 0;
     let outputsChecked = 0;
+    let targetsDerived = 0;
 
     for (const row of walk) {
       const where = `list-walk row at height ${row.height}`;
@@ -718,6 +722,41 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
       }
       rootsChecked++;
 
+      // ---- THE AUDITED MEMBER, DERIVED FROM THE LIST JUST AUTHENTICATED (round 9, MAJOR, a soundness-review finding)
+      // Everything above proves the WHOLE list: the delta applies, the recomputed root matches the
+      // commitment inside a coinbase that is itself proven into its block. And then the two fields
+      // that describe THIS pool at this height were simply believed. The loop never read
+      // `poolProTxHash`, `targetNodeEntry` or `targetNodeState`, so a record could authenticate a
+      // list containing the audited node as valid while stating on the same row that it was absent,
+      // and every check in this verifier still passed. The executable specification cannot close
+      // this either: it checks only that entry nullness agrees with the asserted state and then
+      // reconstructs the lifecycle FROM those assertions, so both layers were reading the record's
+      // own claims rather than the list.
+      //
+      // That is the whole point of rebuilding the list. Authenticating a root and not asking what
+      // it says about the member being audited leaves the eligibility, the entitlement and the
+      // reward classification resting on an assertion, and the round-9 review is right that it
+      // becomes a real claim path the moment the outstanding duties land.
+      //
+      // Both directions are refused, and the ENTRY BYTES are compared as well as the state, since
+      // a state that matches while the bytes describe a different node would be the same defect
+      // one field over.
+      const targetEntry = listState.find((e) => e.proRegTxHash === poolProTxHash);
+      const derivedState = targetEntry
+        ? (targetEntry.isValid ? "PRESENT_VALID" : "PRESENT_INVALID")
+        : "ABSENT";
+      if (row.targetNodeState !== derivedState) {
+        return BAD(`${where}: the row states the audited node is ${row.targetNodeState}, but the ` +
+                   `authenticated list makes it ${derivedState}`);
+      }
+      const derivedEntry = targetEntry ? targetEntry.raw.toString("hex") : null;
+      const assertedEntry = row.targetNodeEntry === undefined ? null : row.targetNodeEntry;
+      if (assertedEntry !== derivedEntry) {
+        return BAD(`${where}: the row's targetNodeEntry is not the audited node's entry in the ` +
+                   "authenticated list");
+      }
+      targetsDerived++;
+
       // check 6 and 7 where the Core ledger covers the same height
       const ledgerRow = ledgerByHeight.get(row.height);
       if (ledgerRow) {
@@ -753,6 +792,9 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
     note("listRootPerHeight", true,
        `${rootsChecked} root(s) recomputed over the RESULTING list after applying each delta, ` +
        `each matching the coinbase commitment; the list ends with ${listState.length} entry(ies)`);
+    note("targetStateDerived", true,
+       `${targetsDerived} row(s) had the audited node's state and entry bytes DERIVED from the ` +
+       "authenticated list rather than read from the row's own assertion");
     note("coinbaseOutputsDerived", true, `${outputsChecked} coinbase output array(s) derived from txRaw`);
     note("oneChainTwoLedgers", true, "shared heights agree on block hash and coinbase bytes");
     note("coinbaseAuthenticated", true,
@@ -764,7 +806,9 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
       `row's height confirmed by its authenticated coinbase, every coinbase is proven into its ` +
       `block by the retained header's merkle root ` +
       `(${coinbasesAuthenticated}), and every recomputed list root matches the commitment that ` +
-      `authenticated coinbase carries (${rootsChecked}); ${outputsChecked} coinbase output ` +
+      `authenticated coinbase carries (${rootsChecked}); the audited node's state and entry bytes ` +
+      `are DERIVED from that authenticated list on every row (${targetsDerived}) rather than ` +
+      `taken from the row's assertion; ${outputsChecked} coinbase output ` +
       "array(s) derived from txRaw";
     // The endpoint ChainLock check is the outstanding duty. It is NOT counted as done.
     return {
