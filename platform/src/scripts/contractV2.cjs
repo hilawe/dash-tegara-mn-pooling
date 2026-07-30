@@ -32,7 +32,7 @@ const { loadEnv, saveEnv } = require("./envStore.cjs");
   // v2 = v1 with two rewardAccrual changes; everything else byte-identical, so the two
   // versions stay comparable and the diff IS the design change:
   //   1. the [poolId, funderId, epochHeight] index is UNIQUE (Platform refuses duplicates),
-  //   2. shareBps is recorded IN the accrual. This is a SECURITY REQUIREMENT, not an
+  //   2. shareBps is recorded IN the accrual. This is a SOUNDNESS REQUIREMENT, not an
   //      enhancement (review finding F7, 2026-07-11): shares deleted in a membership
   //      churn leave no tombstone, so without the bps in the accrual a churned epoch's
   //      split is unverifiable from the ledger and a skewed allocation passes a sum check.

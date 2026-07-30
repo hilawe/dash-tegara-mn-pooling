@@ -11,9 +11,10 @@
     "build": "tsc",
     "pretest": "tsc",
     "contract:print": "node --loader ts-node/esm src/scripts/printContract.ts",
-    "test": "node src/scripts/envStoreTest.cjs && node src/scripts/envStoreCrashTest.cjs && node src/scripts/compoundJournalTest.cjs && node src/scripts/formationCoreTest.cjs && node src/scripts/delegateTallyTest.cjs && node src/scripts/castVerifyTest.cjs && node src/scripts/railStateTest.cjs && node src/scripts/matchJournalTest.cjs && node src/scripts/formationCrashTest.cjs && node src/scripts/contractV9Test.cjs && node src/scripts/contractV10Test.cjs && node src/scripts/fixedSlotCheckpointTest.cjs && node src/scripts/settlementResolverTest.cjs && node src/scripts/settlementMarkerVerifyTest.cjs"
+    "test": "node src/scripts/envStoreTest.cjs && node src/scripts/envStoreCrashTest.cjs && node src/scripts/compoundJournalTest.cjs && node src/scripts/formationCoreTest.cjs && node src/scripts/delegateTallyTest.cjs && node src/scripts/castVerifyTest.cjs && node src/scripts/railStateTest.cjs && node src/scripts/matchJournalTest.cjs && node src/scripts/formationCrashTest.cjs && node src/scripts/contractV9Test.cjs && node src/scripts/contractV10Test.cjs && node src/scripts/fixedSlotCheckpointTest.cjs && node src/scripts/canonicalJsonTest.cjs && node src/scripts/lifecycleJournalTest.cjs && node src/scripts/rewardEntitlementTest.cjs && node src/scripts/auditSeamTest.cjs && node src/scripts/envelopeWriterTest.cjs && node src/scripts/proTxHashCodecTest.cjs && node src/scripts/decoderLineageTest.cjs && node src/scripts/runtimeVerifiersTest.cjs && node src/scripts/mnListCodecProbeTest.cjs && node src/scripts/mnListDiffCodecTest.cjs && node src/scripts/chainLockVerifyTest.cjs && node src/scripts/settlementResolverTest.cjs && node src/scripts/settlementMarkerVerifyTest.cjs"
   },
   "dependencies": {
+    "@dashevo/bls": "~1.2.9",
     "dash": "^7.0.0",
     "dash-rawkey-signer": "^0.3.1"
   },

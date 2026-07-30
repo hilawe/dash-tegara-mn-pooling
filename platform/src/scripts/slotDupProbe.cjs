@@ -1,5 +1,5 @@
 /**
- * The duplicate-claim consensus probe (v6/v7): bypass the client's read-before-write
+ * The duplicate-claim consensus probe (v6/v7): skip the client's read-before-write
  * check and DIRECTLY broadcast a pledgeSlot claim for a slot that is already taken, to
  * prove the ledger itself rejects it (the unique (poolId, slotNo) index). This is the
  * double-broadcast proof from the v6 build, kept as a script so the property stays

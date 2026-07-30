@@ -12,7 +12,7 @@ const base = { positionId: "p1", ownerId: "leaver", rewardScriptHex: "aa" };
 const intent = { intentId: "i1", positionId: "p1", sellerId: "leaver", joinerId: "joiner", priceCredits: 500, expiryHeight: 100 };
 const claim = { claimId: "c1", intentId: "i1", joinerId: "joiner", rewardScriptHex: "bb" };
 
-// 1. THE a soundness-review finding ATTACK: a named joiner claims WITHOUT paying. On current Platform the payment is
+// 1. THE a soundness-review finding FAILURE MODE: a named joiner claims WITHOUT paying. On current Platform the payment is
 //    not reader-verifiable, so the gate is closed and the base owner (leaver) must stand.
 {
   const r = resolveActiveMember(base, [intent], [claim], NO_L2_PAYMENT_PROOF);
@@ -37,8 +37,8 @@ const claim = { claimId: "c1", intentId: "i1", joinerId: "joiner", rewardScriptH
 
 // 4. an intent NOT by the current holder must never supersede, even with a verified payment
 {
-  const forged = { ...intent, sellerId: "someoneElse" };
-  const r = resolveActiveMember(base, [forged], [claim], () => true);
+  const fabricated = { ...intent, sellerId: "someoneElse" };
+  const r = resolveActiveMember(base, [fabricated], [claim], () => true);
   ok("intent not by the current holder: no supersede", r.superseded === false && r.activeOwner === "leaver");
 }
 

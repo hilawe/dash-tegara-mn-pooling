@@ -377,7 +377,7 @@ throws("oversize preimage refused (builder)", () => {
   ok("verify: oversize allocationRows rejected", !v.ok && /exceeds the 2048/.test(v.reason));
 }
 // total fail-closed: an accessor that throws must not crash the verifier, even when the thrown value
-// is hostile to string interpolation (a Symbol, or an object whose `message` getter throws)
+// is malformed to string interpolation (a Symbol, or an object whose `message` getter throws)
 for (const [name, thrown] of [
   ["Error", () => new Error("boom")],
   ["Symbol", () => Symbol("boom")],

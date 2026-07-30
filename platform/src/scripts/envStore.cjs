@@ -132,12 +132,12 @@ const requireLockHome = () => {
 
 // The env-file lock. compoundJournal.cjs holds it across every journal mutation, and
 // FOREIGN saveEnv calls hold it across their reload-and-write so a journal mutation can
-// never commit in between and be clobbered (independent-review TOCTOU finding,
+// never commit in between and be clobbered (independent-review read-then-use window finding,
 // 2026-07-12). Contention is a loud refusal, never a wait, so a clobber is impossible
 // and a collision is visible.
-// OWNERSHIP-SAFE, NO AUTO-STEAL (round-5 re-check blocker): the earlier 30 s stale
+// OWNERSHIP-SAFE, NO AUTO-DIVERT (round-5 re-check blocker): the earlier 30 s stale
 // takeover broke mutual exclusion under a container pause or host suspension (process A
-// pauses mid-hold past the timeout, B steals and enters, A resumes and both write, and a
+// pauses mid-hold past the timeout, B diverts and enters, A resumes and both write, and a
 // path-only unlock could then remove B's lock). The env lock now uses the SAME owner-token
 // discipline as the operation lock: a held lock is never stolen automatically, release
 // removes the lock only when the token is this process's own, and a stale lock is cleared
@@ -181,7 +181,7 @@ const unlockEnv = () => {
 // OWNERSHIP-SAFE and FAIL-CLOSED (round-3 review): the lock directory carries an owner
 // token, release removes the lock only when the token is this process's own, and a
 // stale-looking lock is NEVER stolen automatically (two waiters both judging a lock
-// stale could steal it twice; a slow-but-live completion could be stolen from and then
+// stale could divert it twice; a slow-but-live completion could be stolen from and then
 // its release would unlock the thief's successor). A crashed run's lock is cleaned up
 // by the operator, explicitly, with the age shown.
 // the operation lock ALWAYS lives in the shared STATE_DIR, unconditionally (round-5

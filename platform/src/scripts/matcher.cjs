@@ -228,7 +228,7 @@ function matchRequests(pending) {
 
       // 1. finish whatever a crashed run left, before looking at new work. A LOCAL
       // settlement journal (v1 mode) must stop a v3 run too: the old code's isV3 branch
-      // silently bypassed it, abandoning the stranded pair (review batch-2 blocker, B11)
+      // silently skipped it, abandoning the stranded pair (review batch-2 blocker, B11)
       const matchState = match.load(env);
       if (isV3() && matchState.settlement) {
         throw new Error("a LOCAL settlement journal exists (pool " + matchState.settlement.poolId +
