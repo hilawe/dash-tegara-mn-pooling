@@ -135,6 +135,42 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
   }
 };
 const mined = mineHeightOne(signed.network.coreGenesisBlockHash);
+
+// SHARED HEIGHT-ONE FIXTURE HELPERS, at module scope because more than one section needs
+// them. Reaching a check inside the height-one duty means making every earlier binding
+// pass, which is re-deriving the chain identity, re-signing the checkpoint, and where the
+// header bytes moved, mining it again.
+const resignFor = (displayHash) => {
+  const e = JSON.parse(JSON.stringify(signed));
+  e.network = { ...e.network, coreDevnetGenesisBlockHash: displayHash };
+  const id = coreChainIdentityHash(e.network);
+  for (const cp of e.checkpoints) {
+    const pl = Buffer.from(cp.signedPayloadBytes, "hex");
+    v2DomainTag(id, rawPub).copy(pl, 4);
+    const dg = sha256(pl);
+    cp.signedPayloadBytes = pl.toString("hex");
+    cp.checkpointId = dg.toString("hex");
+    cp.signerPublicKey = rawPub.toString("hex");
+    cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
+  }
+  return e;
+};
+// re-mine a header whose bytes changed, so it still satisfies its own stated target
+const remine = (buf) => {
+  const h = buf.subarray(0, 80);
+  const nBits = h.readUInt32LE(72);
+  const exp = nBits >>> 24, man = BigInt(nBits & 0x007fffff);
+  const target = exp <= 3 ? man >> (8n * BigInt(3 - exp)) : man << (8n * BigInt(exp - 3));
+  for (let n = 0; ; n++) {
+    h.writeUInt32LE(n, 76);
+    const display = blockHashOf(h);
+    const ib = Buffer.from(display, "hex").reverse();
+    let v = 0n;
+    for (let i = ib.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(ib[i]);
+    if (v <= target) return { hex: buf.toString("hex"), display };
+  }
+};
+
 signed.network = { ...signed.network, coreDevnetGenesisBlockHash: mined.displayHash };
 const minedCoreNode = { getBlockHexByHeight: (h) => (h === 1 ? mined.blockHex : null) };
 const identity = coreChainIdentityHash(signed.network);
@@ -290,36 +326,6 @@ ok("...and its digest differs from the other evidence set",
   // three named checks left the suite green. Reaching a check means making everything BEFORE it
   // pass, which here means re-deriving the chain identity and re-signing the checkpoint, the same
   // discipline the proof-of-work fixture below already used.
-  const resignFor = (displayHash) => {
-    const e = JSON.parse(JSON.stringify(signed));
-    e.network = { ...e.network, coreDevnetGenesisBlockHash: displayHash };
-    const id = coreChainIdentityHash(e.network);
-    for (const cp of e.checkpoints) {
-      const pl = Buffer.from(cp.signedPayloadBytes, "hex");
-      v2DomainTag(id, rawPub).copy(pl, 4);
-      const dg = sha256(pl);
-      cp.signedPayloadBytes = pl.toString("hex");
-      cp.checkpointId = dg.toString("hex");
-      cp.signerPublicKey = rawPub.toString("hex");
-      cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
-    }
-    return e;
-  };
-  // re-mine a header whose bytes changed, so it still satisfies its own stated target
-  const remine = (buf) => {
-    const h = buf.subarray(0, 80);
-    const nBits = h.readUInt32LE(72);
-    const exp = nBits >>> 24, man = BigInt(nBits & 0x007fffff);
-    const target = exp <= 3 ? man >> (8n * BigInt(3 - exp)) : man << (8n * BigInt(exp - 3));
-    for (let n = 0; ; n++) {
-      h.writeUInt32LE(n, 76);
-      const display = blockHashOf(h);
-      const ib = Buffer.from(display, "hex").reverse();
-      let v = 0n;
-      for (let i = ib.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(ib[i]);
-      if (v <= target) return { hex: buf.toString("hex"), display };
-    }
-  };
 
   {
     // a zero mantissa expands to a zero target, which no hash can satisfy. No re-mining is needed
@@ -796,6 +802,82 @@ ok("...and its digest differs from the other evidence set",
     ok("a non-canonical scriptSig length inside the coinbase is refused", r.ok === false);
     ok("that refusal also reaches the CompactSize rule",
        /non-canonical CompactSize/.test(r.reason || ""));
+  }
+
+  // ---- (5) THE DASH TRANSACTION DOMAIN (round 9, three MUST-FIX findings) ----
+  // The parser read the genesis coinbase's bytes without applying the rules Dash applies to the
+  // same transaction, so three separate inputs completed here and are refused by Dash. All three
+  // could return ran:true ok:true and mint a recognition attestation, which is what separated
+  // them from the still-blocked Core walk.
+  //
+  // Each case below rebuilds the block properly: the coinbase is mutated BEFORE its txid is taken,
+  // the header is mined over the resulting merkle root, the chain identity is re-derived and the
+  // checkpoint re-signed. Without that a case stops at the hash comparison and proves nothing,
+  // which is the trap round 8 finding 3 caught. Every case asserts the REASON.
+  //
+  // The coinbase layout, used to place each mutation:
+  //   0..3 version and type, 4 input count, 5..36 prevout hash, 37..40 prevout index,
+  //   41 scriptSig length, 42.. scriptSig, then sequence(4), output count(1), and per output
+  //   value(8) + script length(1) + script, then locktime(4).
+  {
+    // a soundness-review finding: the BIP34 height prefix as a two-byte push of 0x01 rather than OP_1. Dash builds
+    // `CScript() << 1`, which is the single byte OP_1, and compares the coinbase scriptSig against
+    // those bytes. The two-byte form is the same script NUMBER and different BYTES.
+    const blk = mineHeightOne(signed.network.coreGenesisBlockHash, "tegara-fixture-devnet",
+                              0x207fffff, (cb) => {
+      const sl = cb[41];
+      return Buffer.concat([cb.subarray(0, 41), Buffer.from([sl + 1]),   // one byte longer
+                            Buffer.from([0x01, 0x01]),                   // push 1, not OP_1
+                            cb.subarray(43)]);                           // past the old OP_1
+    });
+    const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
+                                          { coreNode: nodeOf(blk.blockHex) });
+    ok("a two-byte BIP34 height push is refused", r.ok === false);
+    ok("and the refusal names the OP_1 prefix rule",
+       /BIP34 height-one push OP_1/.test(r.reason || ""));
+  }
+  {
+    // a soundness-review finding: version 3 with a nonzero type, and no extra payload. Dash's deserializer reads a
+    // vExtraPayload after locktime for exactly that combination, so its reader runs off the end
+    // where this parser used to report a complete, exact consumption.
+    const blk = mineHeightOne(signed.network.coreGenesisBlockHash, "tegara-fixture-devnet",
+                              0x207fffff, (cb) => {
+      const out = Buffer.from(cb);
+      out.writeUInt16LE(3, 0);            // nVersion = SPECIAL_VERSION
+      out.writeUInt16LE(5, 2);            // nType = TRANSACTION_COINBASE, a nonzero type
+      return out;
+    });
+    const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
+                                          { coreNode: nodeOf(blk.blockHex) });
+    ok("a special-version transaction with no extra payload is refused", r.ok === false);
+    ok("and the refusal reaches the extra-payload field Dash requires",
+       /vExtraPayload/.test(r.reason || ""));
+  }
+  {
+    // a soundness-review finding: zero outputs. Dash refuses an ordinary transaction with an empty output vector, and
+    // a devnet genesis coinbase is ordinary, so the rule applies to it.
+    const blk = mineHeightOne(signed.network.coreGenesisBlockHash, "tegara-fixture-devnet",
+                              0x207fffff, (cb) => {
+      const sl = cb[41];
+      const outCountAt = 42 + sl + 4;                 // past the scriptSig and the sequence
+      const locktimeAt = cb.length - 4;
+      return Buffer.concat([cb.subarray(0, outCountAt), Buffer.from([0]),  // zero outputs
+                            cb.subarray(locktimeAt)]);                     // keep locktime
+    });
+    const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
+                                          { coreNode: nodeOf(blk.blockHex) });
+    ok("a coinbase declaring no outputs is refused", r.ok === false);
+    ok("and the refusal names the nonempty-output rule",
+       /declares no outputs/.test(r.reason || ""));
+  }
+  {
+    // and the CONTROL that keeps all three specific: the unmodified constructor output, which is
+    // version 1, normal type, one output and an OP_1 prefix, still passes every one of the new
+    // rules. A domain check that refused this would be finding 6's defect shape, a false
+    // rejection of a block Dash accepts.
+    const r = verifyCheckpointRecognition(signed, { coreNode: minedCoreNode });
+    ok("the real constructor output still passes the transaction-domain rules",
+       r.ran === true && r.ok === true);
   }
 
   // and none of the three may mint an attestation
