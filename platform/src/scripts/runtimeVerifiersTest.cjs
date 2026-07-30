@@ -283,32 +283,92 @@ ok("...and its digest differs from the other evidence set",
     ok("an nBits expanding outside the 256-bit range is refused",
        r.ok === false && /valid 256-bit target range|hashes to/.test(r.reason));
   }
+  // THESE THREE REFUSED FOR THE WRONG REASON UNTIL 2026-07-30 (round 8, finding 3). Each altered
+  // the block WITHOUT updating the envelope's expected block hash, so every one of them stopped
+  // at the hash comparison and none reached the check its name claimed. Each asserted only
+  // `r.ok === false`, which an earlier refusal satisfies just as well, so removing any of the
+  // three named checks left the suite green. Reaching a check means making everything BEFORE it
+  // pass, which here means re-deriving the chain identity and re-signing the checkpoint, the same
+  // discipline the proof-of-work fixture below already used.
+  const resignFor = (displayHash) => {
+    const e = JSON.parse(JSON.stringify(signed));
+    e.network = { ...e.network, coreDevnetGenesisBlockHash: displayHash };
+    const id = coreChainIdentityHash(e.network);
+    for (const cp of e.checkpoints) {
+      const pl = Buffer.from(cp.signedPayloadBytes, "hex");
+      v2DomainTag(id, rawPub).copy(pl, 4);
+      const dg = sha256(pl);
+      cp.signedPayloadBytes = pl.toString("hex");
+      cp.checkpointId = dg.toString("hex");
+      cp.signerPublicKey = rawPub.toString("hex");
+      cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
+    }
+    return e;
+  };
+  // re-mine a header whose bytes changed, so it still satisfies its own stated target
+  const remine = (buf) => {
+    const h = buf.subarray(0, 80);
+    const nBits = h.readUInt32LE(72);
+    const exp = nBits >>> 24, man = BigInt(nBits & 0x007fffff);
+    const target = exp <= 3 ? man >> (8n * BigInt(3 - exp)) : man << (8n * BigInt(exp - 3));
+    for (let n = 0; ; n++) {
+      h.writeUInt32LE(n, 76);
+      const display = blockHashOf(h);
+      const ib = Buffer.from(display, "hex").reverse();
+      let v = 0n;
+      for (let i = ib.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(ib[i]);
+      if (v <= target) return { hex: buf.toString("hex"), display };
+    }
+  };
+
   {
-    const bad = patch(mined.blockHex, (b) => b.writeUInt32LE(0x20000000, 72));
-    const r = verifyCheckpointRecognition(signed, { coreNode: nodeOf(bad) });
+    // a zero mantissa expands to a zero target, which no hash can satisfy. No re-mining is needed
+    // or possible here: the zero-target refusal comes BEFORE the hash-against-target comparison.
+    const bad = Buffer.from(patch(mined.blockHex, (b) => b.writeUInt32LE(0x20000000, 72)), "hex");
+    const r = verifyCheckpointRecognition(resignFor(blockHashOf(bad.subarray(0, 80))),
+                                          { coreNode: nodeOf(bad.toString("hex")) });
     ok("a zero nBits mantissa is refused", r.ok === false);
+    ok("and the refusal reaches the ZERO-TARGET check, not the hash comparison",
+       /zero nBits target/.test(r.reason || ""));
   }
 
-  // a HEADER with no block body can no longer satisfy the duty
+  // a HEADER with no block body can no longer satisfy the duty. This one always DID reach its
+  // named check, which is why the review did not list it among the unreachable four: the header
+  // is the real mined one, so hash, parent and proof of work all pass, and the refusal comes from
+  // the coinbase step finding no transaction after the 80 header bytes.
   {
     const r = verifyCheckpointRecognition(signed, { coreNode: nodeOf(mined.headerHex) });
     ok("a header with no coinbase is refused", r.ok === false);
+    ok("and the refusal comes from the COINBASE step, having got past hash and proof of work",
+       /coinbase could not be parsed/.test(r.reason || "") &&
+       /transaction count needs 1 bytes at offset 80/.test(r.reason || ""));
   }
 
   // the merkle root must BE the coinbase txid; that identity is the whole binding argument
   {
-    const bad = patch(mined.blockHex, (b) => { b[36] = b[36] ^ 0xff; });
-    const r = verifyCheckpointRecognition(signed, { coreNode: nodeOf(bad) });
+    const bad = Buffer.from(patch(mined.blockHex, (b) => { b[36] = b[36] ^ 0xff; }), "hex");
+    const fixed = remine(bad);          // changing the header changes its hash, so re-mine it
+    const r = verifyCheckpointRecognition(resignFor(fixed.display),
+                                          { coreNode: nodeOf(fixed.hex) });
     ok("a merkle root that is not the coinbase txid is refused", r.ok === false);
+    ok("and the refusal reaches the MERKLE binding, not an earlier check",
+       /merkle root is not the coinbase txid/.test(r.reason || ""));
   }
 
-  // an EMPTY devnet-name push fails the registry's nonempty requirement
+  // AN EMPTY DEVNET-NAME PUSH, and an honest note about which rule actually catches it. The
+  // registry asks for a nonempty commitment, and the verifier does carry that check, but with the
+  // checkpoint re-signed so the case reaches the coinbase at all, the refusal comes one step
+  // earlier: a zero-length push is not a valid direct push, so the scriptSig parser declines it
+  // first. The `nameCommitment.length === 0` branch is therefore defensive and unreachable by
+  // this route, because a successful parse always yields at least one name byte. That is recorded
+  // rather than papered over with a fixture that would claim to guard a branch no input reaches.
   {
     const empty = mineHeightOne(signed.network.coreGenesisBlockHash, "");
-    const env2 = JSON.parse(JSON.stringify(signed));
-    env2.network = { ...env2.network, coreDevnetGenesisBlockHash: empty.displayHash };
-    const r = verifyCheckpointRecognition(env2, { coreNode: nodeOf(empty.blockHex) });
-    ok("a coinbase with no nonempty devnet-name commitment is refused", r.ok === false);
+    const r = verifyCheckpointRecognition(resignFor(empty.displayHash),
+                                          { coreNode: nodeOf(empty.blockHex) });
+    ok("a coinbase with no devnet-name push is refused", r.ok === false);
+    ok("and the refusal names the push rule that actually catches it",
+       /no direct devnet-name push/.test(r.reason || ""));
   }
 
   // the real block still passes, and the detail says what was actually checked
@@ -432,6 +492,34 @@ ok("...and its digest differs from the other evidence set",
     const t3 = verifyCoreWalk(altered3, { protocolVersion: cap.protocolVersionOffered });
     ok("a walk that does not continue the base block is refused",
        t3.ok === false && /breaking the chain/.test(t3.reason || ""));
+
+    // THE MATCHED-TRANSACTION CONDITION, which no input had reached (round 8, finding 5).
+    // verifyCoreWalk requires two separate things of the coinbase proof: that the tree's root
+    // equals the header's, and that the coinbase txid is among the transactions the tree proves.
+    // Only the first was guarded. The existing negative case flips a hash, which fails the ROOT
+    // comparison and stops there, so removing the second condition left the suite green.
+    //
+    // The input that separates them, as the review described it: for a one-transaction tree,
+    // clearing the match bit leaves the extracted root identical (the single hash IS the root)
+    // while the match set becomes empty. The block, the header and the coinbase bytes are all
+    // untouched, so every earlier check still passes and only the membership test can refuse.
+    {
+      const t4 = JSON.parse(JSON.stringify(env));
+      const tree = diff.cbTxMerkleTree;
+      const internal = Buffer.from(tree.hashes[0], "hex").reverse().toString("hex");
+      // the serialized partial merkle tree: nTransactions, then the hash vector, then the bits
+      const pmt = "01000000" + "01" + internal + "01" + "01";
+      const at = cap.payloadHex.indexOf(pmt);
+      ok("the partial merkle tree is located exactly once in the payload",
+         at >= 0 && cap.payloadHex.indexOf(pmt, at + 1) === -1);
+      t4.coverage.listWalk[0].protxDiffRaw =
+        cap.payloadHex.slice(0, at + pmt.length - 2) + "00" + cap.payloadHex.slice(at + pmt.length);
+      const r4 = verifyCoreWalk(t4, { protocolVersion: cap.protocolVersionOffered });
+      ok("a coinbase absent from the transactions its own proof establishes is refused",
+         r4.ran === true && typeof r4.reason === "string");
+      ok("and the refusal is the MEMBERSHIP test, not the root comparison",
+         /not among the transactions its own\s+proof establishes/.test(r4.reason || ""));
+    }
 
     // ---- THE CONTINUITY PAIR (round 7 MAJOR + round 8 a soundness-review finding) ----
     // Every case below reported diffChainContinuity as PASSED before this fold, with `proved`
@@ -582,12 +670,23 @@ ok("...and its digest differs from the other evidence set",
   ok("a base list holding the WRONG entry is refused rather than passing",
      w.ok === false && /list root/.test(w.reason || ""));
 
-  // a deletion naming an entry the list does not hold is malformed evidence, not a no-op
-  const badDelete = JSON.parse(JSON.stringify(env));
-  badDelete.basePackage.smlEntries = [];
-  const b = verifyCoreWalk(badDelete, { protocolVersion: cap.protocolVersionOffered });
+  // MISLABELLED FOR THREE ROUNDS, corrected 2026-07-30 (round 7, MINOR). The comment here used
+  // to say this exercised "a deletion naming an entry the list does not hold". It does not: the
+  // spliced payload inherits the capture's EMPTY deletedMNs, so the missing-delete branch in
+  // applyDiffToList never runs and this case fails later, on the root. The real guard for that
+  // branch now lives in mnListDiffCodecTest, which calls applyDiffToList directly.
+  //
+  // What this case actually shows is still worth keeping: an empty base list under a delta row
+  // cannot reproduce the committed root. The assertion also no longer reads `b.ok === false`,
+  // which was vacuous here, because verifyCoreWalk returns ok:false on EVERY input while the
+  // ChainLock duty is outstanding. A refusal is ran:true with a reason.
+  const emptyBase = JSON.parse(JSON.stringify(env));
+  emptyBase.basePackage.smlEntries = [];
+  const b = verifyCoreWalk(emptyBase, { protocolVersion: cap.protocolVersionOffered });
   ok("an empty base under a delta row is refused, since the root cannot reproduce",
-     b.ok === false);
+     b.ran === true && typeof b.reason === "string");
+  ok("and the refusal is about the root, not something earlier",
+     /list root/.test(b.reason || ""));
 }
 
 // ---------------------------------------------------------------------------
