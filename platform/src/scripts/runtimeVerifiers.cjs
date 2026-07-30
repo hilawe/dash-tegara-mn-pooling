@@ -49,7 +49,7 @@ const { canonicalize } = require("./canonicalJson.cjs");
 const { displayToRaw, assertHex32 } = require("./proTxHashCodec.cjs");
 const {
   parseMnListDiff, computeListRoot, readCbTxPayload, parseStandaloneEntry, applyDiffToList,
-  extractMerkleMatches, indexHeaderChain, blockHashOf, Reader,
+  extractMerkleMatches, indexHeaderChain, blockHashOf, Reader, readPartialMerkleTree,
 } = require("./mnListDiffCodec.cjs");
 
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest();
@@ -80,6 +80,35 @@ const MAX_TX_EXTRA_PAYLOAD = 10000;
 const SPECIAL_TX_VERSION = 3;
 const TRANSACTION_NORMAL = 0;
 const TRANSACTION_COINBASE = 5;
+
+/**
+ * Decode one `dash-merkle-branch-v1` evidence blob, the CPartialMerkleTree serialization at
+ * [8c9f166a3:src/merkleblock.h], and extract what it proves. The WHOLE blob must be consumed:
+ * a proof field with bytes left over is not the structure the codec profile names, and reading
+ * a prefix of it would be believing part of a field nobody read to the end.
+ *
+ * Returns { merkleRoot, matched } or { error }.
+ */
+function decodeMerkleBranch(hex, what) {
+  if (typeof hex !== "string") return { error: `${what} is missing` };
+  let buf;
+  try {
+    buf = hexBuf(hex, what);
+  } catch (e) {
+    return { error: (e && e.message) || String(e) };
+  }
+  try {
+    const r = new Reader(buf);
+    const tree = readPartialMerkleTree(r);
+    if (r.remaining !== 0) {
+      return { error: `${what} has ${r.remaining} byte(s) after the merkle branch` };
+    }
+    return extractMerkleMatches(tree);
+  } catch (e) {
+    return { error: `${what} does not decode under dash-merkle-branch-v1 ` +
+                    `(${(e && e.message) || e})` };
+  }
+}
 
 const V2_LABEL = Buffer.from("tegara-fixedslot-checkpoint-v2", "utf8");
 const IDENTITY_LABEL = Buffer.from("TegaraCoreChainIdentity/v1", "utf8");
@@ -323,12 +352,34 @@ function readGenesisCoinbase(block) {
     let sp = 0;
     if (scriptSig[sp] === 0x51) sp += 1;
     else return { error: "scriptSig does not begin with the BIP34 height-one push OP_1" };
+    // BOTH PUSH FORMS DASH'S BUILDER EMITS (round 9, MINOR, finding 6). This accepted only a
+    // direct push of 1 to 75 bytes, so a devnet name of 76 bytes or more was refused BY NAME even
+    // though Dash produces and accepts it: `CScript::operator<<` writes a direct push below
+    // OP_PUSHDATA1 and switches to OP_PUSHDATA1 plus a one-byte length at 76 and above
+    // [8c9f166a3:src/script/script.h:450-458]. A 76-byte name gives a 79-byte coinbase scriptSig,
+    // inside the 100-byte ceiling checked above, so the block is valid and this was a false
+    // REJECTION rather than a false acceptance. OP_PUSHDATA2 cannot arise here, because a name
+    // long enough to need it cannot fit under that ceiling.
     const pushOp = scriptSig[sp];
-    if (pushOp === undefined || pushOp === 0 || pushOp > 0x4b) {
-      return { error: "scriptSig carries no direct devnet-name push after the height" };
+    let nameLength;
+    if (pushOp !== undefined && pushOp >= 0x01 && pushOp <= 0x4b) {
+      nameLength = pushOp;
+      sp += 1;
+    } else if (pushOp === 0x4c) {                       // OP_PUSHDATA1
+      nameLength = scriptSig[sp + 1];
+      if (nameLength === undefined) return { error: "the OP_PUSHDATA1 devnet-name push has no length" };
+      if (nameLength < 0x4c) {
+        // Dash's builder would have used a direct push for this length, so the wider form is a
+        // noncanonical encoding of the same value, refused for the same reason CompactSize is
+        return { error: `the devnet-name push uses OP_PUSHDATA1 for ${nameLength} bytes, which ` +
+                        "a direct push encodes" };
+      }
+      sp += 2;
+    } else {
+      return { error: "scriptSig carries no devnet-name push after the height" };
     }
-    const name = scriptSig.subarray(sp + 1, sp + 1 + pushOp);
-    if (name.length !== pushOp) return { error: "the devnet-name push is truncated" };
+    const name = scriptSig.subarray(sp, sp + nameLength);
+    if (name.length !== nameLength) return { error: "the devnet-name push is truncated" };
     return { txid, nameCommitment: name };
   } catch (e) {
     return { error: `could not be parsed (${(e && e.message) || e})` };
@@ -700,6 +751,27 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
         return BAD(`${where}: the coinbase ${diff.cbTx.txid} is not among the transactions its own ` +
                    "proof establishes, so it is not bound to this block");
       }
+      // THE SEPARATELY SERIALIZED PROOF IS EVIDENCE TOO (round 9, MINOR, finding 5). The binding
+      // above uses the partial merkle tree embedded in protxDiffRaw, and the row's own
+      // cbTxInclusionProof was never read at all, so a required field could carry any
+      // schema-valid hex without changing the outcome. The proof-codec profile maps it to
+      // `dash-merkle-branch-v1`, the CPartialMerkleTree serialization at
+      // [8c9f166a3:src/merkleblock.h], and states the duty plainly: every verifier decodes its
+      // evidence fields with EXACTLY the codec the profile defines for them, and an undecodable
+      // blob removes AUTHENTICATED from the owning component. So it is decoded here and required
+      // to establish the SAME binding independently. Interpreting the field is the honest way to
+      // close the gap between the registry's evidence list and what the checker reads; the other
+      // way would have been to stop claiming the field, which discards a requirement.
+      const rowProof = decodeMerkleBranch(row.cbTxInclusionProof, `${where} cbTxInclusionProof`);
+      if (rowProof.error) return BAD(`${where}: ${rowProof.error}`);
+      if (rowProof.merkleRoot !== header.merkleRoot) {
+        return BAD(`${where}: the row's cbTxInclusionProof yields merkle root ` +
+                   `${rowProof.merkleRoot}, but the block's header commits ${header.merkleRoot}`);
+      }
+      if (!rowProof.matched.includes(diff.cbTx.txid)) {
+        return BAD(`${where}: the row's cbTxInclusionProof does not establish the coinbase ` +
+                   `${diff.cbTx.txid}`);
+      }
       coinbasesAuthenticated++;
 
       // THE LIST ROOT, against the coinbase's own commitment AND the row's assertion
@@ -767,6 +839,21 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
         if (cb && cb.kind === "available") {
           if (cb.txRaw !== row.cbTxRaw) {
             return BAD(`${where}: the Core ledger's coinbase bytes differ from the walk's`);
+          }
+          // the Core ledger's own proof field, under the same codec and the same duty as the
+          // walk row's (round 9, MINOR, finding 5). It was the second required field the
+          // verifier never read.
+          const ledgerProof = decodeMerkleBranch(cb.inclusionProof,
+                                                 `${where} coreLedger coinbase inclusionProof`);
+          if (ledgerProof.error) return BAD(`${where}: ${ledgerProof.error}`);
+          if (ledgerProof.merkleRoot !== header.merkleRoot) {
+            return BAD(`${where}: the Core ledger's inclusionProof yields merkle root ` +
+                       `${ledgerProof.merkleRoot}, but the block's header commits ` +
+                       `${header.merkleRoot}`);
+          }
+          if (!ledgerProof.matched.includes(diff.cbTx.txid)) {
+            return BAD(`${where}: the Core ledger's inclusionProof does not establish the ` +
+                       `coinbase ${diff.cbTx.txid}`);
           }
           const derived = diff.cbTx.vout.map((o) => ({
             script: o.script, amountDuffs: o.valueDuffs, outputIndex: o.index,

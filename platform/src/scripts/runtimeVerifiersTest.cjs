@@ -93,8 +93,15 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
   // (8c9f166a3:src/chainparams.cpp:43-64): one input with a null prevout whose scriptSig is
   // OP_1 followed by a push of the devnet name, and one OP_RETURN output.
   const nameBytes = Buffer.from(devnetName, "utf8");
-  const scriptSig = Buffer.concat([Buffer.from([0x51]),                       // OP_1, BIP34 height
-                                   Buffer.from([nameBytes.length]), nameBytes]);
+  // PUSH THE NAME THE WAY DASH'S BUILDER DOES [8c9f166a3:src/script/script.h:450-458]: a direct
+  // push below OP_PUSHDATA1, and OP_PUSHDATA1 plus a length byte from 76 bytes up. The helper
+  // used to write a bare length byte at every size, which for 76 bytes emits 0x4c, the
+  // OP_PUSHDATA1 opcode itself, so it produced a script Dash would never build and could not
+  // exercise the long-name path at all.
+  const namePush = nameBytes.length < 0x4c
+    ? Buffer.concat([Buffer.from([nameBytes.length]), nameBytes])
+    : Buffer.concat([Buffer.from([0x4c, nameBytes.length]), nameBytes]);
+  const scriptSig = Buffer.concat([Buffer.from([0x51]), namePush]);           // OP_1, BIP34 height
   let coinbase = Buffer.concat([
     Buffer.from([1, 0, 0, 0]),                                                // version 1
     Buffer.from([1]),                                                         // one input
@@ -134,6 +141,25 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
     }
   }
 };
+// SERIALIZE a partial merkle tree back to its `dash-merkle-branch-v1` bytes
+// [8c9f166a3:src/merkleblock.h]. The proof fields the registry lists as evidence are now decoded
+// and checked (round 9, finding 5), so fixtures carry the real branch rather than a placeholder.
+// The parser returns hashes in DISPLAY order, so they reverse back to internal order here. Counts
+// are written as single-byte CompactSize, which is all these one-transaction trees need.
+const serializePmt = (tree) => {
+  const bits = Buffer.from(tree.bits, "hex");
+  if (tree.hashes.length > 252 || bits.length > 252) throw new Error("fixture tree too large");
+  const n = Buffer.alloc(4);
+  n.writeUInt32LE(tree.nTransactions, 0);
+  return Buffer.concat([
+    n,
+    Buffer.from([tree.hashes.length]),
+    ...tree.hashes.map((h) => Buffer.from(h, "hex").reverse()),
+    Buffer.from([bits.length]),
+    bits,
+  ]).toString("hex");
+};
+
 const mined = mineHeightOne(signed.network.coreGenesisBlockHash);
 
 // SHARED HEIGHT-ONE FIXTURE HELPERS, at module scope because more than one section needs
@@ -374,7 +400,38 @@ ok("...and its digest differs from the other evidence set",
                                           { coreNode: nodeOf(empty.blockHex) });
     ok("a coinbase with no devnet-name push is refused", r.ok === false);
     ok("and the refusal names the push rule that actually catches it",
-       /no direct devnet-name push/.test(r.reason || ""));
+       /no devnet-name push/.test(r.reason || ""));
+  }
+
+  // A LONG DEVNET NAME IS VALID AND WAS BEING REFUSED (round 9, MINOR, finding 6). Dash's script
+  // builder switches from a direct push to OP_PUSHDATA1 at 76 bytes, and a 76-byte name gives a
+  // 79-byte coinbase scriptSig, inside the 100-byte ceiling. The parser accepted only direct
+  // pushes, so it produced a named FALSE REJECTION of a block Dash accepts. This is the opposite
+  // failure from the rest of this section, which is why it is worth its own case.
+  {
+    const longName = "d".repeat(76);
+    const blk = mineHeightOne(signed.network.coreGenesisBlockHash, longName);
+    const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
+                                          { coreNode: nodeOf(blk.blockHex) });
+    ok("a 76-byte devnet name pushed with OP_PUSHDATA1 is ACCEPTED", r.ran === true && r.ok === true);
+    ok("and the detail reports the full name length", /76-byte devnet-name/.test(r.detail || ""));
+  }
+  {
+    // ...but the wider form used for a length a direct push encodes is still refused, on the same
+    // canonical-encoding principle the CompactSize rule follows
+    const blk = mineHeightOne(signed.network.coreGenesisBlockHash, "tegara-fixture-devnet",
+                              0x207fffff, (cb) => {
+      const sl = cb[41];
+      const nameLen = sl - 2;                       // scriptSig is OP_1, push length, name
+      return Buffer.concat([cb.subarray(0, 41), Buffer.from([sl + 1]),
+                            Buffer.from([0x51, 0x4c, nameLen]),   // OP_1, OP_PUSHDATA1, length
+                            cb.subarray(44)]);
+    });
+    const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
+                                          { coreNode: nodeOf(blk.blockHex) });
+    ok("OP_PUSHDATA1 used for a length a direct push encodes is refused", r.ok === false);
+    ok("and the refusal names the noncanonical push",
+       /OP_PUSHDATA1 for \d+ bytes, which a direct push encodes/.test(r.reason || ""));
   }
 
   // the real block still passes, and the detail says what was actually checked
@@ -460,14 +517,15 @@ ok("...and its digest differs from the other evidence set",
           height, blockHash: diff.blockHash,
           protxDiffRaw: cap.payloadHex,
           cbTxRaw: diff.cbTx.raw,
-          cbTxInclusionProof: "00",
+          cbTxInclusionProof: serializePmt(diff.cbTxMerkleTree),
           listRoot: computeListRoot(diff.mnList),
           targetNodeEntry: target.raw.toString("hex"),
           targetNodeState: target.isValid ? "PRESENT_VALID" : "PRESENT_INVALID",
         }],
         coreLedger: [{
           height, blockHash: diff.blockHash,
-          coinbase: { kind: "available", txRaw: diff.cbTx.raw, inclusionProof: "00", outputs },
+          coinbase: { kind: "available", txRaw: diff.cbTx.raw,
+                      inclusionProof: serializePmt(diff.cbTxMerkleTree), outputs },
         }],
       },
     };
@@ -535,6 +593,54 @@ ok("...and its digest differs from the other evidence set",
       ok("and the refusal is the MEMBERSHIP test, not the root comparison",
          /not among the transactions its own\s+proof establishes/.test(r4.reason || ""));
     }
+
+    // ---- THE TWO SERIALIZED PROOF FIELDS ARE READ (round 9, MINOR, finding 5) ----
+    // The registry lists both as evidence and the verifier read neither, so either could carry
+    // any schema-valid hex without changing the outcome. The proof-codec profile maps both to
+    // `dash-merkle-branch-v1` and states that a verifier decodes its evidence fields with exactly
+    // the codec defined for them, so they are decoded and required to establish the same binding.
+    const proofCase = (label, mutate, re) => {
+      const e = JSON.parse(JSON.stringify(env));
+      mutate(e);
+      const rr = verifyCoreWalk(e, { protocolVersion: cap.protocolVersionOffered });
+      ok(`${label}: refused`, rr.ran === true && typeof rr.reason === "string");
+      ok(`${label}: and the refusal names the rule`, re.test(rr.reason || ""));
+    };
+    // the placeholder these fixtures used to carry is not a merkle branch at all
+    proofCase("a placeholder row cbTxInclusionProof is refused",
+              (e) => { e.coverage.listWalk[0].cbTxInclusionProof = "00"; },
+              /cbTxInclusionProof does not decode under dash-merkle-branch-v1/);
+    proofCase("a placeholder Core-ledger inclusionProof is refused",
+              (e) => { e.coverage.coreLedger[0].coinbase.inclusionProof = "00"; },
+              /inclusionProof does not decode under dash-merkle-branch-v1/);
+    // a well-formed branch for a DIFFERENT tree: it decodes, and proves the wrong root
+    proofCase("a row proof yielding another root is refused",
+              (e) => {
+                e.coverage.listWalk[0].cbTxInclusionProof =
+                  serializePmt({ nTransactions: 1, hashes: ["cd".repeat(32)], bits: "01" });
+              },
+              /cbTxInclusionProof yields merkle root/);
+    proofCase("a Core-ledger proof yielding another root is refused",
+              (e) => {
+                e.coverage.coreLedger[0].coinbase.inclusionProof =
+                  serializePmt({ nTransactions: 1, hashes: ["cd".repeat(32)], bits: "01" });
+              },
+              /inclusionProof yields merkle root/);
+    // trailing bytes after the branch: the field is not the structure the codec names
+    proofCase("a row proof with bytes after the branch is refused",
+              (e) => {
+                e.coverage.listWalk[0].cbTxInclusionProof =
+                  serializePmt(diff.cbTxMerkleTree) + "00";
+              },
+              /after the merkle branch/);
+    // the right root with an EMPTY match set, which is finding 5's shape one level down: the
+    // field decodes and proves a root while establishing no transaction at all
+    proofCase("a row proof proving the root but matching nothing is refused",
+              (e) => {
+                e.coverage.listWalk[0].cbTxInclusionProof =
+                  serializePmt({ ...diff.cbTxMerkleTree, bits: "00" });
+              },
+              /does not establish the coinbase/);
 
     // ---- THE AUDITED NODE IS DERIVED, NOT BELIEVED (round 9, MAJOR, a soundness-review finding) ----
     // Every case here authenticates the SAME list root as the positive above. Only the two fields
@@ -705,14 +811,15 @@ ok("...and its digest differs from the other evidence set",
     coverage: {
       listWalk: [{
         height, blockHash: delta.blockHash, protxDiffRaw: deltaRaw.toString("hex"),
-        cbTxRaw: delta.cbTx.raw, cbTxInclusionProof: "00",
+        cbTxRaw: delta.cbTx.raw, cbTxInclusionProof: serializePmt(delta.cbTxMerkleTree),
         listRoot: payload.merkleRootMNList,
         targetNodeEntry: first.raw.toString("hex"),
         targetNodeState: first.isValid ? "PRESENT_VALID" : "PRESENT_INVALID",
       }],
       coreLedger: [{
         height, blockHash: delta.blockHash,
-        coinbase: { kind: "available", txRaw: delta.cbTx.raw, inclusionProof: "00", outputs },
+        coinbase: { kind: "available", txRaw: delta.cbTx.raw,
+                    inclusionProof: serializePmt(delta.cbTxMerkleTree), outputs },
       }],
     },
   };
@@ -982,14 +1089,15 @@ ok("...and its digest differs from the other evidence set",
     coverage: {
       listWalk: [{
         height: pl.height, blockHash: d.blockHash, protxDiffRaw: payloadHex,
-        cbTxRaw: d.cbTx.raw, cbTxInclusionProof: "00",
+        cbTxRaw: d.cbTx.raw, cbTxInclusionProof: serializePmt(d.cbTxMerkleTree),
         listRoot: computeListRoot(d.mnList),
         targetNodeEntry: envTarget.raw.toString("hex"),
         targetNodeState: envTarget.isValid ? "PRESENT_VALID" : "PRESENT_INVALID",
       }],
       coreLedger: [{
         height: pl.height, blockHash: d.blockHash,
-        coinbase: { kind: "available", txRaw: d.cbTx.raw, inclusionProof: "00", outputs },
+        coinbase: { kind: "available", txRaw: d.cbTx.raw,
+                    inclusionProof: serializePmt(d.cbTxMerkleTree), outputs },
       }],
     },
   });
