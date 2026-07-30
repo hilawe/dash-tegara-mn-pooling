@@ -432,6 +432,66 @@ ok("...and its digest differs from the other evidence set",
     const t3 = verifyCoreWalk(altered3, { protocolVersion: cap.protocolVersionOffered });
     ok("a walk that does not continue the base block is refused",
        t3.ok === false && /breaking the chain/.test(t3.reason || ""));
+
+    // ---- THE CONTINUITY PAIR (round 7 MAJOR + round 8 a soundness-review finding) ----
+    // Every case below reported diffChainContinuity as PASSED before this fold, with `proved`
+    // saying the rows chained without a gap. Each asserts the reason, because a refusal from
+    // some other check would not show the continuity rule doing the work.
+    // NOT `rr.ok === false`. verifyCoreWalk returns ok:false on EVERY input while the ChainLock
+    // duty is outstanding, so asserting it proves nothing; a reverted check left that assertion
+    // green and the fixture only half-worked. A refusal is BAD(reason), which sets ran:true and a
+    // reason, against the blocked return's ran:false and blockedOn. That is the real distinction.
+    const walkCase = (label, mutate, re) => {
+      const e = JSON.parse(JSON.stringify(env));
+      mutate(e);
+      const rr = verifyCoreWalk(e, { protocolVersion: cap.protocolVersionOffered });
+      ok(`${label}: refused rather than walked to the blocked result`,
+         rr.ran === true && typeof rr.reason === "string");
+      ok(`${label}: and the refusal names the rule`, re.test(rr.reason || ""));
+      ok(`${label}: and continuity is NOT recorded as passed`,
+         !(rr.checks && rr.checks.diffChainContinuity &&
+           rr.checks.diffChainContinuity.passed === true));
+    };
+
+    // the round-7 major itself: the first-row comparison used to be conditional on this field,
+    // so deleting it skipped the check while the result still claimed a chain without a gap
+    walkCase("an absent baseBlock.blockHash is refused rather than skipped",
+             (e) => { delete e.basePackage.baseBlock.blockHash; },
+             /states no baseBlock\.blockHash/);
+    walkCase("an absent baseBlock.height is refused",
+             (e) => { delete e.basePackage.baseBlock.height; },
+             /no integer baseBlock\.height/);
+    // a soundness-review finding: hash continuity says nothing about WHICH heights the rows sit at
+    walkCase("a walk starting above baseBlock.height + 1 is refused",
+             (e) => { e.basePackage.baseBlock.height = height - 3; },
+             /not at baseBlock\.height \+ 1/);
+    walkCase("a walk ending short of observedThroughHeight is refused",
+             (e) => { e.lifecycle.observedThroughHeight = height + 5; },
+             /not at observedThroughHeight/);
+    // the coinbase is authenticated into its block, so its own height outranks the row's label
+    walkCase("a row whose authenticated coinbase states a different height is refused",
+             (e) => {
+               e.coverage.listWalk[0].height = height + 1;
+               e.coverage.coreLedger[0].height = height + 1;
+               e.lifecycle.observedThroughHeight = height + 1;
+               e.basePackage.baseBlock.height = height;
+             },
+             /authenticated coinbase states height/);
+    // a skipped height needs two rows, so this one is built rather than mutated: the second row
+    // repeats the first row's evidence at a height two above it, which keeps the hash chain
+    // intact and is exactly the shape hash-only continuity could not see
+    {
+      const e = JSON.parse(JSON.stringify(env));
+      const second = JSON.parse(JSON.stringify(e.coverage.listWalk[0]));
+      second.height = height + 2;
+      e.coverage.listWalk.push(second);
+      e.lifecycle.observedThroughHeight = height + 2;
+      const rr = verifyCoreWalk(e, { protocolVersion: cap.protocolVersionOffered });
+      ok("a walk that skips a height is refused",
+         rr.ran === true && typeof rr.reason === "string");
+      ok("a walk that skips a height: the refusal names the rule",
+         /jumps from height/.test(rr.reason || ""));
+    }
   }
 
   // (3) no attestation may be minted for a component whose verifier did not complete

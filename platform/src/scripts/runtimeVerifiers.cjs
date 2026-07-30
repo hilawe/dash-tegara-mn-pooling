@@ -514,8 +514,55 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
     } else {
       return BAD(`the base package names an unknown kind ${JSON.stringify(bp.kind)}`);
     }
-    let previousBlockHash = env.basePackage && env.basePackage.baseBlock &&
-                            env.basePackage.baseBlock.blockHash;
+    // ---- THE WALK'S ENDPOINTS AND ITS INTERVAL, BOTH REQUIRED (round 7 MAJOR + round 8 a soundness-review finding) ----
+    // These were one check incomplete in two ways, so they are folded together.
+    //
+    // The hash chain used to start from an OPTIONAL value: `previousBlockHash` was read from the
+    // base package and the first row's comparison ran only `if (previousBlockHash && ...)`. An
+    // envelope that simply omitted `basePackage.baseBlock.blockHash` skipped the first-row check
+    // entirely, and the verifier still recorded diffChainContinuity as passed and still said the
+    // rows chained without a gap. A check that did not run, reported as passed, for the third time
+    // in this component. An absent base hash is now a REFUSAL, not a skipped comparison.
+    //
+    // Hash continuity alone was also never the whole rule. The registry states this component's
+    // check as continuity "over [baseHeight+1, observedThroughHeight]", an INTERVAL, and the
+    // executable specification has enforced it all along with require_consecutive. The runtime
+    // verifier checked only that each diff's base hash equalled the previous row's target, which
+    // says nothing about WHICH heights the rows sit at. A one-row walk whose row height was two
+    // above its base, or a multi-row walk with a repeated or skipped height, produced the same
+    // completed continuity result. The coinbase payload's own height was parsed and never compared
+    // with the row claiming it, so a relabelled row survived that too.
+    const baseBlock = (env.basePackage && env.basePackage.baseBlock) || {};
+    if (typeof baseBlock.blockHash !== "string" || baseBlock.blockHash.length === 0) {
+      return BAD("the base package states no baseBlock.blockHash, so the first row's diff has " +
+                 "nothing to continue from and the chain cannot be walked");
+    }
+    if (!Number.isInteger(baseBlock.height)) {
+      return BAD("the base package states no integer baseBlock.height, so the walk's required " +
+                 "interval [baseHeight+1, observedThroughHeight] is undefined");
+    }
+    if (!Number.isInteger(observed)) {
+      return BAD("lifecycle.observedThroughHeight is not an integer, so the walk's required " +
+                 "interval [baseHeight+1, observedThroughHeight] is undefined");
+    }
+    const firstExpected = baseBlock.height + 1;
+    const lastRow = walk[walk.length - 1];
+    if (walk[0].height !== firstExpected) {
+      return BAD(`the walk starts at height ${walk[0].height}, not at baseBlock.height + 1 ` +
+                 `(${firstExpected}), so the interval opens with a gap`);
+    }
+    if (lastRow.height !== observed) {
+      return BAD(`the walk ends at height ${lastRow.height}, not at observedThroughHeight ` +
+                 `(${observed}), so the interval is not covered to its end`);
+    }
+    for (let i = 1; i < walk.length; i++) {
+      if (walk[i].height !== walk[i - 1].height + 1) {
+        return BAD(`the walk jumps from height ${walk[i - 1].height} to ${walk[i].height}, so the ` +
+                   "rows are not one per height over the interval");
+      }
+    }
+
+    let previousBlockHash = baseBlock.blockHash;
     let rootsChecked = 0;
     let coinbasesAuthenticated = 0;
     let outputsChecked = 0;
@@ -532,7 +579,9 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
       if (diff.blockHash !== row.blockHash) {
         return BAD(`${where}: the diff describes block ${diff.blockHash}, not the row's ${row.blockHash}`);
       }
-      if (previousBlockHash && diff.baseBlockHash !== previousBlockHash) {
+      // unconditional now: previousBlockHash is required above, so there is no input for which
+      // this comparison is skipped
+      if (diff.baseBlockHash !== previousBlockHash) {
         return BAD(`${where}: the diff continues ${diff.baseBlockHash}, breaking the chain from ` +
                    `${previousBlockHash}`);
       }
@@ -581,6 +630,14 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
 
       // THE LIST ROOT, against the coinbase's own commitment AND the row's assertion
       const payload = readCbTxPayload(diff.cbTx);
+      // THE COINBASE STATES ITS OWN HEIGHT, so the row cannot claim a different one. This was
+      // parsed and never compared, which let a row be relabelled with any height while the
+      // authenticated coinbase underneath it said otherwise. The coinbase is authenticated into
+      // its block above, so its height is evidence rather than an assertion.
+      if (payload.height !== row.height) {
+        return BAD(`${where}: the authenticated coinbase states height ${payload.height}, not the ` +
+                   `row's ${row.height}`);
+      }
       const root = computeListRoot(listState);
       if (root !== payload.merkleRootMNList) {
         return BAD(`${where}: the recomputed list root ${root} does not match the coinbase ` +
@@ -620,7 +677,9 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
         }
       }
     }
-    note("diffChainContinuity", true, `${walk.length} row(s) chained without gap or reordering`);
+    note("diffChainContinuity", true,
+         `${walk.length} row(s) chained without gap or reordering, one per height over ` +
+         `[${firstExpected}, ${observed}], each row's height confirmed by its authenticated coinbase`);
     note("listRootPerHeight", true,
        `${rootsChecked} root(s) recomputed over the RESULTING list after applying each delta, ` +
        `each matching the coinbase commitment; the list ends with ${listState.length} entry(ies)`);
@@ -631,7 +690,9 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
          "merkle root, so the commitment each carries is evidence rather than an assertion");
 
     const proved = `${walk.length} walk row(s): diffs parse under the pinned codec, chain without ` +
-      `gap, every coinbase is proven into its block by the retained header's merkle root ` +
+      `gap from the base block one per height over [${firstExpected}, ${observed}] with each ` +
+      `row's height confirmed by its authenticated coinbase, every coinbase is proven into its ` +
+      `block by the retained header's merkle root ` +
       `(${coinbasesAuthenticated}), and every recomputed list root matches the commitment that ` +
       `authenticated coinbase carries (${rootsChecked}); ${outputsChecked} coinbase output ` +
       "array(s) derived from txRaw";
