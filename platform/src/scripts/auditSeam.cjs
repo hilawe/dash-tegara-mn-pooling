@@ -131,30 +131,37 @@ function largestRemainder(baseDuffs, shares) {
  * price of handing in a mutable array.
  */
 /**
- * PREPARED DATA IS NOT ACCEPTED FROM CALLERS AT ALL (round 5, MAJOR, and the fourth design
- * for one problem). The history is worth keeping, because each attempt failed for a different
- * reason and the last one failed subtly.
+ * PREPARED DATA DOES NOT TRAVEL ON THE CONTEXT AT ALL (round 8 finding 5, and the FIFTH
+ * design for one problem). The history is the specification now, because each attempt placed
+ * authority in a different kind of marker and every marker fell the same way.
  *
  *   1. A context flag, which any caller could simply set.
  *   2. A WeakSet keyed on the source array's identity, which an in-place mutation defeated:
  *      the array stayed the same object while its contents changed.
  *   3. A WeakMap brand over frozen captures, mapping each capture back to the source it came
  *      from. That closed fabrication and cross-source replay, and still failed, because the
- *      brand recorded a MUTABLE source. Reproduced: intervals prepared over an empty lifecycle
- *      stayed trusted after a suspension covering heights 141 to 160 was added to that same
- *      lifecycle, so height 150 read RECOGNIZED through the stale capture and UNRECOGNIZED
- *      when re-derived. A brand that says "this came from that object" says nothing about what
- *      that object holds NOW.
+ *      brand recorded a MUTABLE source: intervals prepared over an empty lifecycle stayed
+ *      trusted after a suspension was recorded into that same lifecycle.
+ *   4. A module-private Symbol slot on a context buildEnvelope built itself. The symbol's
+ *      VALUE really was unreachable, and it did not matter: `ctx[PREPARED]` is a property
+ *      READ on a caller-supplied object, and a JavaScript Proxy intercepts property reads by
+ *      key TYPE. A `get` trap that answers every symbol key with a fabricated capture served
+ *      it without ever learning the symbol, and a height outside every real epoch came back
+ *      RECOGNIZED. Reproduced in round 8.
  *
- * The pattern in all three is the same: a cache over data the caller still owns cannot be made
- * sound by making the cache harder to fabricate. So the fast path is no longer reachable from
- * outside. It lives behind a module-private Symbol that is never exported, and only
- * buildEnvelope sets it, on a context it builds itself over evidence it has already cloned and
- * holds the only reference to for the duration of a synchronous build. Every exported entry
- * point re-derives from the evidence in front of it. Production keeps the single preparation
- * per envelope, and a direct caller cannot supply a capture at all, stale or otherwise.
+ * The lesson, stated as the rule this module now follows: a fast path whose authority is read
+ * FROM a caller-supplied object cannot be protected by any marker placed ON that object,
+ * because the caller answers every read of an object it supplies. Flag, identity, brand,
+ * private key, all four are markers, and a fifth marker would fall to a fifth read.
+ *
+ * So prepared data now travels as a SEPARATE ARGUMENT through module-internal functions
+ * (recognizeAtWith, deriveRewardRecordWith) that are not exported and cannot be named from
+ * outside. The exported recognizeAt and deriveRewardRecord have NO prepared parameter and
+ * re-derive from the evidence in front of them, unconditionally. There is no slot to answer,
+ * no brand to satisfy, and no signature through which a capture could arrive, so there is
+ * nothing left to fabricate. Production keeps its single preparation per envelope, passed
+ * argument to argument inside one synchronous build over evidence the builder cloned.
  */
-const PREPARED = Symbol("tegara.auditSeam.prepared");
 
 /**
  * The closing index KEEPS its identity brand, and the difference is worth stating because it is
@@ -261,18 +268,23 @@ function makeSuspendedAt(intervals) {
   };
 }
 
-function recognizeAt(H, ctx) {
+/**
+ * recognizeAtWith - the implementation, with the prepared capture as an ARGUMENT. Module
+ * internal on purpose: this function is not exported, so no caller can name it, and the
+ * `prepared` parameter is therefore reachable only from buildEnvelope's own call chain. It is
+ * never read off `ctx`, so nothing a caller does to the context (own properties, prototypes,
+ * a Proxy answering any key) can put a capture here. See the design history above the
+ * exported wrapper's section for the four marker designs this replaces.
+ */
+function recognizeAtWith(H, ctx, prepared) {
   const { checkpoints, poolProTxHash, poolL1SlotIndex, contractId, poolId, lifecycle, baseHeight } = ctx;
   // VALIDATE THE HEIGHT (confirmation round, MAJOR). Every range test below is a relational
   // comparison, and both comparisons against NaN are false, so recognizeAt(NaN, validCtx)
   // walked straight into an epoch and returned RECOGNIZED.
   if (!Number.isSafeInteger(H) || H < 0) fail(`height ${H} is not a safe non-negative integer`);
   // The bounds the search reads are VALIDATED AND CAPTURED, never re-read from the caller's
-  // array (see assertEpochOrder). buildEnvelope captures once into the private slot below;
-  // every exported entry point re-derives, per call.
-  // The prepared capture is read ONLY from the module-private slot, which no caller can set.
-  // Anything a caller puts on the context is ignored and the bounds are re-derived here.
-  const prepared = ctx[PREPARED];
+  // array (see assertEpochOrder). buildEnvelope prepares once and passes the capture down this
+  // internal chain; the exported entry points pass null and re-derive here, per call.
   const bounds = prepared ? prepared.bounds : assertEpochOrder(checkpoints);
   // NO CALLER-SUPPLIED suspendedAt (repository-access review, MAJOR). An injected function
   // skipped the lifecycle-derived index entirely: with a recorded suspension covering
@@ -333,6 +345,15 @@ function recognizeAt(H, ctx) {
     }
   }
   fail(`height ${H} inside the epoch span has no covering epoch`);
+}
+
+/**
+ * recognizeAt - the EXPORTED recognition entry point. It has no prepared parameter, takes
+ * nothing off the context beyond the evidence fields, and re-derives per call. That is the
+ * whole design: the honest path is the only path a caller can reach.
+ */
+function recognizeAt(H, ctx) {
+  return recognizeAtWith(H, ctx, null);
 }
 
 /**
@@ -405,11 +426,15 @@ function firstClosing(H, platformLedgerOrIndex) {
 
 
 /**
- * deriveRewardRecord - one reward record (recognition + entitlement + conservation +
- * slotFanout), fully derived from the retained evidence for its height.
+ * deriveRewardRecordWith - one reward record (recognition + entitlement + conservation +
+ * slotFanout), fully derived from the retained evidence for its height. Module internal: the
+ * prepared capture is the second POSITIONAL argument, deliberately outside the options
+ * object, because the options object is caller-supplied on the exported path and anything
+ * inside it would be one more caller-reachable slot. The exported deriveRewardRecord below
+ * takes one argument and passes null.
  */
-function deriveRewardRecord({ H, index, coreRow, ctx }) {
-  const recognition = recognizeAt(H, ctx);
+function deriveRewardRecordWith({ H, index, coreRow, ctx }, prepared) {
+  const recognition = recognizeAtWith(H, ctx, prepared);
   const w = ctx.walkAt(H - 1);
   const eligibility = deriveEligibility({
     stateAtHMinus1: w.state, listRoot: w.root, hMinus1: H - 1,
@@ -484,6 +509,11 @@ function deriveRewardRecord({ H, index, coreRow, ctx }) {
     conservation,
     slotFanout,
   };
+}
+
+/** deriveRewardRecord - the EXPORTED form: one argument, no prepared capture, re-derives. */
+function deriveRewardRecord(args) {
+  return deriveRewardRecordWith(args, null);
 }
 
 /**
@@ -670,18 +700,20 @@ function buildEnvelope(evidence, { ranVerifiers = [] } = {}) {
     lifecycle, baseHeight,
     base: { kind: bp.kind, baseMode: bp.baseMode, pHeight: bp.firstAppearance && bp.firstAppearance.pHeight },
     walkAt, bookAt, chains, operatorId, lastEligibleHop,
-    // VALIDATED DATA, captured once, rather than behaviour or raw arrays: the epoch bounds and
-    // the suspension intervals are what the searches read, and the closing index is validated
-    // here instead of revalidating the whole platform ledger for every reward.
-    // the captures go in the MODULE-PRIVATE slot, so no caller can supply or replay one
-    [PREPARED]: Object.freeze({ bounds: epochBounds, susIntervals }),
     closingIndex: prepareClosingIndex(evidence.coverage.platformLedger),
     platformLedger: evidence.coverage.platformLedger,
     chainlockHeight: evidence.validatedChainLock.height,
   };
+  // VALIDATED DATA, captured once, rather than behaviour or raw arrays: the epoch bounds and
+  // the suspension intervals are what the searches read. The capture is NOT placed on the
+  // context. It is passed as an argument down the internal call chain (deriveRewardRecordWith,
+  // recognizeAtWith), which no caller can name, so there is no slot on any caller-reachable
+  // object through which a fabricated or stale capture could arrive. That is the fifth design
+  // for this problem; the four marker designs it replaces are documented above recognizeAtWith.
+  const prepared = Object.freeze({ bounds: epochBounds, susIntervals });
 
   const rewards = evidence.coverage.coreLedger.map((coreRow, index) =>
-    deriveRewardRecord({ H: coreRow.height, index, coreRow, ctx }));
+    deriveRewardRecordWith({ H: coreRow.height, index, coreRow, ctx }, prepared));
   const claimProfile = deriveClaimProfile(ranVerifiers, rewards);
 
   const envelope = { ...evidence, rewards, claimProfile };
