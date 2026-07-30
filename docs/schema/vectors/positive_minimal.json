@@ -1,0 +1,534 @@
+{
+ "adoptedEpochPins": [
+  {
+   "checkpointId": "6b2a063313d563901452791bbec862a67fffe9ac96c0b379e7e1e39215087bae",
+   "epochId": 1
+  }
+ ],
+ "basePackage": {
+  "ancestryProof": "dededededededededededededededededededededededededededededededededededededededede",
+  "baseBlock": {
+   "blockHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "height": 999
+  },
+  "baseMode": "RANGE_LOCAL",
+  "cbTxInclusionProof": "dededededededededededededededededededededededededededededededededededededededede",
+  "cbTxRaw": "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb",
+  "chainlockWitness": "dededededededededededededededededededededededededededededededededededededededede",
+  "coreNetwork": "devnet",
+  "kind": "rooted",
+  "listRoot": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "nodeStateAtBase": {
+   "isValid": true,
+   "kind": "present"
+  },
+  "smlEntries": [
+   "fafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafa"
+  ]
+ },
+ "checkpointAuthority": {
+  "publicKey": "4242424242424242424242424242424242424242424242424242424242424242"
+ },
+ "checkpoints": [
+  {
+   "algorithm": "ed25519",
+   "checkpointId": "6b2a063313d563901452791bbec862a67fffe9ac96c0b379e7e1e39215087bae",
+   "epochId": 1,
+   "epochRange": {
+    "fromCoreHeight": 900,
+    "toCoreHeight": 1600
+   },
+   "extractedBinding": {
+    "bindings": [
+     {
+      "activationCoreHeight": 900,
+      "contractId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+      "poolId": "71nJjoSudYSAR4GApb2mtugtj8iuwf6yjKKQBpzKVehv",
+      "proTxHash": "7838ca79f9866978160af819b677002c7e1151b4665bd15c4c2f11a964d2cdb3",
+      "slotIndex": 7
+     }
+    ],
+    "books": [
+     {
+      "contractId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+      "operatorId": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt",
+      "poolId": "71nJjoSudYSAR4GApb2mtugtj8iuwf6yjKKQBpzKVehv",
+      "shares": [
+       {
+        "denominator": "2",
+        "numerator": "1"
+       },
+       {
+        "denominator": "2",
+        "numerator": "1"
+       }
+      ],
+      "slotCount": 2
+     }
+    ]
+   },
+   "signature": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "signedPayloadBytes": "02000000f2304f7c8a449437d024e0f20b29c6f328151fc0bd0a87d7a1ce8aabee8acb310100000000000000840300000000000041060000000000000100010021212121212121212121212121212121212121212121212121212121212121215959595959595959595959595959595959595959595959595959595959595959373737373737373737373737373737373737373737373737373737373737373702000100000000000000020000000000000001000000000000000200000000000000b3cdd264a9112f4c5cd15b66b451117e2c0077b619f80a16786986f979ca387807212121212121212121212121212121212121212121212121212121212121212159595959595959595959595959595959595959595959595959595959595959598403000000000000",
+   "signerPublicKey": "4242424242424242424242424242424242424242424242424242424242424242"
+  }
+ ],
+ "claimProfile": {
+  "aggregate": "trusted-source",
+  "components": {
+   "baseProof": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyBasePackage"
+    ]
+   },
+   "bookConformance": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyBookConformance"
+    ]
+   },
+   "conservation": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyConservation"
+    ]
+   },
+   "coreContinuityFinality": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyCoreWalk"
+    ]
+   },
+   "decoderCoverage": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyDecodeDispositions"
+    ]
+   },
+   "identifierConversion": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyIdentifierConversion"
+    ]
+   },
+   "l1Backing": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyL1BackingAtHeight"
+    ]
+   },
+   "platformCommits": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyPlatformCommits"
+    ]
+   },
+   "receiptValidity": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyReceiptDuties"
+    ]
+   },
+   "recognition": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyCheckpointRecognition"
+    ]
+   },
+   "schedule": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": []
+   },
+   "transitionHashing": {
+    "claim": "TRUSTED_SOURCE",
+    "verifiersNotRun": [
+     "verifyTransitionHashes"
+    ]
+   }
+  }
+ },
+ "contractId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+ "coreAuditRange": {
+  "fromHeight": 1000,
+  "toHeight": 1001
+ },
+ "coreHeaderChain": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+ "coverage": {
+  "coreEndpointChainlockWitness": "dededededededededededededededededededededededededededededededededededededededede",
+  "coreLedger": [
+   {
+    "blockHash": "f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7",
+    "coinbase": {
+     "inclusionProof": "dededededededededededededededededededededededededededededededededededededededede",
+     "kind": "available",
+     "outputs": [
+      {
+       "amountDuffs": "100000000",
+       "outputIndex": 0,
+       "script": "76a914111111111111111111111111111111111111111188ac"
+      }
+     ],
+     "txRaw": "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb"
+    },
+    "height": 1000,
+    "scheduleResult": {
+     "kind": "pool-scheduled",
+     "requiredOutputs": [
+      {
+       "amountDuffs": "100000000",
+       "script": "76a914111111111111111111111111111111111111111188ac"
+      }
+     ]
+    }
+   },
+   {
+    "blockHash": "f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8",
+    "coinbase": {
+     "inclusionProof": "dededededededededededededededededededededededededededededededededededededededede",
+     "kind": "available",
+     "outputs": [],
+     "txRaw": "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb"
+    },
+    "height": 1001,
+    "scheduleResult": {
+     "kind": "not-pool"
+    }
+   }
+  ],
+  "listWalk": [
+   {
+    "blockHash": "f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7",
+    "cbTxInclusionProof": "dededededededededededededededededededededededededededededededededededededededede",
+    "cbTxRaw": "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb",
+    "height": 1000,
+    "listRoot": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "protxDiffRaw": "dededededededededededededededededededededededededededededededededededededededede",
+    "targetNodeEntry": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "targetNodeState": "PRESENT_VALID"
+   },
+   {
+    "blockHash": "f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8",
+    "cbTxInclusionProof": "dededededededededededededededededededededededededededededededededededededededede",
+    "cbTxRaw": "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb",
+    "height": 1001,
+    "listRoot": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "protxDiffRaw": "dededededededededededededededededededededededededededededededededededededededede",
+    "targetNodeEntry": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "targetNodeState": "PRESENT_VALID"
+   }
+  ],
+  "platformLedger": [
+   {
+    "blockHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "commitSignatures": "dededededededededededededededededededededededededededededededededededededededede",
+    "committedTxCount": 1,
+    "coreChainLockedHeight": 995,
+    "decoderId": "decoder-sha256-dddddddddddddddd",
+    "headerRaw": "dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada",
+    "height": 1,
+    "txs": [
+     {
+      "committedHash": "25aec57643317728fdd3dd5bfd1c20fd1ee3f77f47ee66362467b15595ce4e5d",
+      "decisions": [
+       {
+        "economics": {
+         "buyer": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt",
+         "price": "0",
+         "seller": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt"
+        },
+        "innerIndex": 0,
+        "kind": "retained-position",
+        "position": {
+         "docId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+         "innerIndex": 0,
+         "kind": "creation",
+         "platformHeight": 1,
+         "slotIndex": 0,
+         "txIndex": 0
+        }
+       }
+      ],
+      "inclusionProof": "dededededededededededededededededededededededededededededededededededededededede",
+      "innerCount": 1,
+      "kind": "decoded-batch",
+      "rawBytes": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "txIndex": 0
+     }
+    ],
+    "validatorSetBytes": "dededededededededededededededededededededededededededededededededededededededede",
+    "validatorTransitionProof": "dededededededededededededededededededededededededededededededededededededededede"
+   },
+   {
+    "blockHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "commitSignatures": "dededededededededededededededededededededededededededededededededededededededede",
+    "committedTxCount": 1,
+    "coreChainLockedHeight": 999,
+    "decoderId": "decoder-sha256-dddddddddddddddd",
+    "headerRaw": "dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada",
+    "height": 2,
+    "txs": [
+     {
+      "committedHash": "cfdef44be36264bb575a9f41f14f68b99ffb6567ae4467e74248a921262ca8a8",
+      "decisions": [
+       {
+        "economics": {
+         "buyer": "Ebb3eVTNx46Kq2JxWWZfXg6cjJHxsMY4KZzJhFssM7Yq",
+         "price": "250000000",
+         "seller": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt"
+        },
+        "innerIndex": 0,
+        "kind": "retained-position",
+        "position": {
+         "docId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+         "innerIndex": 0,
+         "kind": "purchase",
+         "platformHeight": 2,
+         "slotIndex": 0,
+         "txIndex": 0
+        }
+       }
+      ],
+      "inclusionProof": "dededededededededededededededededededededededededededededededededededededededede",
+      "innerCount": 1,
+      "kind": "decoded-batch",
+      "rawBytes": "0201ca042c4df8fed57975c15aa58cd687fde21b88867e46f870321689368f41b21f01000500017b947da55aa96b204432ea21f30583e73f23df7d3968d0c8219fc468e620e9b50109736c6f74536861726582473ca11a6e286f53188422a5f15a623d73d3f8d366c47c043b22b2d859fccf0003fc0ee6b28001014120a7f3d423d8b86c570f6c1cf102bcfa8ce63ca1ebf5ea1bf0979264e914b9b64e0932bcc4d5daef032b5bdf413b21cd18a0ee851fa82bd2fa840f3fe4c5f30875",
+      "txIndex": 0
+     }
+    ],
+    "validatorSetBytes": "dededededededededededededededededededededededededededededededededededededededede",
+    "validatorTransitionProof": "dededededededededededededededededededededededededededededededededededededededede"
+   },
+   {
+    "blockHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "commitSignatures": "dededededededededededededededededededededededededededededededededededededededede",
+    "committedTxCount": 0,
+    "coreChainLockedHeight": 1001,
+    "decoderId": "decoder-sha256-dddddddddddddddd",
+    "headerRaw": "dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada",
+    "height": 3,
+    "txs": [],
+    "validatorSetBytes": "dededededededededededededededededededededededededededededededededededededededede",
+    "validatorTransitionProof": "dededededededededededededededededededededededededededededededededededededededede"
+   }
+  ]
+ },
+ "decoderLineage": [
+  {
+   "artifactDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+   "artifactRef": "cas:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+   "decoderId": "decoder-sha256-dddddddddddddddd",
+   "entryPoint": "decode.mjs",
+   "environmentDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+   "executionProfile": "tegara-decoder-v1",
+   "fromHeight": 1,
+   "inputFormat": "raw-committed-tx-bytes",
+   "platformProtocolVersion": 9,
+   "runtime": "oci-image-v1"
+  }
+ ],
+ "envelopeVersion": "1",
+ "lifecycle": {
+  "observedThroughHeight": 1001,
+  "suspensions": [],
+  "terminalHeight": null,
+  "transitions": []
+ },
+ "network": {
+  "coreDevnetGenesisBlockHash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "coreGenesisBlockHash": "000008ca1832a4baf228eb1553c03d3a2c8e02399550dd6ea8d65cec3ef23d2e",
+  "coreNetwork": "devnet",
+  "platformChainId": "dashmate_local_20"
+ },
+ "platformAuditRange": {
+  "fromHeight": 1,
+  "lowerBoundJustification": {
+   "contractCreationHeight": 1,
+   "kind": "contract-genesis"
+  },
+  "toHeight": 3
+ },
+ "platformTrustRoot": "cececececececececececececececececececececececececececececececececececececececece",
+ "poolId": "71nJjoSudYSAR4GApb2mtugtj8iuwf6yjKKQBpzKVehv",
+ "poolL1SlotIndex": 7,
+ "poolProTxHash": "7838ca79f9866978160af819b677002c7e1151b4665bd15c4c2f11a964d2cdb3",
+ "proofCodecProfile": "tegara-proof-codecs-v1",
+ "rewards": [
+  {
+   "conservation": {
+    "grossDuffs": "100000000",
+    "kind": "calculated",
+    "nonSlotComponents": [],
+    "slotAllocationBaseDuffs": "100000000"
+   },
+   "entitlement": {
+    "anomalies": [],
+    "classification": "OWED",
+    "coinbaseEvidence": {
+     "matchedOutputs": [
+      {
+       "amountDuffs": "100000000",
+       "outputIndex": 0,
+       "script": "76a914111111111111111111111111111111111111111188ac"
+      }
+     ],
+     "requiredOutputs": [
+      {
+       "amountDuffs": "100000000",
+       "script": "76a914111111111111111111111111111111111111111188ac"
+      }
+     ],
+     "unexplainedOutputs": []
+    },
+    "eligibility": {
+     "listHeight": 999,
+     "listRoot": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "state": "PRESENT_VALID"
+    },
+    "exclusionReason": {
+     "kind": "none"
+    },
+    "kind": "classified",
+    "scheduleSource": "trusted-core-node:masternode-payments"
+   },
+   "recognition": {
+    "bindingRef": 0,
+    "status": "RECOGNIZED"
+   },
+   "rewardCoreBlockHash": "f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7",
+   "rewardCoreHeight": 1000,
+   "slotFanout": {
+    "kind": "slots",
+    "records": [
+     {
+      "allocatedDuffs": "50000000",
+      "allocation": {
+       "closingBlock": {
+        "coreChainLockedHeight": 1001,
+        "platformHeight": 3
+       },
+       "kind": "resolved",
+       "ownerAtH": "Ebb3eVTNx46Kq2JxWWZfXg6cjJHxsMY4KZzJhFssM7Yq",
+       "snapshotPosition": {
+        "docId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+        "innerIndex": 0,
+        "kind": "purchase",
+        "platformHeight": 2,
+        "slotIndex": 0,
+        "txIndex": 0
+       }
+      },
+      "share": {
+       "denominator": "2",
+       "numerator": "1"
+      },
+      "slotIndex": 0
+     },
+     {
+      "allocatedDuffs": "50000000",
+      "allocation": {
+       "closingBlock": {
+        "coreChainLockedHeight": 1001,
+        "platformHeight": 3
+       },
+       "kind": "resolved",
+       "ownerAtH": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt",
+       "snapshotPosition": {
+        "kind": "pre-creation",
+        "slotIndex": 1
+       }
+      },
+      "share": {
+       "denominator": "2",
+       "numerator": "1"
+      },
+      "slotIndex": 1
+     }
+    ]
+   }
+  },
+  {
+   "conservation": {
+    "kind": "not-applicable"
+   },
+   "entitlement": {
+    "anomalies": [],
+    "classification": "NOT_PAYEE",
+    "coinbaseEvidence": {
+     "matchedOutputs": [],
+     "requiredOutputs": [],
+     "unexplainedOutputs": []
+    },
+    "eligibility": {
+     "listHeight": 1000,
+     "listRoot": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "state": "PRESENT_VALID"
+    },
+    "exclusionReason": {
+     "kind": "none"
+    },
+    "kind": "classified",
+    "scheduleSource": "trusted-core-node:masternode-payments"
+   },
+   "recognition": {
+    "bindingRef": 0,
+    "status": "RECOGNIZED"
+   },
+   "rewardCoreBlockHash": "f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8",
+   "rewardCoreHeight": 1001,
+   "slotFanout": {
+    "kind": "none",
+    "reason": "NOT_PAYEE"
+   }
+  }
+ ],
+ "slots": [
+  {
+   "docId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+   "ownershipChain": [
+    {
+     "buyer": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt",
+     "coreChainLockedHeight": 995,
+     "position": {
+      "docId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+      "innerIndex": 0,
+      "kind": "creation",
+      "platformHeight": 1,
+      "slotIndex": 0,
+      "txIndex": 0
+     },
+     "price": "0",
+     "seller": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt",
+     "transitionHash": "25aec57643317728fdd3dd5bfd1c20fd1ee3f77f47ee66362467b15595ce4e5d"
+    },
+    {
+     "buyer": "Ebb3eVTNx46Kq2JxWWZfXg6cjJHxsMY4KZzJhFssM7Yq",
+     "coreChainLockedHeight": 999,
+     "position": {
+      "docId": "3EKkiwNLWqoUbzFkPrmKbtUB4EweE6f4STzevYUmezeL",
+      "innerIndex": 0,
+      "kind": "purchase",
+      "platformHeight": 2,
+      "slotIndex": 0,
+      "txIndex": 0
+     },
+     "price": "250000000",
+     "seller": "4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt",
+     "transitionHash": "cfdef44be36264bb575a9f41f14f68b99ffb6567ae4467e74248a921262ca8a8"
+    }
+   ],
+   "slotIndex": 0
+  },
+  {
+   "docId": null,
+   "ownershipChain": [],
+   "slotIndex": 1
+  }
+ ],
+ "validatedChainLock": {
+  "blockHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "height": 1500,
+  "quorumDerivation": "dededededededededededededededededededededededededededededededededededededededede",
+  "quorumPublicKeyMaterial": "dededededededededededededededededededededededededededededededededededededededede"
+ },
+ "verifierBundleDigest": "sha256:abababababababababababababababababababababababababababababababab"
+}

@@ -1,0 +1,27 @@
+{
+ "executionProfile": "tegara-decoder-v1",
+ "description": "Normative execution profile for decoder bundles (CN-44, revision 17). The envelope's decoderLineage entries name this profile by its closed enum value; the profile document itself is content-addressed at the RELEASE layer (its sha256 is pinned in the vector manifest and re-checked on every suite run), so its meaning cannot drift between implementations without a new profile name or an envelopeVersion bump.",
+ "runtime": "oci-image-v1",
+ "environmentDigestForm": "a LEAF single-platform OCI image-manifest digest (sha256:<64 lowercase hex>), never a multi-architecture index digest and never a mutable tag",
+ "requirements": {
+  "os": "linux",
+  "arch": "amd64",
+  "filesystem": "read-only",
+  "network": "none",
+  "timezone": "UTC",
+  "locale": "C.UTF-8",
+  "input": "only through the declared inputFormat channel (raw committed transaction bytes on stdin)",
+  "output": "only through the declared output channel (canonical decode dispositions on stdout)",
+  "forbiddenDependencies": [
+   "wall-clock time",
+   "randomness",
+   "host paths",
+   "environment variables"
+  ]
+ },
+ "runtimeVerifierDuties": [
+  "the retrieved image's manifest digest equals the envelope's environmentDigest",
+  "the bundle's canonical manifest repeats environmentDigest, platformProtocolVersion, entryPoint, and inputFormat, each equal to the serialized lineage entry",
+  "execution under this profile is observably conformant: network blocked, filesystem read-only, declared channels only, undeclared environment inputs rejected"
+ ]
+}

@@ -1,0 +1,537 @@
+{
+ "executionProfiles": {
+  "tegara-decoder-v1": {
+   "file": "../execution-profiles/tegara-decoder-v1.json",
+   "sha256": "528f204654770af1c29f04ec37046e351d43ddcf9dbd9963f08ff2b0af28ed48"
+  }
+ },
+ "negatives": [
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "extra-top-level-field",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "price-as-json-number",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "uppercase-hex-hash",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "legacy-suspension-shape",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "gross-not-derived-from-payout",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "schedule-claims-authenticated",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "aggregate-overclaimed",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "largest-remainder-misallocation",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "conservation-sum-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "epoch-range-payload-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "extracted-binding-payload-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "boundary-terminal-omission",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "dropped-intermediate-diff",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "rewards-out-of-order",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "anchor-regression",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "committed-hash-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "classification-not-derivable",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "missing-inner-decision",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "invalid-decoder-selection",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "transition-hash-wrong-position",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "closing-block-not-first",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "first-appearance-txid-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "incorrect-recognition-status",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "pre-base-suspension-omission",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "omitted-chain-hop",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "coinbase-match-not-derived",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "auth-dependency-violation",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "entry-state-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "unequal-shares",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "epoch-pin-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "authority-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "economics-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "coinbase-unavailable-not-unknown",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "truncated-payload",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "pre-dml-activation-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "coinbase-unexplained-pollution",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "anomaly-refs-not-supporting",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "duplicate-coinbase-output-index",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "minted-doc-empty-chain",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "short-signature",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "oversized-epoch-id",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "duplicate-anomaly",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "extra-unmatched-pin",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "coinbase-outputs-out-of-order",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "owed-with-none-fanout",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "inverted-epoch-window",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "spurious-anomaly-on-owed",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "alt-schedule-source",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "network-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "not-pool-nonempty-coinbase",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "decoder-runtime-freeform",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "network-not-in-registry",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "network-public-label-wrong-genesis",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "sml-entries-out-of-order",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "checkpoint-copied-across-devnets",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "network-regtest-relabel",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "network-regtest-label-wrong-genesis",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "devnet-missing-devnet-genesis",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "devnet-genesis-equals-base",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "non-devnet-has-devnet-genesis",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "unused-decoder-lineage-entry",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "decoder-lineage-early-fromheight",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "decoder-id-not-derived",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "artifact-ref-digest-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "environment-digest-bad-grammar",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "execution-profile-not-in-enum",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "artifact-ref-bad-grammar",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "platform-transactions-out-of-order",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "redundant-lineage-split",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "chain-identity-reversed-hash-bytes",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "contract-genesis-after-first-activity",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "platform-two-txs-swapped",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "core-ledgers-same-height-disagree",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "creation-not-by-operator",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "first-appearance-no-addition",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "deployment-name-not-canonical",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "innercount-above-cap",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "committed-txcount-above-cap",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "lone-surrogate-string",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "verifier-bundle-digest-bad-grammar",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "different-script-remainder-omitted",
+   "rejected": true
+  },
+  {
+   "actualLayer": "schema",
+   "expectedLayer": "schema",
+   "name": "proof-codec-profile-not-in-enum",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "observed-through-height-beyond-chainlock",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "terminal-during-suspension-mismatch",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "range-local-absent-unknown-not-terminal",
+   "rejected": true
+  },
+  {
+   "actualLayer": "semantic",
+   "expectedLayer": "semantic",
+   "name": "pre-dml-range-start-at-activation",
+   "rejected": true
+  }
+ ],
+ "positive": {
+  "canonicalByteLength": 15797,
+  "canonicalSha256": "f6c656671362f9952c88e766e9e7f328ed3fa976e9cb8999074c6add184d49fe",
+  "file": "positive_minimal.json"
+ },
+ "proofCodecProfiles": {
+  "tegara-proof-codecs-v1": {
+   "file": "../proof-codecs/tegara-proof-codecs-v1.json",
+   "sha256": "bbf043f5f56be65a3d63a62b7c0c5a36b75b9ee29d2fcbc29538487c7729c101"
+  }
+ }
+}
