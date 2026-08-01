@@ -166,6 +166,25 @@ function parsePeerVersion(payload) {
  */
 function createHandshake({ protocolVersion, baseDisplay, tipDisplay, target,
                            send, capture, refuse, note }) {
+  // THE CONSTRUCTOR VALIDATES ITS OWN OFFER (round 12, MINOR). The command-line path validated
+  // the argument before construction, but this is an exported entry point and took the value on
+  // trust, so a caller reaching it directly with a nonnumeric offer produced NaN. Both range
+  // comparisons against NaN are false, so the out-of-range guard below let it through, and the
+  // session completed with a common version that serializes as null. That is the same unusable
+  // capture the local-offer rule exists to prevent, reached by the public route rather than the
+  // command-line one. Every route into this function now enforces the rule.
+  //
+  // Note this deliberately does NOT default an absent value the way the command-line validator
+  // does. A missing command-line argument sensibly means "the current version"; a caller
+  // constructing a session directly should say which version it is offering.
+  if (!Number.isInteger(protocolVersion)) {
+    throw new Error(`createHandshake needs an integer protocolVersion (got ` +
+                    `${JSON.stringify(protocolVersion)})`);
+  }
+  if (protocolVersion < CAPTURE_MIN_VERSION || protocolVersion > CAPTURE_MAX_VERSION) {
+    throw new Error(`createHandshake was offered protocol ${protocolVersion}, outside the range ` +
+                    `this capture's decoder reads (${CAPTURE_MIN_VERSION}..${CAPTURE_MAX_VERSION})`);
+  }
   let state = "AWAIT_VERSION";
   let peerVersion = null;
   const seen = [];

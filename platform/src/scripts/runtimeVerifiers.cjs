@@ -50,6 +50,7 @@ const { displayToRaw, assertHex32 } = require("./proTxHashCodec.cjs");
 const {
   parseMnListDiff, computeListRoot, readCbTxPayload, parseStandaloneEntry, applyDiffToList,
   extractMerkleMatches, indexHeaderChain, blockHashOf, Reader, readPartialMerkleTree,
+  SPECIAL_TX_VERSION, TRANSACTION_NORMAL, TRANSACTION_COINBASE,
 } = require("./mnListDiffCodec.cjs");
 
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest();
@@ -78,9 +79,9 @@ function hexBuf(h, what = "a hex field") {
 const MAX_MONEY = 21000000n * 100000000n;
 const MAX_TX_EXTRA_PAYLOAD = 10000;
 const MAX_LEGACY_BLOCK_SIZE = 1000000;
-const SPECIAL_TX_VERSION = 3;
-const TRANSACTION_NORMAL = 0;
-const TRANSACTION_COINBASE = 5;
+// SPECIAL_TX_VERSION, TRANSACTION_NORMAL and TRANSACTION_COINBASE are IMPORTED from the codec
+// above rather than restated here. They were duplicated, and a duplicated constant that must
+// agree with its twin is the shape of two defects already folded this cycle.
 
 /**
  * Decode one `dash-merkle-branch-v1` evidence blob, the CPartialMerkleTree serialization at
@@ -421,7 +422,43 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
       Buffer.from("302a300506032b6570032100", "hex"), authority]);
     const key = crypto.createPublicKey({ key: spki, format: "der", type: "spki" });
 
+    // THE ADOPTED PINS, WHICH THIS CHECKER IS ASSIGNED AND NEVER READ (round 12, MAJOR).
+    // The registry gives this checker the rule "epoch ids distinct and strictly increasing; every
+    // checkpoint matches its adoptedEpochPins entry", and lists `adoptedEpochPins` in its own
+    // evidence. The module referenced that field zero times while the executable specification
+    // enforced it in sixteen places, so a completed recognition result meant less than the
+    // registry says it means: re-sign a checkpoint under a new payload and identifier, leave the
+    // old pin in place, and this returned success while the gate declined the same record.
+    //
+    // The pins are the adoption record. A signature proves who wrote a checkpoint; the pin proves
+    // WHICH checkpoint the deployment adopted for that epoch, so without it a validly signed
+    // checkpoint nobody adopted reads the same as one everybody did.
+    if (!Array.isArray(env.adoptedEpochPins)) {
+      return BAD("the record carries no adoptedEpochPins array, so no checkpoint can be shown " +
+                 "to be the one adopted for its epoch");
+    }
+    const pinFor = new Map();
+    for (const pin of env.adoptedEpochPins) {
+      if (!pin || !Number.isInteger(pin.epochId) || typeof pin.checkpointId !== "string") {
+        return BAD("an adoptedEpochPins entry is not an {epochId, checkpointId} pair");
+      }
+      if (pinFor.has(pin.epochId)) {
+        return BAD(`adoptedEpochPins names epoch ${pin.epochId} more than once`);
+      }
+      pinFor.set(pin.epochId, pin.checkpointId);
+    }
+    let previousEpochId = null;
+
     for (const cp of env.checkpoints) {
+      // distinct and strictly increasing, read in the order the record serializes them
+      if (!Number.isInteger(cp.epochId)) {
+        return BAD(`a checkpoint carries a non-integer epochId ${JSON.stringify(cp.epochId)}`);
+      }
+      if (previousEpochId !== null && cp.epochId <= previousEpochId) {
+        return BAD(`checkpoint epoch ids are not strictly increasing (${cp.epochId} follows ` +
+                   `${previousEpochId})`);
+      }
+      previousEpochId = cp.epochId;
       if (cp.signerPublicKey !== authorityHex) {
         return BAD(`checkpoint ${cp.epochId} is not signed by the fixed deployment authority`);
       }
@@ -440,6 +477,15 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
       if (sig.length !== 64) return BAD(`checkpoint ${cp.epochId}: signature is not 64 bytes`);
       if (!crypto.verify(null, digest, key, sig)) {
         return BAD(`checkpoint ${cp.epochId}: the authority signature does not verify`);
+      }
+      // the signature proves authorship; the pin proves ADOPTION, and both are required
+      if (!pinFor.has(cp.epochId)) {
+        return BAD(`checkpoint ${cp.epochId} has no adoptedEpochPins entry, so nothing shows the ` +
+                   "deployment adopted it for that epoch");
+      }
+      if (pinFor.get(cp.epochId) !== cp.checkpointId) {
+        return BAD(`checkpoint ${cp.epochId} is not the one pinned for its epoch (pinned ` +
+                   `${pinFor.get(cp.epochId)}, carried ${cp.checkpointId})`);
       }
     }
     // The signatures and the chain-identity binding are now PROVED. On devnet the registry
@@ -472,8 +518,22 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
     //                registry asks for a nonempty commitment rather than a match against a
     //                declared name, and the envelope carries no devnet-name field to match
     //                against, so nonempty is both what is required and what is checkable.
-    const proved = `${env.checkpoints.length} checkpoint signature(s) verified under the fixed authority, ` +
-      "and every payload's domain tag re-derived from this envelope's own chain identity";
+    // WHAT THIS RESULT DOES AND DOES NOT COVER (round 12, MAJOR). The registry assigns this
+    // checker five rules. Three are performed here: the authority signatures, the chain-identity
+    // domain binding, and now the epoch ordering with its adopted pins. TWO ARE NOT, and naming
+    // them is the point, because a completed result that silently covers three of five is the
+    // same defect this cycle has found repeatedly in other forms. The byte-match of
+    // extractedBinding and epochRange against a canonical decode of the payload needs a v2
+    // payload decoder this module does not have, and the epoch-gaplessness and per-height
+    // recognition outcome are derived by the offline layer. Both are enforced by the executable
+    // specification, which the production writer runs over the exact candidate bytes, so a record
+    // cannot be emitted without them. They are stated rather than implied.
+    const proved = `${env.checkpoints.length} checkpoint signature(s) verified under the fixed ` +
+      "authority, every payload's domain tag re-derived from this envelope's own chain identity, " +
+      "and every checkpoint matched to its adoptedEpochPins entry with epoch ids strictly " +
+      "increasing. NOT covered by this result and enforced by the executable specification " +
+      "instead: the byte-match of extractedBinding and epochRange against the canonical payload " +
+      "decode, and epoch gaplessness with the per-height recognition outcome";
     if (env.network.coreNetwork === "devnet") {
       if (!coreNode || typeof coreNode.getBlockHexByHeight !== "function") {
         return { ran: false, ok: false, proved,

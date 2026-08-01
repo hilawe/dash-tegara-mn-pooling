@@ -67,6 +67,13 @@ const PROTO = {
   CURRENT: 70240,
 };
 const PRO_TX_VERSION = { LegacyBLS: 1, BasicBLS: 2, ExtAddr: 3, MultiPayout: 4 };
+// The transaction-domain constants, here because this is the module that models the wire format
+// [8c9f166a3:src/primitives/transaction.h:215-217 and the type enum at :26,31]. They are EXPORTED
+// so the height-one reader uses these rather than keeping its own copies: two constants that must
+// agree are how the header-chain and capture-range divergences both arose.
+const SPECIAL_TX_VERSION = 3;
+const TRANSACTION_NORMAL = 0;
+const TRANSACTION_COINBASE = 5;
 const MN_TYPE = { Regular: 0, Evo: 1 };
 /** the serialization-layer ceiling every CompactSize is range-checked against */
 const MAX_SIZE = 0x02000000n;
@@ -279,7 +286,17 @@ function readTransaction(r) {
   }
   const lockTime = r.u32("tx locktime");
   let extraPayload = null;
-  if (type !== 0) extraPayload = Buffer.from(r.varbytes("tx extra payload")).toString("hex");
+  // THE PINNED PREDICATE IS BOTH FIELDS (round 12, MINOR). This read an extra payload whenever the
+  // type was nonzero, but the serialization the profile pins reads one only when the version is at
+  // least SPECIAL_VERSION AND the type is not TRANSACTION_NORMAL
+  // [8c9f166a3:src/primitives/transaction.h:328]. A transaction with a version below 3, a nonzero
+  // type and nothing after locktime ends there upstream, while this read the next byte as a
+  // payload length or declined on a short read. Such a transaction is not expected in a valid
+  // post-activation diff, which bounded the effect, but the reader should implement the pinned
+  // predicate rather than a narrower assumed input domain.
+  if (version >= SPECIAL_TX_VERSION && type !== TRANSACTION_NORMAL) {
+    extraPayload = Buffer.from(r.varbytes("tx extra payload")).toString("hex");
+  }
   const raw = Buffer.from(r.buf.subarray(start, r.off));
   return {
     version, type, vin, vout, lockTime, extraPayload,
@@ -600,4 +617,5 @@ module.exports = {
   computeListRoot, readCbTxPayload, readFinalCommitment, readDynBitset,
   parseStandaloneEntry, applyDiffToList, extractMerkleMatches, indexHeaderChain, blockHashOf,
   PROTO, PRO_TX_VERSION, MN_TYPE, LLMQ_COMMITMENT_VERSION,
+  SPECIAL_TX_VERSION, TRANSACTION_NORMAL, TRANSACTION_COINBASE,
 };
