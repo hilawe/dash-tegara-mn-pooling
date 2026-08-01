@@ -267,8 +267,19 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
   throws("a count smaller than the headers supplied is refused",
     () => indexHeaderChain(chainOf(header, header).replace(/^02000000/, "01000000")),
     /declares 1 header\(s\) and carries 2/);
-  ok("a conforming two-header chain indexes both",
-     indexHeaderChain(chainOf(header, header)).size === 1);   // same header twice, one hash
+  // TWO DISTINCT HEADERS, so the assertion establishes what its label says (round 12, MINOR).
+  // This used to pass the SAME header twice and require a map size of one, which proves the
+  // prefixed byte string is accepted and proves nothing about indexing two headers: a regression
+  // that read only the first would still satisfy it. A second header is made by flipping a byte,
+  // which is enough to give it a different hash, and the map must now hold both.
+  const header2 = (Buffer.from(header, "hex")[0] ^ 0xff).toString(16).padStart(2, "0") +
+                  header.slice(2);
+  {
+    const two = indexHeaderChain(chainOf(header, header2));
+    ok("a conforming two-header chain indexes BOTH headers", two.size === 2);
+    ok("and both are reachable by their own hash",
+       two.has(fx.blockHash) && [...two.keys()].filter((k) => k !== fx.blockHash).length === 1);
+  }
   ok("every refusal names the pinned codec, as the other codec refusals do", (() => {
     try { indexHeaderChain(header); return false; }
     catch (e) { return /dash-header-chain-v1/.test(e.message); }
@@ -395,6 +406,49 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
     /bytes remain after the frame/);
   ok("the untouched payload still consumes exactly",
      parseMnListDiff(raw, { protocolVersion: pv }).bytesRemaining === 0);
+}
+
+// ---------------------------------------------------------------------------
+// THE EXTRA-PAYLOAD PREDICATE IS BOTH FIELDS (round 12, MINOR). The reader consumed an extra
+// payload whenever the type was nonzero, while the pinned serialization reads one only when the
+// version is at least SPECIAL_VERSION *and* the type is not TRANSACTION_NORMAL
+// [8c9f166a3:src/primitives/transaction.h:328]. Nothing in the suite drove a transaction with a
+// low version and a nonzero type, so reverting the predicate left every fixture green, which is
+// the unguarded-check shape this cycle keeps finding. This drives it directly.
+// ---------------------------------------------------------------------------
+{
+  const { Reader, readTransaction, SPECIAL_TX_VERSION } = require("./mnListDiffCodec.cjs");
+  // one input, one output, nothing after locktime
+  const tx = (version, type) => Buffer.concat([
+    (() => { const b = Buffer.alloc(4); b.writeUInt16LE(version, 0); b.writeUInt16LE(type, 2); return b; })(),
+    Buffer.from([1]), Buffer.alloc(32), Buffer.from([0xff, 0xff, 0xff, 0xff]),
+    Buffer.from([0]), Buffer.from([0xff, 0xff, 0xff, 0xff]),
+    Buffer.from([1]), Buffer.alloc(8), Buffer.from([0]),
+    Buffer.alloc(4),
+  ]);
+
+  // version below SPECIAL_VERSION with a nonzero type: upstream ends the transaction at locktime
+  {
+    const buf = tx(1, 5);
+    const r = new Reader(buf);
+    const t = readTransaction(r);
+    ok("a low-version nonzero-type transaction ends at locktime, with no extra payload read",
+       t.extraPayload === null && r.remaining === 0);
+  }
+  // and the payload IS read when both conditions hold, so the rule is not simply switched off
+  {
+    const buf = Buffer.concat([tx(SPECIAL_TX_VERSION, 5), Buffer.from([2, 0xab, 0xcd])]);
+    const r = new Reader(buf);
+    const t = readTransaction(r);
+    ok("a special-version nonzero-type transaction DOES carry its extra payload",
+       t.extraPayload === "abcd" && r.remaining === 0);
+  }
+  // the ordinary case is unaffected
+  {
+    const r = new Reader(tx(1, 0));
+    const t = readTransaction(r);
+    ok("an ordinary transaction reads no extra payload", t.extraPayload === null && r.remaining === 0);
+  }
 }
 
 console.log(`mnListDiffCodecTest: ${pass} passed, ${fail} failed`);

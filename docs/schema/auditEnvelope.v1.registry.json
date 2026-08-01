@@ -10,7 +10,9 @@
         "checkpoints[].signedPayloadBytes",
         "checkpoints[].signature",
         "checkpoints[].signerPublicKey",
-        "checkpoints[].epochId"
+        "checkpoints[].epochId",
+        "checkpoints[].algorithm (the checker requires ed25519 by name before verifying)",
+        "checkpoints[].checkpointId (required to equal sha256 of the payload, and to equal the adoptedEpochPins entry for its epoch)"
       ],
       "verifier": "verifyCheckpointRecognition",
       "verifierChecks": [
@@ -59,14 +61,14 @@
         "validatedChainLock.quorumPublicKeyMaterial",
         "validatedChainLock.quorumDerivation",
         "poolProTxHash (the audited identity the walk looks up in the authenticated list)",
-        "basePackage (kind, baseBlock.height, baseBlock.blockHash, and for a rooted base its smlEntries and baseMode; the list is SEEDED from these before any delta applies)",
+        "basePackage (kind, baseBlock.height and baseBlock.blockHash, and for a rooted base its smlEntries; the list is SEEDED from these before any delta applies. baseMode is NOT read by this checker: it selects the first-appearance binding that identifierConversion checks, not the walk's seeding, which keys on kind)",
         "coverage.listWalk[].height and .blockHash (the interval and the block each row names)",
         "coverage.listWalk[].listRoot (the row's asserted root, compared with the recomputed one)",
         "coverage.listWalk[].targetNodeEntry and .targetNodeState (the audited member's claimed state, DERIVED from the authenticated list rather than read)",
         "coverage.coreLedger[].height and .blockHash (the shared-height join between the two Core-side ledgers)",
         "lifecycle.observedThroughHeight (the interval's upper endpoint)",
-        "coreAuditRange.fromHeight and .toHeight (the coverage-interval equation)",
-        "validatedChainLock.height (the same equation's upper bound)"
+        "validatedChainLock.height (the same equation's upper bound)",
+        "coreAuditRange.toHeight (the coverage-interval equation; fromHeight is not read by this checker, the equation is observedThroughHeight >= toHeight and <= the chainlock height)"
       ],
       "verifier": "verifyCoreWalk",
       "verifierChecks": [
@@ -210,7 +212,8 @@
     "transitionHashing": {
       "evidence": [
         "slots[].ownershipChain[].transitionHash",
-        "coverage.platformLedger[].txs[].rawBytes"
+        "coverage.platformLedger[].txs[].rawBytes",
+        "each hop's position fields (the Platform ledger row height and transaction index the hop names), and the committed hash at that position, since the checker resolves the retained bytes THROUGH those positions rather than by order"
       ],
       "verifier": "verifyTransitionHashes",
       "verifierChecks": [
