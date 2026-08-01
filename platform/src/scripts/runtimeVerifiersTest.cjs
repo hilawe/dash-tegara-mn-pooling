@@ -82,6 +82,9 @@ const signed = evidenceOf(positive);
 // inside the transaction still gets a header mined over the resulting merkle root. Without that
 // the altered block would refuse at the hash comparison and never reach the parser, which is the
 // vacuous-fixture pattern this cycle keeps finding (round 8, finding 3).
+// Dash's serialized transaction ceiling [8c9f166a3:src/consensus/consensus.h:10]
+const MAX_TX_SIZE = 1000000;
+
 const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
                        nBits = 0x207fffff, mutateCoinbase = null) => {
   // A FULL BLOCK, not a header (round 5, MUST-FIX). The verifier now requires the coinbase and
@@ -89,9 +92,20 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
   // the devnet-name commitment to the verified hash. A fixture that supplied only a header could
   // not exercise any of that, and the previous one did not.
   //
-  // The coinbase is built the way Dash builds a devnet genesis coinbase
+  // The coinbase follows Dash's devnet genesis constructor
   // (8c9f166a3:src/chainparams.cpp:43-64): one input with a null prevout whose scriptSig is
-  // OP_1 followed by a push of the devnet name, and one OP_RETURN output.
+  // OP_1 followed by a push of the devnet name, one OP_RETURN output carrying the 50 DASH reward
+  // the devnet call site passes (chainparams.cpp:617), transaction version 1, and block version 4.
+  //
+  // WHAT THIS CONTROL DOES AND DOES NOT ESTABLISH (round 10, MINOR). It is a LOCALLY CONSTRUCTED
+  // block that follows the constructor's shape, not output captured from a running node, and the
+  // label used to overclaim that. Two fields still cannot match a real devnet: the timestamp,
+  // because the stock constructor uses the height-zero block's time plus one and the envelope
+  // retains that block's HASH rather than the block, and nBits, because the stock value would make
+  // local mining impractical while the regtest-class target does not. So this proves that the
+  // reader accepts a block of the constructor's shape, and it does NOT prove that a block produced
+  // by a running devnet passes. Establishing that needs a capture from a live node, which is the
+  // same evidence gap the P2P captures exist to close elsewhere in this suite.
   const nameBytes = Buffer.from(devnetName, "utf8");
   // PUSH THE NAME THE WAY DASH'S BUILDER DOES [8c9f166a3:src/script/script.h:450-458]: a direct
   // push below OP_PUSHDATA1, and OP_PUSHDATA1 plus a length byte from 76 bytes up. The helper
@@ -110,7 +124,7 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
     Buffer.from([scriptSig.length]), scriptSig,
     Buffer.from([0xff, 0xff, 0xff, 0xff]),                                    // sequence
     Buffer.from([1]),                                                         // one output
-    Buffer.alloc(8),                                                          // zero value
+    (() => { const v = Buffer.alloc(8); v.writeBigUInt64LE(5000000000n, 0); return v; })(),
     Buffer.from([1, 0x6a]),                                                   // OP_RETURN
     Buffer.from([0, 0, 0, 0]),                                                // locktime
   ]);
@@ -118,7 +132,8 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
   const txid = sha256(sha256(coinbase));
 
   const header = Buffer.alloc(80);
-  header.writeUInt32LE(0x20000000, 0);                                   // version
+  header.writeUInt32LE(4, 0);                                            // block version, as Dash's
+                                                                         // devnet constructor writes
   Buffer.from(parentDisplayHex, "hex").reverse().copy(header, 4);        // prev block
   txid.copy(header, 36);                                                 // merkle root IS the txid
   header.writeUInt32LE(1721900000, 68);                                  // time
@@ -429,9 +444,15 @@ ok("...and its digest differs from the other evidence set",
     });
     const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
                                           { coreNode: nodeOf(blk.blockHex) });
-    ok("OP_PUSHDATA1 used for a length a direct push encodes is refused", r.ok === false);
-    ok("and the refusal names the noncanonical push",
-       /OP_PUSHDATA1 for \d+ bytes, which a direct push encodes/.test(r.reason || ""));
+    // ACCEPTED, and the change of direction is the finding (round 10, MINOR). This case used to
+    // require a REFUSAL, on the reasoning that Dash's builder would have written the shorter form.
+    // That confused how Dash constructs a block with what Dash validates: at height one the only
+    // rules on this scriptSig are the BIP34 byte prefix and the length bound, neither of which
+    // requires minimal pushes in the suffix, and no script-verification flag reaches a coinbase
+    // scriptSig. The old rule therefore declined blocks the network accepts. Asserting acceptance
+    // here is what keeps it from coming back.
+    ok("a nonminimal OP_PUSHDATA1 name push is ACCEPTED, because upstream accepts it",
+       r.ran === true && r.ok === true);
   }
 
   // the real block still passes, and the detail says what was actually checked
@@ -1032,6 +1053,40 @@ ok("...and its digest differs from the other evidence set",
     ok("a coinbase declaring no outputs is refused", r.ok === false);
     ok("and the refusal names the nonempty-output rule",
        /declares no outputs/.test(r.reason || ""));
+  }
+  {
+    // a soundness-review finding, round 10: the SERIALIZED TRANSACTION-SIZE CEILING, which the round-9 fold missed.
+    // That fold read Dash's context-free check to build this boundary and implemented the
+    // extra-payload bound at tx_check.cpp:34-35 while skipping the size ceiling on the two lines
+    // directly above it. Nothing else bounded the total: an output script is limited only by the
+    // shared CompactSize ceiling, so a one-input one-output coinbase satisfied every other rule
+    // here at 1,000,067 bytes and the verifier returned ran:true ok:true.
+    //
+    // The reviewer's own construction, rebuilt: a one-byte devnet name and one zero-value output
+    // whose script is exactly 1,000,000 bytes. Every earlier binding is kept valid, since
+    // mineHeightOne mines the header over the resulting merkle root and the checkpoint is
+    // re-signed for the new chain identity, so the case reaches the size rule rather than
+    // stopping at the hash comparison.
+    const bigScript = Buffer.alloc(MAX_TX_SIZE);          // the output script alone hits the limit
+    const blk = mineHeightOne(signed.network.coreGenesisBlockHash, "d", 0x207fffff, (cb) => {
+      const sl = cb[41];
+      const outCountAt = 42 + sl + 4;                     // past the scriptSig and the sequence
+      const locktimeAt = cb.length - 4;
+      const scriptLen = Buffer.from([0xfe, 0x40, 0x42, 0x0f, 0x00]);   // CompactSize 1,000,000
+      return Buffer.concat([
+        cb.subarray(0, outCountAt), Buffer.from([1]),     // one output
+        Buffer.alloc(8),                                  // zero value
+        scriptLen, bigScript,
+        cb.subarray(locktimeAt),
+      ]);
+    });
+    const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
+                                          { coreNode: nodeOf(blk.blockHex) });
+    ok("a coinbase above Dash's serialized transaction limit is refused", r.ok === false);
+    ok("and the refusal names the size ceiling rather than an earlier check",
+       /above Dash's 1000000-byte transaction limit/.test(r.reason || ""));
+    ok("and the reproduced size is the reviewer's 1,000,067 bytes",
+       /serializes to 1000067 bytes/.test(r.reason || ""));
   }
   {
     // and the CONTROL that keeps all three specific: the unmodified constructor output, which is

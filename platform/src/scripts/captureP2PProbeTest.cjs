@@ -24,6 +24,7 @@ const {
   createHandshake, drainFrames, frame,
   validateOfferedVersion, parsePeerVersion,
   MIN_PEER_PROTO_VERSION, VERSION_FIXED_PREFIX,
+  CAPTURE_MIN_VERSION, CAPTURE_MAX_VERSION,
 } = require("./captureP2PMnListDiffProbe.cjs");
 
 let pass = 0, fail = 0;
@@ -58,12 +59,24 @@ const DIFF = Buffer.from("deadbeef", "hex");
 
 // ---- the local offer is validated before we connect ----
 ok("an absent offer defaults to the current protocol version", validateOfferedVersion(undefined) === 70240);
-ok("a numeric string offer is accepted", validateOfferedVersion("70229") === 70229);
+ok("a numeric string offer inside the decoder's range is accepted",
+   validateOfferedVersion("70235") === 70235);
 throws("a nonnumeric offer is refused rather than becoming NaN",
   () => validateOfferedVersion("abc"), /not an integer/);
 throws("a fractional offer is refused", () => validateOfferedVersion("70240.5"), /not an integer/);
-throws("an offer below the peer minimum is refused",
-  () => validateOfferedVersion(70000), /below the minimum/);
+// THE OFFER IS BOUND BY WHAT THE DECODER READS, NOT BY DASH'S PEER FLOOR (round 10, MAJOR).
+// Staying above 70221 keeps a Dash peer talking to us; it does not mean the bytes we collect can
+// be parsed. 70229 is the case the review named: a perfectly acceptable peer version, and one
+// whose mnlistdiff layout the pinned decoder declines.
+throws("an offer below the decoder's range is refused",
+  () => validateOfferedVersion(CAPTURE_MIN_VERSION - 1), /outside the range this capture's decoder reads/);
+throws("70229 specifically is refused, since the decoder starts at 70230",
+  () => validateOfferedVersion(70229), /outside the range this capture's decoder reads/);
+throws("an offer above the decoder's range is refused",
+  () => validateOfferedVersion(CAPTURE_MAX_VERSION + 1), /outside the range this capture's decoder reads/);
+ok("both ends of the decoder's range are accepted",
+   validateOfferedVersion(CAPTURE_MIN_VERSION) === CAPTURE_MIN_VERSION &&
+   validateOfferedVersion(CAPTURE_MAX_VERSION) === CAPTURE_MAX_VERSION);
 
 // ---- the peer's version body is validated the way Core validates it ----
 ok("a well-formed peer version parses", parsePeerVersion(versionBody(70240)).version === 70240);
@@ -85,9 +98,13 @@ for (const early of ["mnlistdiff", "verack", "ping", "inv"]) {
 }
 
 // ---- ordering: the happy path, and the common version it records ----
+// THIS CASE USED TO NEGOTIATE 70229 AND REQUIRE SUCCESS (round 10, MAJOR). That is below the
+// decoder's supported floor, so the fixture was requiring the client to report a completed
+// capture whose bytes the only available consumer declines. It now negotiates a version inside
+// the decoder's range, and the out-of-range case below is asserted as a refusal instead.
 {
   const { s, sent, captures, refusals } = session(70240);
-  s.handle("version", versionBody(70229));
+  s.handle("version", versionBody(70235));
   ok("the peer's version moves the session to AWAIT_VERACK", s.state === "AWAIT_VERACK");
   ok("a verack is sent in reply", sent[0] && sent[0].command === "verack");
   s.handle("verack", Buffer.alloc(0));
@@ -96,10 +113,37 @@ for (const early of ["mnlistdiff", "verack", "ping", "inv"]) {
   s.handle("mnlistdiff", DIFF);
   ok("the diff is captured", captures.length === 1 && refusals.length === 0);
   ok("the capture records OUR offer", captures[0].protocolVersionOffered === 70240);
-  ok("the capture records the PEER's offer", captures[0].protocolVersionPeerOffered === 70229);
+  ok("the capture records the PEER's offer", captures[0].protocolVersionPeerOffered === 70235);
   ok("the common version is the lower of the two, which selects the layout",
-     captures[0].protocolVersionCommon === 70229);
+     captures[0].protocolVersionCommon === 70235);
   ok("the payload is recorded", captures[0].payloadHex === "deadbeef" && captures[0].byteLength === 4);
+}
+
+// ---- the negotiated version must be one the decoder reads (round 10, MAJOR) ----
+// The peer is entirely acceptable to Dash here. What is not acceptable is spending a capture on a
+// layout nothing in this build can parse, so the session stops BEFORE the request goes out rather
+// than collecting bytes and leaving a consumer to discover the problem.
+{
+  const { s, sent, captures, refusals } = session(70240);
+  s.handle("version", versionBody(70229));
+  ok("a peer negotiating below the decoder's floor is refused", refusals.length === 1);
+  ok("and the refusal names the decoder's range",
+     /negotiated protocol version 70229 is outside the range/.test(refusals[0] || ""));
+  ok("no request is sent, so no bytes are collected for a layout nothing reads",
+     sent.filter((m) => m.command === "getmnlistd").length === 0);
+  s.handle("verack", Buffer.alloc(0));
+  s.handle("mnlistdiff", DIFF);
+  ok("and no capture can follow it", captures.length === 0);
+}
+{
+  // the boundary itself is usable, so the rule refuses only what the decoder truly cannot read
+  const { s, captures, refusals } = session(70240);
+  s.handle("version", versionBody(CAPTURE_MIN_VERSION));
+  s.handle("verack", Buffer.alloc(0));
+  s.handle("mnlistdiff", DIFF);
+  ok("negotiating exactly the decoder's floor is accepted",
+     captures.length === 1 && refusals.length === 0 &&
+     captures[0].protocolVersionCommon === CAPTURE_MIN_VERSION);
 }
 
 // ---- ordering: a diff after version but BEFORE the request is refused ----
