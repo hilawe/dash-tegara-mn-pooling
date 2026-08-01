@@ -77,6 +77,7 @@ function hexBuf(h, what = "a hex field") {
 // src/primitives/transaction.h:217 and the type enum at :26,31].
 const MAX_MONEY = 21000000n * 100000000n;
 const MAX_TX_EXTRA_PAYLOAD = 10000;
+const MAX_LEGACY_BLOCK_SIZE = 1000000;
 const SPECIAL_TX_VERSION = 3;
 const TRANSACTION_NORMAL = 0;
 const TRANSACTION_COINBASE = 5;
@@ -319,6 +320,25 @@ function readGenesisCoinbase(block) {
       }
       r.read(payloadLength, "vExtraPayload");
     }
+    // THE SERIALIZED TRANSACTION-SIZE CEILING (round 10, MUST-FIX, a soundness-review finding). Dash declines any
+    // transaction serializing above MAX_LEGACY_BLOCK_SIZE, 1,000,000 bytes
+    // [8c9f166a3:src/consensus/tx_check.cpp:31-33, src/consensus/consensus.h:10]. Nothing here
+    // bounded it: an output script is limited only by the shared CompactSize ceiling of
+    // 0x02000000, so a one-input one-output coinbase could satisfy every other rule in this
+    // function and still be 1,000,067 bytes, which the reviewer built and this verifier accepted
+    // with ran:true ok:true.
+    //
+    // THIS WAS A MISS IN THE ROUND-9 FOLD, not a newly introduced gap. That fold read this very
+    // function to build the transaction-domain boundary and implemented the extra-payload bound
+    // at tx_check.cpp:34-35 while skipping the size ceiling on the two lines directly above it.
+    // The check must come after the parse because the size is not known until the transaction has
+    // been read to its end, including any extra payload; ordering does not change the verdict,
+    // since these are all context-free rules.
+    const txSize = r.off - txStart;
+    if (txSize > MAX_LEGACY_BLOCK_SIZE) {
+      return { error: `serializes to ${txSize} bytes, above Dash's ` +
+                      `${MAX_LEGACY_BLOCK_SIZE}-byte transaction limit` };
+    }
     // THE COINBASE SCRIPT LENGTH BOUND [8c9f166a3:src/consensus/tx_check.cpp:61-68]. minCbSize is
     // 2 for an ordinary coinbase and 1 only when the type is TRANSACTION_COINBASE, which a devnet
     // genesis coinbase is not.
@@ -368,12 +388,16 @@ function readGenesisCoinbase(block) {
     } else if (pushOp === 0x4c) {                       // OP_PUSHDATA1
       nameLength = scriptSig[sp + 1];
       if (nameLength === undefined) return { error: "the OP_PUSHDATA1 devnet-name push has no length" };
-      if (nameLength < 0x4c) {
-        // Dash's builder would have used a direct push for this length, so the wider form is a
-        // noncanonical encoding of the same value, refused for the same reason CompactSize is
-        return { error: `the devnet-name push uses OP_PUSHDATA1 for ${nameLength} bytes, which ` +
-                        "a direct push encodes" };
-      }
+      // NO MINIMAL-PUSH RULE HERE (round 10, MINOR). This used to decline OP_PUSHDATA1 for a
+      // length a direct push could encode, reasoning that Dash's BUILDER would have written the
+      // shorter form. That reasoning confuses how Dash CONSTRUCTS the block with what Dash
+      // VALIDATES. At height one the only rules applied to this scriptSig are the BIP34 byte
+      // prefix [8c9f166a3:src/validation.cpp:4003-4008] and the length bound
+      // [src/consensus/tx_check.cpp:61-68]. Neither requires minimal pushes in the suffix, and no
+      // script-verification flag reaches a coinbase scriptSig. So the rule declined blocks the
+      // network accepts, which is the false-rejection failure the domain boundary is supposed to
+      // avoid. It is removed rather than narrowed: a rule upstream does not have does not belong
+      // here at all.
       sp += 2;
     } else {
       return { error: "scriptSig carries no devnet-name push after the height" };

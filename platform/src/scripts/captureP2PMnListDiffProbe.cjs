@@ -59,6 +59,20 @@ const COMMAND_RE = /^[a-z0-9]{1,12}$/;      // printable, no padding after the f
 // The version floor a Dash peer enforces: below this it disconnects rather than talk
 // [8c9f166a3:src/version.h:20, and the check at src/net_processing.cpp:3735].
 const MIN_PEER_PROTO_VERSION = 70221;
+
+// THE RANGE THE PAIRED DECODER CAN ACTUALLY READ, imported rather than restated (round 10, MAJOR).
+// Staying above Dash's peer floor is the wrong bar for a CAPTURE. This client existed to collect
+// bytes for `parseMnListDiff`, and that decoder supports only MNLISTDIFF_CHAINLOCKS through
+// CURRENT, because the mnlistdiff layout differs outside it. The client accepted anything from
+// 70221 up, so negotiating 70229 with a peer produced a complete, plausible capture that the only
+// available consumer then declined. Producer and consumer disagreed about the same contract.
+//
+// The range is IMPORTED from the codec instead of being written down twice. Two constants that
+// have to agree are how the disagreement arose, and a second copy here would be free to drift
+// again the next time the codec's support window moves.
+const { PROTO } = require("./mnListDiffCodec.cjs");
+const CAPTURE_MIN_VERSION = PROTO.MNLISTDIFF_CHAINLOCKS;
+const CAPTURE_MAX_VERSION = PROTO.CURRENT;
 // The fixed prefix Core reads from a version payload before ANY optional field:
 // nVersion(4) + nServices(8) + nTime(8) [8c9f166a3:src/net_processing.cpp:3715].
 const VERSION_FIXED_PREFIX = 20;
@@ -112,9 +126,10 @@ function validateOfferedVersion(raw) {
   if (!Number.isInteger(v)) {
     throw new Error(`the offered protocol version ${JSON.stringify(raw)} is not an integer`);
   }
-  if (v < MIN_PEER_PROTO_VERSION) {
-    throw new Error(`the offered protocol version ${v} is below the minimum a Dash peer ` +
-                    `accepts (${MIN_PEER_PROTO_VERSION})`);
+  if (v < CAPTURE_MIN_VERSION || v > CAPTURE_MAX_VERSION) {
+    throw new Error(`the offered protocol version ${v} is outside the range this capture's ` +
+                    `decoder reads (${CAPTURE_MIN_VERSION}..${CAPTURE_MAX_VERSION}); offering ` +
+                    "it could only negotiate a version whose bytes nothing here can parse");
   }
   return v;
 }
@@ -182,6 +197,17 @@ function createHandshake({ protocolVersion, baseDisplay, tipDisplay, target,
         const parsed = parsePeerVersion(payload);
         if (parsed.error) return stop(`version message rejected: ${parsed.error}`);
         peerVersion = parsed.version;
+        // THE NEGOTIATED VERSION DECIDES WHETHER THIS CAPTURE IS USABLE, so it is checked HERE,
+        // before the request goes out, rather than left for a consumer to discover afterwards.
+        // A peer can be perfectly acceptable to Dash and still negotiate a layout the pinned
+        // decoder does not read, and collecting those bytes anyway produces evidence that looks
+        // complete and cannot be parsed.
+        const negotiated = Math.min(protocolVersion, peerVersion);
+        if (negotiated < CAPTURE_MIN_VERSION || negotiated > CAPTURE_MAX_VERSION) {
+          return stop(`the negotiated protocol version ${negotiated} is outside the range this ` +
+                      `capture's decoder reads (${CAPTURE_MIN_VERSION}..${CAPTURE_MAX_VERSION}), ` +
+                      "so the bytes it would collect could not be parsed");
+        }
         state = "AWAIT_VERACK";
         say(`peer offered protocol ${peerVersion}`);
         send("verack", Buffer.alloc(0));
@@ -346,4 +372,5 @@ module.exports = {
   createHandshake, drainFrames, frame, versionPayload,
   validateOfferedVersion, parsePeerVersion,
   MIN_PEER_PROTO_VERSION, VERSION_FIXED_PREFIX, MAGIC,
+  CAPTURE_MIN_VERSION, CAPTURE_MAX_VERSION,
 };
