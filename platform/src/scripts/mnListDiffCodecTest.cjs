@@ -228,18 +228,51 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
 {
   const { indexHeaderChain, extractMerkleMatches } = require("./mnListDiffCodec.cjs");
   const header = fx.blockHeaderRaw;
+  // `dash-header-chain-v1` is a u32 little-endian COUNT followed by that many 80-byte headers
+  // (round 11, a soundness-review finding). These used to pass the bare header, which is not the codec's shape.
+  const chainOf = (...headers) => {
+    const n = Buffer.alloc(4);
+    n.writeUInt32LE(headers.length, 0);
+    return n.toString("hex") + headers.join("");
+  };
 
   // (1) STRICT HEX ON THE RETAINED HEADER CHAIN. Buffer.from truncates at the first non-hex
   // character, and the truncated length is still a multiple of 80, so the length check could not
   // catch it: one real header followed by "zz" indexed one header and discarded the rest silently.
   throws("a header chain with a malformed tail is refused, not truncated",
-    () => indexHeaderChain(header + "zz"), /even-length lowercase hex/);
+    () => indexHeaderChain(chainOf(header) + "zz"), /even-length lowercase hex/);
   throws("an odd-length header chain is refused",
-    () => indexHeaderChain(header + "0"), /even-length lowercase hex/);
+    () => indexHeaderChain(chainOf(header) + "0"), /even-length lowercase hex/);
   throws("upper-case hex is refused, since the domain is lower-case",
-    () => indexHeaderChain(header.toUpperCase()), /even-length lowercase hex/);
+    () => indexHeaderChain(chainOf(header).toUpperCase()), /even-length lowercase hex/);
   ok("the real retained header still indexes to its block",
-     indexHeaderChain(header).has(fx.blockHash));
+     indexHeaderChain(chainOf(header)).has(fx.blockHash));
+
+  // THE COUNT PREFIX IS PART OF THE CODEC AND PART OF THE EVIDENCE (round 11, MAJOR, a soundness-review finding).
+  // `dash-header-chain-v1` is a u32 little-endian count followed by that many 80-byte headers.
+  // The reader used to start at byte zero, so it DECLINED every conforming chain (84 bytes for one
+  // header does not divide by 80) and ACCEPTED unprefixed bytes that are outside the codec. The
+  // two domains do not overlap, which is why nothing caught it until the profile was compared with
+  // the reader.
+  throws("an unprefixed chain, the shape the reader used to require, is now refused",
+    () => indexHeaderChain(header), /whole number of 80-byte/);
+  throws("a chain shorter than its count prefix is refused",
+    () => indexHeaderChain("0100"), /needs its 4-byte count prefix/);
+  throws("a chain with a prefix and no headers is refused",
+    () => indexHeaderChain("00000000"), /carries no headers/);
+  // the count is compared with what follows, so a prefix cannot describe a different chain
+  throws("a count larger than the headers supplied is refused",
+    () => indexHeaderChain(chainOf(header).replace(/^01000000/, "02000000")),
+    /declares 2 header\(s\) and carries 1/);
+  throws("a count smaller than the headers supplied is refused",
+    () => indexHeaderChain(chainOf(header, header).replace(/^02000000/, "01000000")),
+    /declares 1 header\(s\) and carries 2/);
+  ok("a conforming two-header chain indexes both",
+     indexHeaderChain(chainOf(header, header)).size === 1);   // same header twice, one hash
+  ok("every refusal names the pinned codec, as the other codec refusals do", (() => {
+    try { indexHeaderChain(header); return false; }
+    catch (e) { return /dash-header-chain-v1/.test(e.message); }
+  })());
 
   // (2) THE TRANSACTION-COUNT BOUND on a partial merkle tree. A count above what a maximum-size
   // block could hold describes a block that cannot exist, and without the bound such a tree was
