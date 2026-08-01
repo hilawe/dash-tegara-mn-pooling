@@ -1,300 +1,309 @@
 {
- "registryVersion": "1.21",
- "description": "Closed component registry for the v1 audit envelope claim profile (companion v1.21, design note revision 27). Every member names its evidence fields (paths into the envelope), its verifier identifier, its dependencies, and the effect of a downgrade to TRUSTED_SOURCE. The aggregate profiles are MUTUALLY EXCLUSIVE with pinned precedence and are enforced by the named semantic verifier verifyClaimProfile (implemented in check_vectors.py and required of every implementation): exactly one profile matches any component-claim + result state, and result completeness gates the aggregate (any UNCLOSED, UNKNOWN, or UNFINALIZED record forces partial-evidence; DEFERRED is a complete result).",
- "components": {
-  "recognition": {
-   "evidence": [
-    "checkpointAuthority.publicKey",
-    "network (the domain tag derives from the chain identity: name code, height-zero genesis, devnet height-one genesis or zeros)",
-    "adoptedEpochPins",
-    "checkpoints[].signedPayloadBytes",
-    "checkpoints[].signature",
-    "checkpoints[].signerPublicKey",
-    "checkpoints[].epochId"
-   ],
-   "verifier": "verifyCheckpointRecognition",
-   "verifierChecks": [
-    "signature over sha256(signedPayloadBytes) under the FIXED deployment authority key (every checkpoint signer equals checkpointAuthority.publicKey; the domain tag derives from it together with the coreChainIdentityHash derived from the envelope's network fields, a soundness-review finding)",
-    "extractedBinding, epochRange, and epochId byte-match the canonical v2 decode of the payload",
-    "epoch ids distinct and strictly increasing; every checkpoint matches its adoptedEpochPins entry",
-    "book shares are exactly 1/slotCount; each binding's (contractId, poolId) references an existing book (its L1 slotIndex is NOT compared with the retail slotCount); the 512-binding limit holds; every epoch's book for the audited pool carries ONE operator (immutable in v1, a soundness-review finding)",
-    "epoch gaplessness and audit-range coverage; per-height recognize outcome for the audited L1 position"
-   ],
-   "dependencies": [
-    "identifierConversion",
-    "coreContinuityFinality"
-   ],
-   "downgradeEffect": "No record's recognition outcome may be relied on as proof; every slotFanout recognition is TRUSTED_SOURCE context; the aggregate cannot exceed partial-evidence.",
-   "runtimeOnlyChecks": [
-    "DEVNET HEIGHT-ONE AUTHENTICATION (a soundness review): retrieve the block named by network.coreDevnetGenesisBlockHash and verify it hashes to that value, its hashPrevBlock is the height-zero base genesis, it carries valid proof of work, and its coinbase carries the height-one nonempty devnet-name commitment (8c9f166a3:src/chainparams.cpp:43-64 CreateDevNetGenesisBlock, 85-105 FindDevNetGenesisBlock, 617-618 the devnet params deriving hashDevnetGenesisBlock). The offline suite checks only that the field is nonzero, distinct from the base, and correctly folded into the derived domain identity; a coherent envelope rebuilt under a fabricated height-one hash passes both offline layers BY DESIGN. Retrieval failure or any failed block check prevents recognition from claiming AUTHENTICATED."
-   ]
+  "registryVersion": "1.21",
+  "description": "Closed component registry for the v1 audit envelope claim profile (companion v1.21, design note revision 27). Every member names its evidence fields (paths into the envelope), its verifier identifier, its dependencies, and the effect of a downgrade to TRUSTED_SOURCE. The aggregate profiles are MUTUALLY EXCLUSIVE with pinned precedence and are enforced by the named semantic verifier verifyClaimProfile (implemented in check_vectors.py and required of every implementation): exactly one profile matches any component-claim + result state, and result completeness gates the aggregate (any UNCLOSED, UNKNOWN, or UNFINALIZED record forces partial-evidence; DEFERRED is a complete result).",
+  "components": {
+    "recognition": {
+      "evidence": [
+        "checkpointAuthority.publicKey",
+        "network (the domain tag derives from the chain identity: name code, height-zero genesis, devnet height-one genesis or zeros)",
+        "adoptedEpochPins",
+        "checkpoints[].signedPayloadBytes",
+        "checkpoints[].signature",
+        "checkpoints[].signerPublicKey",
+        "checkpoints[].epochId"
+      ],
+      "verifier": "verifyCheckpointRecognition",
+      "verifierChecks": [
+        "signature over sha256(signedPayloadBytes) under the FIXED deployment authority key (every checkpoint signer equals checkpointAuthority.publicKey; the domain tag derives from it together with the coreChainIdentityHash derived from the envelope's network fields, a soundness-review finding)",
+        "extractedBinding, epochRange, and epochId byte-match the canonical v2 decode of the payload",
+        "epoch ids distinct and strictly increasing; every checkpoint matches its adoptedEpochPins entry",
+        "book shares are exactly 1/slotCount; each binding's (contractId, poolId) references an existing book (its L1 slotIndex is NOT compared with the retail slotCount); the 512-binding limit holds; every epoch's book for the audited pool carries ONE operator (immutable in v1, a soundness-review finding)",
+        "epoch gaplessness and audit-range coverage; per-height recognize outcome for the audited L1 position"
+      ],
+      "dependencies": [
+        "identifierConversion",
+        "coreContinuityFinality"
+      ],
+      "downgradeEffect": "No record's recognition outcome may be relied on as proof; every slotFanout recognition is TRUSTED_SOURCE context; the aggregate cannot exceed partial-evidence.",
+      "runtimeOnlyChecks": [
+        "DEVNET HEIGHT-ONE AUTHENTICATION (a soundness review): retrieve the block named by network.coreDevnetGenesisBlockHash and verify it hashes to that value, its hashPrevBlock is the height-zero base genesis, it carries valid proof of work, and its coinbase carries the height-one nonempty devnet-name commitment (8c9f166a3:src/chainparams.cpp:43-64 CreateDevNetGenesisBlock, 85-105 FindDevNetGenesisBlock, 617-618 the devnet params deriving hashDevnetGenesisBlock). The offline suite checks only that the field is nonzero, distinct from the base, and correctly folded into the derived domain identity; a coherent envelope rebuilt under a fabricated height-one hash passes both offline layers BY DESIGN. Retrieval failure or any failed block check prevents recognition from claiming AUTHENTICATED."
+      ]
+    },
+    "baseProof": {
+      "evidence": [
+        "proofCodecProfile + verifierBundleDigest (the pinned codec-profile release document governs every proof-blob evidence field of this component, and the envelope-committed bundle digest identifies the verifier bundle that interprets them; the deployment's actual bundle hashing to the serialized digest is a runtime duty, revision 26)",
+        "basePackage (incl. firstAppearance.additionDiffRaw and raw ProRegTx bytes in FIRST_APPEARANCE mode)"
+      ],
+      "verifier": "verifyBasePackage",
+      "verifierChecks": [
+        "ChainLock finality of the base block",
+        "SML root against the cbTx coinbase commitment (rooted member)",
+        "absence-at-P-1 plus ProRegTx-at-P (FIRST_APPEARANCE mode), and the walked P row ADDS the node (present at P; a diff byte-match alone does not prove the addition, a soundness-review finding)",
+        "activation params (pre-dml member)"
+      ],
+      "dependencies": [
+        "coreContinuityFinality",
+        "identifierConversion"
+      ],
+      "downgradeEffect": "The lifecycle journal's initial state is trusted; full-lifetime claims are unavailable; eligibility states remain typed but their root anchoring is trusted."
+    },
+    "coreContinuityFinality": {
+      "evidence": [
+        "proofCodecProfile + verifierBundleDigest (the pinned codec-profile release document governs every proof-blob evidence field of this component, and the envelope-committed bundle digest identifies the verifier bundle that interprets them; the deployment's actual bundle hashing to the serialized digest is a runtime duty, revision 26)",
+        "coverage.listWalk[].protxDiffRaw",
+        "coverage.listWalk[].cbTxRaw",
+        "coverage.listWalk[].cbTxInclusionProof",
+        "coverage.coreLedger[].coinbase (kind, txRaw, inclusionProof, outputs)",
+        "coreHeaderChain",
+        "coverage.coreEndpointChainlockWitness",
+        "validatedChainLock.quorumPublicKeyMaterial",
+        "validatedChainLock.quorumDerivation",
+        "poolProTxHash (the audited identity the walk looks up in the authenticated list)",
+        "basePackage (kind, baseBlock.height, baseBlock.blockHash, and for a rooted base its smlEntries and baseMode; the list is SEEDED from these before any delta applies)",
+        "coverage.listWalk[].height and .blockHash (the interval and the block each row names)",
+        "coverage.listWalk[].listRoot (the row's asserted root, compared with the recomputed one)",
+        "coverage.listWalk[].targetNodeEntry and .targetNodeState (the audited member's claimed state, DERIVED from the authenticated list rather than read)",
+        "coverage.coreLedger[].height and .blockHash (the shared-height join between the two Core-side ledgers)",
+        "lifecycle.observedThroughHeight (the interval's upper endpoint)",
+        "coreAuditRange.fromHeight and .toHeight (the coverage-interval equation)",
+        "validatedChainLock.height (the same equation's upper bound)"
+      ],
+      "verifier": "verifyCoreWalk",
+      "verifierChecks": [
+        "list-walk diff chain hash continuity over [baseHeight+1, observedThroughHeight]",
+        "SML root per height against the coinbase commitment",
+        "the retained Core header chain proves ancestry of every referenced block",
+        "endpoint ChainLock signature under the quorum material, the material derived from the retained quorum commitments",
+        "coverage-interval equation (observedThroughHeight >= toHeight, <= chainlock)",
+        "the two Core-side ledgers describe ONE chain: at every shared height the coreLedger row's blockHash equals the listWalk row's, and available coinbase evidence carries the SAME transaction bytes as the listWalk cbTx (a soundness review)",
+        "the serialized coinbase OUTPUTS array is DERIVED from the retained txRaw: parse the coinbase transaction and compare every (script, amount, index) with the serialized array (a soundness review)"
+      ],
+      "dependencies": [],
+      "downgradeEffect": "Eligibility states and the lifecycle journal become TRUSTED_SOURCE; no entitlement eligibility may carry AUTHENTICATED."
+    },
+    "platformCommits": {
+      "evidence": [
+        "proofCodecProfile + verifierBundleDigest (the pinned codec-profile release document governs every proof-blob evidence field of this component, and the envelope-committed bundle digest identifies the verifier bundle that interprets them; the deployment's actual bundle hashing to the serialized digest is a runtime duty, revision 26)",
+        "coverage.platformLedger[].headerRaw",
+        "coverage.platformLedger[].commitSignatures",
+        "coverage.platformLedger[].validatorSetBytes",
+        "coverage.platformLedger[].validatorTransitionProof",
+        "coverage.platformLedger[].txs[].inclusionProof",
+        "coverage.platformLedger[].txs[].txIndex",
+        "coverage.platformLedger[].txs[].committedHash",
+        "coverage.platformLedger[].txs[].rawBytes",
+        "coverage.platformLedger[].committedTxCount",
+        "platformTrustRoot"
+      ],
+      "verifier": "verifyPlatformCommits",
+      "verifierChecks": [
+        "commit signatures over the signed headers per walked height under the validator set",
+        "validator-set transitions proved across the interval from the pinned trust root",
+        "each retained transaction bound to the signed data root by its inclusion proof AT ITS SERIALIZED txIndex: the proof's committed leaf position must EQUAL the transaction's txIndex (a soundness review)",
+        "COMPLETENESS (a soundness review): position-bound membership proves order, not completeness -- an omitted contiguous suffix or an asserted-empty block carries no contradicting proof. The verifier must RECOMPUTE the Tenderdash data root from the COMPLETE ordered rawBytes array and require equality with the data root derived from the signed header, with the zero-transaction case compared against the protocol's canonical empty-data root; committedTxCount == len(txs) is suite-enforced offline. Runtime conformance case: a valid two-transaction block with its final transaction omitted must FAIL this check"
+      ],
+      "dependencies": [],
+      "downgradeEffect": "Ownership history and anchors become TRUSTED_SOURCE; allocation results lose AUTHENTICATED.",
+      "runtimeOnlyChecks": [
+        "derive blockHash, dataRoot, chainId, and coreChainLockedHeight FROM headerRaw and compare every duplicated ledger field (needs the real Tenderdash header codec; the conformance suite uses placeholder headers and checks only anchor non-regression + contiguity, so this binding is a RUNTIME duty, exercised by the deployed verifier not the vector suite)"
+      ]
+    },
+    "decoderCoverage": {
+      "evidence": [
+        "coverage.platformLedger[].txs[].rawBytes",
+        "coverage.platformLedger[].decoderId",
+        "decoderLineage[].fromHeight",
+        "decoderLineage[].decoderId",
+        "decoderLineage[].artifactDigest",
+        "decoderLineage[].artifactRef",
+        "decoderLineage[].platformProtocolVersion",
+        "decoderLineage[].runtime",
+        "decoderLineage[].environmentDigest",
+        "decoderLineage[].executionProfile",
+        "decoderLineage[].entryPoint",
+        "decoderLineage[].inputFormat"
+      ],
+      "verifier": "verifyDecodeDispositions",
+      "verifierChecks": [
+        "committedHash equals sha256(rawBytes) per tx (EVERY tx retains raw bytes)",
+        "re-decode of every tx reproduces every disposition and inner decision",
+        "the decoder bundle retrieved by artifactRef hashes to artifactDigest (retrieval failure removes AUTHENTICATED); the ref GRAMMAR is closed and must embed that same digest (suite-enforced, a soundness-review finding)",
+        "decoderId is DERIVED from the artifact digest (decoder-sha256-<first 16 hex>), and the retained lineage extent is EXACT over the platform audit interval: it starts at the platform fromHeight and carries no entry beyond the toHeight (suite-enforced, a soundness-review finding)",
+        "the execution descriptor is a CLOSED vocabulary (runtime oci-image-v1, executionProfile from the pinned release document, entryPoint, inputFormat) plus a content-addressed environmentDigest (a LEAF single-platform OCI image-manifest digest, never an index or tag); grammar and enums are suite-enforced, and the profile document's sha256 is pinned in the vector manifest and re-checked on every suite run (a soundness review)",
+        "RUNTIME duties (need the real bundle/image): the retrieved image's manifest digest equals environmentDigest, and the bundle's canonical manifest repeats environmentDigest, platformProtocolVersion, entryPoint, and inputFormat, each equal to the serialized lineage entry",
+        "per-row decoderId equals the greatest-fromHeight-not-exceeding lineage selection",
+        "adjacent lineage entries differ in at least one bundle-identity field (artifactDigest, platformProtocolVersion, environmentDigest): the lineage records CHANGE POINTS, so one decoder history has exactly one serialization (a soundness review)",
+        "lineage coverage is complete and non-overlapping"
+      ],
+      "dependencies": [
+        "platformCommits"
+      ],
+      "downgradeEffect": "Positions and the pre-creation conclusions become TRUSTED_SOURCE; allocation results lose AUTHENTICATED."
+    },
+    "l1Backing": {
+      "evidence": [],
+      "verifier": "verifyL1BackingAtHeight",
+      "verifierChecks": [
+        "historical L1 backing validation at each classified height (deferred work; evidence schema lands with it)"
+      ],
+      "dependencies": [
+        "coreContinuityFinality"
+      ],
+      "downgradeEffect": "Structurally TRUSTED_SOURCE until built and BARRED from AUTHENTICATED (empty evidence set); its absence caps the aggregate at partial-evidence for the combined audit claim.",
+      "structurallyBarredFromAuthenticated": true
+    },
+    "receiptValidity": {
+      "evidence": [],
+      "verifier": "verifyReceiptDuties",
+      "verifierChecks": [
+        "result-1 receipt-validity duties (deferred work; evidence schema lands with it)"
+      ],
+      "dependencies": [],
+      "downgradeEffect": "Structurally TRUSTED_SOURCE until built and BARRED from AUTHENTICATED (empty evidence set); its absence caps the aggregate at partial-evidence for the combined audit claim.",
+      "structurallyBarredFromAuthenticated": true
+    },
+    "bookConformance": {
+      "evidence": [
+        "slots",
+        "checkpoints[].extractedBinding",
+        "platformAuditRange.lowerBoundJustification"
+      ],
+      "verifier": "verifyBookConformance",
+      "verifierChecks": [
+        "exactly slotCount slot entries against the signed book",
+        "each minted slot's chain anchored to an observed creation inside the pinned lower bound",
+        "the book operatorId equals the immutable pool document's owner (runtime; the authority cannot substitute the operator)",
+        "under an absence-proof bound, the retained state proves ALL slot documents ABSENT at fromHeight-1 for the audited contract (any present slot invalidates this v1 union member); per-slot mid-history seeding is unsupported in v1"
+      ],
+      "dependencies": [
+        "decoderCoverage",
+        "recognition"
+      ],
+      "downgradeEffect": "Slot-chain completeness is trusted; pre-creation conclusions lose AUTHENTICATED.",
+      "runtimeOnlyChecks": [
+        "verifyBookConformance decodes the absence-proof stateProof with the GroveDB codec the ENVELOPE-COMMITTED bundle defines (proofCodecProfile + verifierBundleDigest; revision 27 registry completeness)",
+        "CONTRACT-CREATION HEIGHT AUTHENTICATION (a soundness review): under a contract-genesis lower-bound justification, the claimed contractCreationHeight must be verified against retrieved Platform state (the contract-create transition and its committed height), because a false-high claimed height would let fromHeight sit above the REAL creation and truncate earlier ownership history. The suite enforces the offline consistency teeth (no retained creation position may precede the claimed height, and fromHeight <= the claimed height); the truth of the claimed height itself needs the retrieved evidence AUTHENTICATED against a SIGNED Platform header and the pinned trust chain (an ordinary node query response is NOT sufficient for AUTHENTICATED), and failure removes AUTHENTICATED from the lower-bound justification.",
+        "OPERATOR-TO-POOL-DOCUMENT BINDING (a soundness review): the signed book's operatorId must equal the immutable pool document's owner, but the envelope retains NO pool-document evidence in v1 (the pool document may predate the walked Platform interval), so this check needs externally retrieved, independently verified pool-document state. The evidence schema (the raw pool document, its inclusion proof, and its committed-block anchor) lands with the build, following the l1Backing/receiptValidity precedent. UNTIL a runtime verifier retrieves and verifies that evidence, bookConformance cannot claim AUTHENTICATED on the operator binding: a substituted signed operator with matching pre-creation allocations passes both offline layers BY DESIGN, and the claim discipline, not the suite, is what prevents relying on it."
+      ]
+    },
+    "conservation": {
+      "evidence": [
+        "rewards[].conservation",
+        "rewards[].slotFanout"
+      ],
+      "verifier": "verifyConservation",
+      "verifierChecks": [
+        "slotAllocationBase = gross - sum(nonSlotComponents)",
+        "largest-remainder reproduction from the signed shares (exact rationals, ties by ascending slotIndex)",
+        "sum(allocatedDuffs) = slotAllocationBase exactly (height-level recognition; no per-slot withholding)",
+        "the result matrix (entitlement x conservation x fanout) holds for every height",
+        "requiredOutputs is the pool masternode's OWNER-PAYOUT VECTOR (0..N, one output per owner-payout entry, zero-amount omitted; the operator reward is a separate out-of-book output). NARROWED (revision 25): the vector's SOURCE SELECTION is part of the structurally TRUSTED_SOURCE schedule residual, because the serialized SML entry excludes scriptPayout and the payout shares (mem-only, 8c9f166a3:src/evo/simplifiedmns.h:38-40), so no retained evidence authenticates the selection; the AUTHENTICATED part is coinbase parsing, consuming owner-first matching, and the arithmetic relative to that trusted vector, and a false-zero or wrong-L1 selection is detectable only as far as the trusted schedule source is honest in v1 (authenticating the selection needs retained registration/payout-update history, the same future evidence schema as the operator-side audit; a soundness-review finding/a soundness-review finding)",
+        "OWNER-FIRST CONSUMING ATTRIBUTION with the operator OUT OF SCOPE (a soundness review): v1 derives NO operator expectation, because the retained simplified-list evidence cannot authenticate one (payout fields are MEMORY-ONLY, excluded from serialized entries, 8c9f166a3:src/evo/simplifiedmns.h:38-40; the operator percentage lives in the full deterministic state, src/evo/deterministicmns.h:52-75). The runtime derivation matches actual outputs to the OWNER vector by CONSUMING multiset match in ascending output index; one output satisfies at most one owner expectation; every remaining output (the operator's included) is informational unexplainedOutputs evidence. Operator insufficiency is NOT a member-side anomaly in v1 (no authenticated expectation exists to be insufficient against); an operator-side audit is future work with its own retained-registration evidence schema. Dash validation is non-consuming (payments.cpp:65-87,134-147), so the convention pins which reading the envelope serializes, not a consensus rule"
+      ],
+      "dependencies": [
+        "recognition",
+        "coreContinuityFinality",
+        "bookConformance"
+      ],
+      "downgradeEffect": "Amounts are trusted arithmetic; the combined audit claim caps at partial-evidence."
+    },
+    "transitionHashing": {
+      "evidence": [
+        "slots[].ownershipChain[].transitionHash",
+        "coverage.platformLedger[].txs[].rawBytes"
+      ],
+      "verifier": "verifyTransitionHashes",
+      "verifierChecks": [
+        "each transitionHash equals sha256 of the retained committed bytes",
+        "the pinned test vector reproduces"
+      ],
+      "dependencies": [
+        "decoderCoverage"
+      ],
+      "downgradeEffect": "Hop binding to the block store is trusted; ownership chains lose AUTHENTICATED."
+    },
+    "identifierConversion": {
+      "evidence": [
+        "poolProTxHash",
+        "basePackage"
+      ],
+      "verifier": "verifyIdentifierConversion",
+      "verifierChecks": [
+        "proTxHash display/internal byte-order conversion reproduces the pinned non-symmetric vector",
+        "ProRegTx txid equals proTxHash (FIRST_APPEARANCE mode)"
+      ],
+      "dependencies": [],
+      "downgradeEffect": "Identity bindings are trusted; recognition and baseProof cannot carry AUTHENTICATED (dependency rule)."
+    },
+    "schedule": {
+      "evidence": [
+        "coverage.coreLedger[].scheduleResult",
+        "rewards[].entitlement.scheduleSource"
+      ],
+      "verifier": null,
+      "verifierChecks": [
+        "NONE EXISTS IN V1: the payee schedule is structurally TRUSTED_SOURCE (the disclosed residual); this member can never claim AUTHENTICATED"
+      ],
+      "dependencies": [],
+      "downgradeEffect": "Always TRUSTED_SOURCE; does not further downgrade the aggregate below proof-verified-except-schedule.",
+      "structurallyBarredFromAuthenticated": true
+    }
   },
-  "baseProof": {
-   "evidence": [
-    "proofCodecProfile + verifierBundleDigest (the pinned codec-profile release document governs every proof-blob evidence field of this component, and the envelope-committed bundle digest identifies the verifier bundle that interprets them; the deployment's actual bundle hashing to the serialized digest is a runtime duty, revision 26)",
-    "basePackage (incl. firstAppearance.additionDiffRaw and raw ProRegTx bytes in FIRST_APPEARANCE mode)"
-   ],
-   "verifier": "verifyBasePackage",
-   "verifierChecks": [
-    "ChainLock finality of the base block",
-    "SML root against the cbTx coinbase commitment (rooted member)",
-    "absence-at-P-1 plus ProRegTx-at-P (FIRST_APPEARANCE mode), and the walked P row ADDS the node (present at P; a diff byte-match alone does not prove the addition, a soundness-review finding)",
-    "activation params (pre-dml member)"
-   ],
-   "dependencies": [
-    "coreContinuityFinality",
-    "identifierConversion"
-   ],
-   "downgradeEffect": "The lifecycle journal's initial state is trusted; full-lifetime claims are unavailable; eligibility states remain typed but their root anchoring is trusted."
+  "aggregateProfiles": {
+    "_rule": "MUTUALLY EXCLUSIVE, enforced by verifyClaimProfile. Exactly one profile matches; the writer must emit that one. Result completeness gates the aggregate.",
+    "trusted-source": {
+      "matches": "NO component claims AUTHENTICATED.",
+      "authenticatedRequired": [],
+      "trustedPermitted": [
+        "all"
+      ]
+    },
+    "partial-evidence": {
+      "matches": "At least one component claims AUTHENTICATED, AND (some combined-claim component is not AUTHENTICATED, OR any record is UNCLOSED, UNKNOWN, or UNFINALIZED).",
+      "authenticatedRequired": [
+        "at least one"
+      ],
+      "trustedPermitted": [
+        "any"
+      ]
+    },
+    "proof-verified-except-schedule": {
+      "matches": "Every combined-claim component (all members except schedule) claims AUTHENTICATED AND every record is complete (DEFERRED counts as complete). UNREACHABLE until the l1Backing and receiptValidity verifiers exist, since both are structurally barred today.",
+      "authenticatedRequired": [
+        "recognition",
+        "baseProof",
+        "coreContinuityFinality",
+        "platformCommits",
+        "decoderCoverage",
+        "l1Backing",
+        "receiptValidity",
+        "bookConformance",
+        "conservation",
+        "transitionHashing",
+        "identifierConversion"
+      ],
+      "trustedPermitted": [
+        "schedule"
+      ]
+    }
   },
-  "coreContinuityFinality": {
-   "evidence": [
-    "proofCodecProfile + verifierBundleDigest (the pinned codec-profile release document governs every proof-blob evidence field of this component, and the envelope-committed bundle digest identifies the verifier bundle that interprets them; the deployment's actual bundle hashing to the serialized digest is a runtime duty, revision 26)",
-    "coverage.listWalk[].protxDiffRaw",
-    "coverage.listWalk[].cbTxRaw",
-    "coverage.listWalk[].cbTxInclusionProof",
-    "coverage.coreLedger[].coinbase (kind, txRaw, inclusionProof, outputs)",
-    "coreHeaderChain",
-    "coverage.coreEndpointChainlockWitness",
-    "validatedChainLock.quorumPublicKeyMaterial",
-    "validatedChainLock.quorumDerivation"
-   ],
-   "verifier": "verifyCoreWalk",
-   "verifierChecks": [
-    "list-walk diff chain hash continuity over [baseHeight+1, observedThroughHeight]",
-    "SML root per height against the coinbase commitment",
-    "the retained Core header chain proves ancestry of every referenced block",
-    "endpoint ChainLock signature under the quorum material, the material derived from the retained quorum commitments",
-    "coverage-interval equation (observedThroughHeight >= toHeight, <= chainlock)",
-    "the two Core-side ledgers describe ONE chain: at every shared height the coreLedger row's blockHash equals the listWalk row's, and available coinbase evidence carries the SAME transaction bytes as the listWalk cbTx (a soundness review)",
-    "the serialized coinbase OUTPUTS array is DERIVED from the retained txRaw: parse the coinbase transaction and compare every (script, amount, index) with the serialized array (a soundness review)"
-   ],
-   "dependencies": [],
-   "downgradeEffect": "Eligibility states and the lifecycle journal become TRUSTED_SOURCE; no entitlement eligibility may carry AUTHENTICATED."
-  },
-  "platformCommits": {
-   "evidence": [
-    "proofCodecProfile + verifierBundleDigest (the pinned codec-profile release document governs every proof-blob evidence field of this component, and the envelope-committed bundle digest identifies the verifier bundle that interprets them; the deployment's actual bundle hashing to the serialized digest is a runtime duty, revision 26)",
-    "coverage.platformLedger[].headerRaw",
-    "coverage.platformLedger[].commitSignatures",
-    "coverage.platformLedger[].validatorSetBytes",
-    "coverage.platformLedger[].validatorTransitionProof",
-    "coverage.platformLedger[].txs[].inclusionProof",
-    "coverage.platformLedger[].txs[].txIndex",
-    "coverage.platformLedger[].txs[].committedHash",
-    "coverage.platformLedger[].txs[].rawBytes",
-    "coverage.platformLedger[].committedTxCount",
-    "platformTrustRoot"
-   ],
-   "verifier": "verifyPlatformCommits",
-   "verifierChecks": [
-    "commit signatures over the signed headers per walked height under the validator set",
-    "validator-set transitions proved across the interval from the pinned trust root",
-    "each retained transaction bound to the signed data root by its inclusion proof AT ITS SERIALIZED txIndex: the proof's committed leaf position must EQUAL the transaction's txIndex (a soundness review)",
-    "COMPLETENESS (a soundness review): position-bound membership proves order, not completeness -- an omitted contiguous suffix or an asserted-empty block carries no contradicting proof. The verifier must RECOMPUTE the Tenderdash data root from the COMPLETE ordered rawBytes array and require equality with the data root derived from the signed header, with the zero-transaction case compared against the protocol's canonical empty-data root; committedTxCount == len(txs) is suite-enforced offline. Runtime conformance case: a valid two-transaction block with its final transaction omitted must FAIL this check"
-   ],
-   "dependencies": [],
-   "downgradeEffect": "Ownership history and anchors become TRUSTED_SOURCE; allocation results lose AUTHENTICATED.",
-   "runtimeOnlyChecks": [
-    "derive blockHash, dataRoot, chainId, and coreChainLockedHeight FROM headerRaw and compare every duplicated ledger field (needs the real Tenderdash header codec; the conformance suite uses placeholder headers and checks only anchor non-regression + contiguity, so this binding is a RUNTIME duty, exercised by the deployed verifier not the vector suite)"
-   ]
-  },
-  "decoderCoverage": {
-   "evidence": [
-    "coverage.platformLedger[].txs[].rawBytes",
-    "coverage.platformLedger[].decoderId",
-    "decoderLineage[].fromHeight",
-    "decoderLineage[].decoderId",
-    "decoderLineage[].artifactDigest",
-    "decoderLineage[].artifactRef",
-    "decoderLineage[].platformProtocolVersion",
-    "decoderLineage[].runtime",
-    "decoderLineage[].environmentDigest",
-    "decoderLineage[].executionProfile",
-    "decoderLineage[].entryPoint",
-    "decoderLineage[].inputFormat"
-   ],
-   "verifier": "verifyDecodeDispositions",
-   "verifierChecks": [
-    "committedHash equals sha256(rawBytes) per tx (EVERY tx retains raw bytes)",
-    "re-decode of every tx reproduces every disposition and inner decision",
-    "the decoder bundle retrieved by artifactRef hashes to artifactDigest (retrieval failure removes AUTHENTICATED); the ref GRAMMAR is closed and must embed that same digest (suite-enforced, a soundness-review finding)",
-    "decoderId is DERIVED from the artifact digest (decoder-sha256-<first 16 hex>), and the retained lineage extent is EXACT over the platform audit interval: it starts at the platform fromHeight and carries no entry beyond the toHeight (suite-enforced, a soundness-review finding)",
-    "the execution descriptor is a CLOSED vocabulary (runtime oci-image-v1, executionProfile from the pinned release document, entryPoint, inputFormat) plus a content-addressed environmentDigest (a LEAF single-platform OCI image-manifest digest, never an index or tag); grammar and enums are suite-enforced, and the profile document's sha256 is pinned in the vector manifest and re-checked on every suite run (a soundness review)",
-    "RUNTIME duties (need the real bundle/image): the retrieved image's manifest digest equals environmentDigest, and the bundle's canonical manifest repeats environmentDigest, platformProtocolVersion, entryPoint, and inputFormat, each equal to the serialized lineage entry",
-    "per-row decoderId equals the greatest-fromHeight-not-exceeding lineage selection",
-    "adjacent lineage entries differ in at least one bundle-identity field (artifactDigest, platformProtocolVersion, environmentDigest): the lineage records CHANGE POINTS, so one decoder history has exactly one serialization (a soundness review)",
-    "lineage coverage is complete and non-overlapping"
-   ],
-   "dependencies": [
-    "platformCommits"
-   ],
-   "downgradeEffect": "Positions and the pre-creation conclusions become TRUSTED_SOURCE; allocation results lose AUTHENTICATED."
-  },
-  "l1Backing": {
-   "evidence": [],
-   "verifier": "verifyL1BackingAtHeight",
-   "verifierChecks": [
-    "historical L1 backing validation at each classified height (deferred work; evidence schema lands with it)"
-   ],
-   "dependencies": [
-    "coreContinuityFinality"
-   ],
-   "downgradeEffect": "Structurally TRUSTED_SOURCE until built and BARRED from AUTHENTICATED (empty evidence set); its absence caps the aggregate at partial-evidence for the combined audit claim.",
-   "structurallyBarredFromAuthenticated": true
-  },
-  "receiptValidity": {
-   "evidence": [],
-   "verifier": "verifyReceiptDuties",
-   "verifierChecks": [
-    "result-1 receipt-validity duties (deferred work; evidence schema lands with it)"
-   ],
-   "dependencies": [],
-   "downgradeEffect": "Structurally TRUSTED_SOURCE until built and BARRED from AUTHENTICATED (empty evidence set); its absence caps the aggregate at partial-evidence for the combined audit claim.",
-   "structurallyBarredFromAuthenticated": true
-  },
-  "bookConformance": {
-   "evidence": [
-    "slots",
-    "checkpoints[].extractedBinding",
-    "platformAuditRange.lowerBoundJustification"
-   ],
-   "verifier": "verifyBookConformance",
-   "verifierChecks": [
-    "exactly slotCount slot entries against the signed book",
-    "each minted slot's chain anchored to an observed creation inside the pinned lower bound",
-    "the book operatorId equals the immutable pool document's owner (runtime; the authority cannot substitute the operator)",
-    "under an absence-proof bound, the retained state proves ALL slot documents ABSENT at fromHeight-1 for the audited contract (any present slot invalidates this v1 union member); per-slot mid-history seeding is unsupported in v1"
-   ],
-   "dependencies": [
-    "decoderCoverage",
-    "recognition"
-   ],
-   "downgradeEffect": "Slot-chain completeness is trusted; pre-creation conclusions lose AUTHENTICATED.",
-   "runtimeOnlyChecks": [
-    "verifyBookConformance decodes the absence-proof stateProof with the GroveDB codec the ENVELOPE-COMMITTED bundle defines (proofCodecProfile + verifierBundleDigest; revision 27 registry completeness)",
-    "CONTRACT-CREATION HEIGHT AUTHENTICATION (a soundness review): under a contract-genesis lower-bound justification, the claimed contractCreationHeight must be verified against retrieved Platform state (the contract-create transition and its committed height), because a false-high claimed height would let fromHeight sit above the REAL creation and truncate earlier ownership history. The suite enforces the offline consistency teeth (no retained creation position may precede the claimed height, and fromHeight <= the claimed height); the truth of the claimed height itself needs the retrieved evidence AUTHENTICATED against a SIGNED Platform header and the pinned trust chain (an ordinary node query response is NOT sufficient for AUTHENTICATED), and failure removes AUTHENTICATED from the lower-bound justification.",
-    "OPERATOR-TO-POOL-DOCUMENT BINDING (a soundness review): the signed book's operatorId must equal the immutable pool document's owner, but the envelope retains NO pool-document evidence in v1 (the pool document may predate the walked Platform interval), so this check needs externally retrieved, independently verified pool-document state. The evidence schema (the raw pool document, its inclusion proof, and its committed-block anchor) lands with the build, following the l1Backing/receiptValidity precedent. UNTIL a runtime verifier retrieves and verifies that evidence, bookConformance cannot claim AUTHENTICATED on the operator binding: a substituted signed operator with matching pre-creation allocations passes both offline layers BY DESIGN, and the claim discipline, not the suite, is what prevents relying on it."
-   ]
-  },
-  "conservation": {
-   "evidence": [
-    "rewards[].conservation",
-    "rewards[].slotFanout"
-   ],
-   "verifier": "verifyConservation",
-   "verifierChecks": [
-    "slotAllocationBase = gross - sum(nonSlotComponents)",
-    "largest-remainder reproduction from the signed shares (exact rationals, ties by ascending slotIndex)",
-    "sum(allocatedDuffs) = slotAllocationBase exactly (height-level recognition; no per-slot withholding)",
-    "the result matrix (entitlement x conservation x fanout) holds for every height",
-    "requiredOutputs is the pool masternode's OWNER-PAYOUT VECTOR (0..N, one output per owner-payout entry, zero-amount omitted; the operator reward is a separate out-of-book output). NARROWED (revision 25): the vector's SOURCE SELECTION is part of the structurally TRUSTED_SOURCE schedule residual, because the serialized SML entry excludes scriptPayout and the payout shares (mem-only, 8c9f166a3:src/evo/simplifiedmns.h:38-40), so no retained evidence authenticates the selection; the AUTHENTICATED part is coinbase parsing, consuming owner-first matching, and the arithmetic relative to that trusted vector, and a false-zero or wrong-L1 selection is detectable only as far as the trusted schedule source is honest in v1 (authenticating the selection needs retained registration/payout-update history, the same future evidence schema as the operator-side audit; a soundness-review finding/a soundness-review finding)",
-    "OWNER-FIRST CONSUMING ATTRIBUTION with the operator OUT OF SCOPE (a soundness review): v1 derives NO operator expectation, because the retained simplified-list evidence cannot authenticate one (payout fields are MEMORY-ONLY, excluded from serialized entries, 8c9f166a3:src/evo/simplifiedmns.h:38-40; the operator percentage lives in the full deterministic state, src/evo/deterministicmns.h:52-75). The runtime derivation matches actual outputs to the OWNER vector by CONSUMING multiset match in ascending output index; one output satisfies at most one owner expectation; every remaining output (the operator's included) is informational unexplainedOutputs evidence. Operator insufficiency is NOT a member-side anomaly in v1 (no authenticated expectation exists to be insufficient against); an operator-side audit is future work with its own retained-registration evidence schema. Dash validation is non-consuming (payments.cpp:65-87,134-147), so the convention pins which reading the envelope serializes, not a consensus rule"
-   ],
-   "dependencies": [
-    "recognition",
-    "coreContinuityFinality",
-    "bookConformance"
-   ],
-   "downgradeEffect": "Amounts are trusted arithmetic; the combined audit claim caps at partial-evidence."
-  },
-  "transitionHashing": {
-   "evidence": [
-    "slots[].ownershipChain[].transitionHash",
-    "coverage.platformLedger[].txs[].rawBytes"
-   ],
-   "verifier": "verifyTransitionHashes",
-   "verifierChecks": [
-    "each transitionHash equals sha256 of the retained committed bytes",
-    "the pinned test vector reproduces"
-   ],
-   "dependencies": [
-    "decoderCoverage"
-   ],
-   "downgradeEffect": "Hop binding to the block store is trusted; ownership chains lose AUTHENTICATED."
-  },
-  "identifierConversion": {
-   "evidence": [
-    "poolProTxHash",
-    "basePackage"
-   ],
-   "verifier": "verifyIdentifierConversion",
-   "verifierChecks": [
-    "proTxHash display/internal byte-order conversion reproduces the pinned non-symmetric vector",
-    "ProRegTx txid equals proTxHash (FIRST_APPEARANCE mode)"
-   ],
-   "dependencies": [],
-   "downgradeEffect": "Identity bindings are trusted; recognition and baseProof cannot carry AUTHENTICATED (dependency rule)."
-  },
-  "schedule": {
-   "evidence": [
-    "coverage.coreLedger[].scheduleResult",
-    "rewards[].entitlement.scheduleSource"
-   ],
-   "verifier": null,
-   "verifierChecks": [
-    "NONE EXISTS IN V1: the payee schedule is structurally TRUSTED_SOURCE (the disclosed residual); this member can never claim AUTHENTICATED"
-   ],
-   "dependencies": [],
-   "downgradeEffect": "Always TRUSTED_SOURCE; does not further downgrade the aggregate below proof-verified-except-schedule.",
-   "structurallyBarredFromAuthenticated": true
-  }
- },
- "aggregateProfiles": {
-  "_rule": "MUTUALLY EXCLUSIVE, enforced by verifyClaimProfile. Exactly one profile matches; the writer must emit that one. Result completeness gates the aggregate.",
-  "trusted-source": {
-   "matches": "NO component claims AUTHENTICATED.",
-   "authenticatedRequired": [],
-   "trustedPermitted": [
-    "all"
-   ]
-  },
-  "partial-evidence": {
-   "matches": "At least one component claims AUTHENTICATED, AND (some combined-claim component is not AUTHENTICATED, OR any record is UNCLOSED, UNKNOWN, or UNFINALIZED).",
-   "authenticatedRequired": [
-    "at least one"
-   ],
-   "trustedPermitted": [
-    "any"
-   ]
-  },
-  "proof-verified-except-schedule": {
-   "matches": "Every combined-claim component (all members except schedule) claims AUTHENTICATED AND every record is complete (DEFERRED counts as complete). UNREACHABLE until the l1Backing and receiptValidity verifiers exist, since both are structurally barred today.",
-   "authenticatedRequired": [
-    "recognition",
-    "baseProof",
-    "coreContinuityFinality",
-    "platformCommits",
-    "decoderCoverage",
-    "l1Backing",
-    "receiptValidity",
-    "bookConformance",
-    "conservation",
-    "transitionHashing",
-    "identifierConversion"
-   ],
-   "trustedPermitted": [
-    "schedule"
-   ]
-  }
- },
- "namedSemanticVerifiers": [
-  "verifyRewardDecision",
-  "verifyOwnership",
-  "verifyDecoderSelection",
-  "verifyLifecycle",
-  "verifyConservation",
-  "verifyClaimProfile"
- ],
- "alsoImplementedInline": [
-  "recognition re-derivation via the governing function",
-  "base-mode range constraints and the coverage-interval equation",
-  "identifier conversion (FIRST_APPEARANCE ProRegTx txid, proTxHash byte reversal)",
-  "transition-hash binding to retained committed bytes",
-  "checkpoint-v2 canonical decode with payload byte-matching and the 1/slotCount share rule",
-  "fixed-authority and adopted-epoch-pin checks",
-  "the Core chain identity tuple: mainnet/testnet name <-> canonical genesis both ways; regtest one-way to the shared height-zero base; devnet requires its height-one devnet genesis (the SUITE checks nonzero, distinct-from-base, and its use in the derived domain identity ONLY; authenticating the block itself is recognition's runtimeOnlyChecks duty, a soundness-review finding); the derived coreChainIdentityHash (never serialized) feeds the checkpoint domain tag so a signed checkpoint cannot be copied across devnets sharing the base",
-  "basePackage.smlEntries in ascending canonical (entry-bytes) order with duplicate rejection (schema uniqueItems)",
-  "total array orders, duplicate rejection, JSON Pointer resolution, NFC, no-float"
- ]
+  "namedSemanticVerifiers": [
+    "verifyRewardDecision",
+    "verifyOwnership",
+    "verifyDecoderSelection",
+    "verifyLifecycle",
+    "verifyConservation",
+    "verifyClaimProfile"
+  ],
+  "alsoImplementedInline": [
+    "recognition re-derivation via the governing function",
+    "base-mode range constraints and the coverage-interval equation",
+    "identifier conversion (FIRST_APPEARANCE ProRegTx txid, proTxHash byte reversal)",
+    "transition-hash binding to retained committed bytes",
+    "checkpoint-v2 canonical decode with payload byte-matching and the 1/slotCount share rule",
+    "fixed-authority and adopted-epoch-pin checks",
+    "the Core chain identity tuple: mainnet/testnet name <-> canonical genesis both ways; regtest one-way to the shared height-zero base; devnet requires its height-one devnet genesis (the SUITE checks nonzero, distinct-from-base, and its use in the derived domain identity ONLY; authenticating the block itself is recognition's runtimeOnlyChecks duty, a soundness-review finding); the derived coreChainIdentityHash (never serialized) feeds the checkpoint domain tag so a signed checkpoint cannot be copied across devnets sharing the base",
+    "basePackage.smlEntries in ascending canonical (entry-bytes) order with duplicate rejection (schema uniqueItems)",
+    "total array orders, duplicate rejection, JSON Pointer resolution, NFC, no-float"
+  ]
 }
