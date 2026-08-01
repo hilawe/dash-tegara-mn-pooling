@@ -442,11 +442,37 @@ function indexHeaderChain(headerChainHex) {
     fail("the header chain is not an even-length lowercase hex string");
   }
   const buf = Buffer.from(headerChainHex, "hex");
-  if (buf.length === 0 || buf.length % 80 !== 0) {
-    fail(`a header chain must be a whole number of 80-byte headers (got ${buf.length} bytes)`);
+  // THE COUNT PREFIX THE NORMATIVE CODEC DEFINES (round 11, MAJOR, a soundness-review finding). This read byte zero as
+  // the first header and required a whole number of 80-byte headers, but the pinned proof-codec
+  // profile defines `dash-header-chain-v1` as "a header-COUNT prefix (u32 little-endian) followed
+  // by that many consecutive 80-byte Dash CBlockHeader wire serializations"
+  // [docs/schema/proof-codecs/tegara-proof-codecs-v1.json]. The two domains do not overlap at all:
+  // a conforming one-header chain is 84 bytes and was DECLINED for not dividing by 80, while an
+  // unprefixed 80-byte header is outside the codec and was accepted as a complete chain. The
+  // reference implementation could not read the format it names, and its own fixtures required the
+  // non-conforming shape.
+  //
+  // The profile is normative and content-addressed, so the implementation moves rather than the
+  // profile. Changing the profile would be a versioning event by its own terms.
+  if (buf.length < 4) {
+    fail(`a header chain under dash-header-chain-v1 needs its 4-byte count prefix `
+         + `(got ${buf.length} bytes)`);
   }
+  const declared = buf.readUInt32LE(0);
+  const body = buf.length - 4;
+  if (body % 80 !== 0) {
+    fail(`a header chain under dash-header-chain-v1 must carry a whole number of 80-byte ` +
+         `headers after its count prefix (got ${body} bytes after the prefix)`);
+  }
+  const present = body / 80;
+  // the count is EVIDENCE, not decoration: a prefix that disagrees with what follows describes a
+  // different chain than the one supplied, so it is compared rather than skipped
+  if (declared !== present) {
+    fail(`the dash-header-chain-v1 chain declares ${declared} header(s) and carries ${present}`);
+  }
+  if (present === 0) fail("a dash-header-chain-v1 chain carries no headers");
   const byHash = new Map();
-  for (let off = 0; off < buf.length; off += 80) {
+  for (let off = 4; off < buf.length; off += 80) {
     const header = buf.subarray(off, off + 80);
     const hash = blockHashOf(header);
     byHash.set(hash, {

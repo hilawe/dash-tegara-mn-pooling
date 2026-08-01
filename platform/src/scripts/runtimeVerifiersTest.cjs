@@ -85,6 +85,16 @@ const signed = evidenceOf(positive);
 // Dash's serialized transaction ceiling [8c9f166a3:src/consensus/consensus.h:10]
 const MAX_TX_SIZE = 1000000;
 
+// `dash-header-chain-v1`: a u32 little-endian COUNT then that many 80-byte headers (round 11,
+// a soundness-review finding). The fixtures used to place a bare header in coreHeaderChain, which is not the shape the
+// normative proof-codec profile defines, so the positive cases were requiring the non-conforming
+// form the reader happened to accept.
+const chainOf = (...headers) => {
+  const n = Buffer.alloc(4);
+  n.writeUInt32LE(headers.length, 0);
+  return n.toString("hex") + headers.join("");
+};
+
 const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
                        nBits = 0x207fffff, mutateCoinbase = null) => {
   // A FULL BLOCK, not a header (round 5, MUST-FIX). The verifier now requires the coinbase and
@@ -503,7 +513,7 @@ ok("...and its digest differs from the other evidence set",
     ok("the shipped vector's placeholder blobs are REFUSED, not accepted",
        r.ran === true && r.ok === false);
     ok("the refusal names a pinned codec",
-       /dash-p2p-mnlistdiff-v1|dash-smlentry-serialization-v1/.test(r.reason || ""));
+       /dash-p2p-mnlistdiff-v1|dash-smlentry-serialization-v1|dash-header-chain-v1/.test(r.reason || ""));
   }
 
   // (2) REAL evidence: an envelope fragment built from the pinned wire capture. Here the checks
@@ -529,7 +539,7 @@ ok("...and its digest differs from the other evidence set",
       poolProTxHash: target.proRegTxHash,
       // the capture is a diff from block 1, whose list is empty, so the base seeds as empty
       basePackage: { kind: "pre-dml", baseBlock: { height: height - 1, blockHash: diff.baseBlockHash } },
-      coreHeaderChain: cap.blockHeaderRaw,
+      coreHeaderChain: chainOf(cap.blockHeaderRaw),
       lifecycle: { observedThroughHeight: height },
       coreAuditRange: { fromHeight: height, toHeight: height },
       validatedChainLock: { height: height + 10 },
@@ -825,7 +835,7 @@ ok("...and its digest differs from the other evidence set",
       kind: "rooted", baseBlock: { height: height - 1, blockHash: delta.baseBlockHash },
       smlEntries: [first.raw.toString("hex")],
     },
-    coreHeaderChain: cap.blockHeaderRaw,
+    coreHeaderChain: chainOf(cap.blockHeaderRaw),
     lifecycle: { observedThroughHeight: height },
     coreAuditRange: { fromHeight: height, toHeight: height },
     validatedChainLock: { height: height + 10 },
@@ -1137,7 +1147,7 @@ ok("...and its digest differs from the other evidence set",
   const envWith = (payloadHex) => ({
     poolProTxHash: envTarget.proRegTxHash,
     basePackage: { kind: "pre-dml", baseBlock: { height: pl.height - 1, blockHash: d.baseBlockHash } },
-    coreHeaderChain: cap.blockHeaderRaw,
+    coreHeaderChain: chainOf(cap.blockHeaderRaw),
     lifecycle: { observedThroughHeight: pl.height },
     coreAuditRange: { fromHeight: pl.height, toHeight: pl.height },
     validatedChainLock: { height: pl.height + 10 },
@@ -1160,7 +1170,7 @@ ok("...and its digest differs from the other evidence set",
   // THE BINDING ITSELF, against the REAL retained header
   {
     const proof = extractMerkleMatches(d.cbTxMerkleTree);
-    const header = indexHeaderChain(cap.blockHeaderRaw).get(d.blockHash);
+    const header = indexHeaderChain(chainOf(cap.blockHeaderRaw)).get(d.blockHash);
     ok("the retained header hashes to the block the diff names", Boolean(header));
     ok("the coinbase proof yields the header's own merkle root",
        proof.merkleRoot === header.merkleRoot);
@@ -1185,14 +1195,14 @@ ok("...and its digest differs from the other evidence set",
   // a record with no header for the block it names cannot authenticate anything
   {
     const env = envWith(cap.payloadHex);
-    env.coreHeaderChain = "00".repeat(80);
+    env.coreHeaderChain = chainOf("00".repeat(80));   // conforming shape, wrong block
     const r = verifyCoreWalk(env, { protocolVersion: cap.protocolVersionOffered });
     ok("a header chain holding no header for the row's block is refused",
        r.ok === false && /no header hashing to/.test(r.reason || ""));
   }
   {
     const env = envWith(cap.payloadHex);
-    env.coreHeaderChain = "00".repeat(79);
+    env.coreHeaderChain = chainOf("00".repeat(79));   // conforming prefix, short header
     const r = verifyCoreWalk(env, { protocolVersion: cap.protocolVersionOffered });
     ok("a header chain that is not a whole number of headers is refused",
        r.ok === false && /80-byte headers/.test(r.reason || ""));
