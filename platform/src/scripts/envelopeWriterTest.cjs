@@ -185,20 +185,33 @@ ok("mutating the caller's evidence afterwards cannot stale the result",
       { start: { kind: "observed", banHeight: 1200 }, endHeight: 1300 }] },
     baseHeight: base.basePackage.baseBlock.height,
   };
-  // the fallback path (no index supplied) versus an explicitly indexed one, over a dense
-  // range of heights: they must agree at every height
-  const iv = ctx.lifecycle.suspensions
-    .map((s) => [s.start.banHeight + 1, s.endHeight]).sort((x, y) => x[0] - y[0]);
-  const indexed = (H) => { let lo = 0, hi = iv.length - 1;
-    while (lo <= hi) { const m = (lo + hi) >> 1; const [a, b] = iv[m];
-      if (H < a) hi = m - 1; else if (H > b) lo = m + 1; else return true; } return false; };
-  let disagreements = 0;
+  // WHAT THIS CASE ACTUALLY ESTABLISHES, RELABELLED (round 12, MINOR). It was described as an
+  // indexed path compared against a scan fallback, and it called the exported recognizeAt twice,
+  // the second time with an extra `suspendedAt` property on the context. There has been no such
+  // fallback since the prepared-data redesign: the exported entry point takes no prepared
+  // parameter and always re-derives, so both calls ran the identical code and agreeing was
+  // guaranteed. The property was never read.
+  //
+  // That is worth an assertion, just not the one the label claimed. What it shows now is the
+  // redesign's own guarantee: a caller CANNOT influence recognition by decorating the context,
+  // and a supplied `suspendedAt` that would answer differently is ignored rather than consulted.
+  // The decoy below answers the opposite of the lifecycle at every height, so if the property
+  // were ever read again the disagreement count would be nonzero immediately.
+  const alwaysSuspended = () => true;
+  let influenced = 0;
+  let suspendedSomewhere = 0;
   for (let H = 900; H <= 1400; H++) {
-    const viaFallback = recognizeAt(H, ctx).status;
-    const viaIndex = recognizeAt(H, { ...ctx, suspendedAt: indexed }).status;
-    if (viaFallback !== viaIndex) disagreements++;
+    const honest = recognizeAt(H, ctx).status;
+    const decorated = recognizeAt(H, { ...ctx, suspendedAt: alwaysSuspended }).status;
+    if (honest !== decorated) influenced++;
+    if (honest === "UNRECOGNIZED") suspendedSomewhere++;
   }
-  ok("the indexed suspension path and the scan fallback agree over 501 heights", disagreements === 0);
+  ok("a caller-supplied suspendedAt cannot influence recognition, over 501 heights",
+     influenced === 0);
+  // and the range genuinely exercises the suspension logic, so the case is not vacuous by
+  // covering only heights where every answer would be the same anyway
+  ok("the range spans both recognized and unrecognized heights",
+     suspendedSomewhere > 0 && suspendedSomewhere < 501);
 }
 
 // ---------------------------------------------------------------------------

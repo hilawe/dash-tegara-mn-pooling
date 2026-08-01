@@ -25,6 +25,19 @@ const positive = JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, "vectors", "po
 const evidenceOf = (e) => { const c = JSON.parse(JSON.stringify(e)); delete c.rewards; delete c.claimProfile; return c; };
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest();
 
+// RE-SIGNING A CHECKPOINT MOVES ITS ADOPTED PIN WITH IT (round 12, MAJOR). Every fixture that
+// re-signs a checkpoint derives a new checkpointId, and until the runtime checker started reading
+// adoptedEpochPins nothing noticed that the pins were left naming the OLD identifiers. That is
+// what a conforming producer would never do: the signature says who wrote a checkpoint and the
+// pin says which one the deployment adopted, so a re-signed checkpoint with a stale pin is a
+// record the executable specification declines. The fixtures were requiring exactly that.
+const syncPins = (e) => {
+  e.adoptedEpochPins = e.checkpoints.map((cp) => ({
+    checkpointId: cp.checkpointId, epochId: cp.epochId,
+  }));
+  return e;
+};
+
 // ---- the derived chain identity matches the NORMATIVE Python derivation ----
 const pyIdentity = require("child_process").execFileSync("python3", ["-c",
   "import importlib.util,sys;s=importlib.util.spec_from_file_location('cv','check_vectors.py');" +
@@ -204,6 +217,7 @@ const resignFor = (displayHash) => {
     cp.signerPublicKey = rawPub.toString("hex");
     cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
   }
+  syncPins(e);
   return e;
 };
 // re-mine a header whose bytes changed, so it still satisfies its own stated target
@@ -236,6 +250,7 @@ for (const cp of signed.checkpoints) {
   cp.signerPublicKey = rawPub.toString("hex");
   cp.signature = crypto.sign(null, digest, privateKey).toString("hex");
 }
+syncPins(signed);
 // on DEVNET the component stays blocked on the height-one duty even when the signatures
 // verify -- the honest outcome, with the proved half reported explicitly
 const sigRes = verifyCheckpointRecognition(signed);
@@ -264,6 +279,7 @@ ok("a block that hashes to a DIFFERENT devnet genesis is REJECTED", (() => {
     cp.checkpointId = dg.toString("hex");
     cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
   }
+  syncPins(other);
   const r = verifyCheckpointRecognition(other, { coreNode: minedCoreNode });
   return r.ran === true && r.ok === false && /hashes to/.test(r.reason);
 })());
@@ -281,6 +297,7 @@ ok("a block not extending the height-zero genesis is REJECTED", (() => {
     cp.checkpointId = dg.toString("hex");
     cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
   }
+  syncPins(env2);
   const r = verifyCheckpointRecognition(env2, { coreNode: node });
   return r.ran === true && r.ok === false && /does not extend/.test(r.reason);
 })());
@@ -302,6 +319,7 @@ asTestnet.network = { coreNetwork: "testnet",
     cp.signedPayloadBytes = p.toString("hex"); cp.checkpointId = d.toString("hex");
     cp.signature = crypto.sign(null, d, privateKey).toString("hex");
   }
+  syncPins(asTestnet);
 }
 ok("a non-devnet network completes without a Core node",
    verifyCheckpointRecognition(asTestnet).ok === true);
@@ -314,6 +332,72 @@ p0[p0.length - 1] ^= 0xff;
 alteredPayload.checkpoints[0].signedPayloadBytes = p0.toString("hex");
 alteredPayload.checkpoints[0].checkpointId = sha256(p0).toString("hex");
 ok("a mutated payload breaks the signature", verifyCheckpointRecognition(alteredPayload).ok === false);
+
+// ---- THE ADOPTED PINS (round 12, MAJOR) ----
+// The registry assigns this checker "epoch ids distinct and strictly increasing; every checkpoint
+// matches its adoptedEpochPins entry", and lists adoptedEpochPins in its own evidence. The module
+// read that field zero times while the executable specification enforced it in sixteen places, so
+// a completed recognition result meant less than the registry says. These cases pin the rule, and
+// the first is the reviewer's own construction.
+{
+  // re-sign a checkpoint under a new payload and identifier, leave the old pin: the signature is
+  // valid, the record is not the one adopted for that epoch
+  const restale = JSON.parse(JSON.stringify(signed));
+  const cp = restale.checkpoints[0];
+  const pl = Buffer.from(cp.signedPayloadBytes, "hex");
+  pl[pl.length - 1] ^= 0xff;
+  const dg = sha256(pl);
+  cp.signedPayloadBytes = pl.toString("hex");
+  cp.checkpointId = dg.toString("hex");
+  cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
+  // deliberately NOT syncPins: that is the whole point of the case
+  const r = verifyCheckpointRecognition(restale, { coreNode: minedCoreNode });
+  ok("a validly re-signed checkpoint with a stale pin is refused", r.ok === false);
+  ok("and the refusal names the pin rather than the signature",
+     /not the one pinned for its epoch/.test(r.reason || ""));
+}
+{
+  const noPins = JSON.parse(JSON.stringify(signed));
+  delete noPins.adoptedEpochPins;
+  const r = verifyCheckpointRecognition(noPins, { coreNode: minedCoreNode });
+  ok("a record with no adoptedEpochPins is refused", r.ok === false);
+  ok("and the refusal says why the pins matter",
+     /no adoptedEpochPins array/.test(r.reason || ""));
+}
+{
+  const unpinned = JSON.parse(JSON.stringify(signed));
+  unpinned.adoptedEpochPins = [];
+  const r = verifyCheckpointRecognition(unpinned, { coreNode: minedCoreNode });
+  ok("a checkpoint with no pin for its epoch is refused", r.ok === false);
+  ok("and the refusal names the missing adoption",
+     /has no adoptedEpochPins entry/.test(r.reason || ""));
+}
+{
+  const dupPins = JSON.parse(JSON.stringify(signed));
+  dupPins.adoptedEpochPins = [...dupPins.adoptedEpochPins, dupPins.adoptedEpochPins[0]];
+  const r = verifyCheckpointRecognition(dupPins, { coreNode: minedCoreNode });
+  ok("a duplicated epoch in the pins is refused", r.ok === false);
+  ok("and the refusal names the duplicate", /more than once/.test(r.reason || ""));
+}
+{
+  // epoch ids must be strictly increasing in the order the record serializes them
+  const twice = JSON.parse(JSON.stringify(signed));
+  twice.checkpoints = [twice.checkpoints[0], JSON.parse(JSON.stringify(twice.checkpoints[0]))];
+  const r = verifyCheckpointRecognition(twice, { coreNode: minedCoreNode });
+  ok("a repeated epoch id in the checkpoints is refused", r.ok === false);
+  ok("and the refusal names the ordering rule",
+     /not strictly increasing/.test(r.reason || ""));
+}
+{
+  // and the result says what it does NOT cover, so a completed recognition stops implying the two
+  // assigned rules this checker still leaves to the executable specification
+  const r = verifyCheckpointRecognition(signed, { coreNode: minedCoreNode });
+  ok("recognition still completes on the conforming record", r.ran === true && r.ok === true);
+  ok("and its detail names the pins it matched",
+     /adoptedEpochPins entry/.test(r.detail || ""));
+  ok("and it states the two assigned rules it does not cover",
+     /NOT covered by this result/.test(r.detail || ""));
+}
 // a foreign signer, even with a valid signature of its own
 const foreign = crypto.generateKeyPairSync("ed25519");
 const foreignEv = JSON.parse(JSON.stringify(signed));
@@ -363,12 +447,21 @@ ok("...and its digest differs from the other evidence set",
   };
   const nodeOf = (hex) => ({ getBlockHexByHeight: () => hex });
 
-  // an nBits whose expansion leaves the 256-bit range is INVALID, not merely weak
+  // an nBits whose expansion leaves the 256-bit range is INVALID, not merely weak.
+  // THE ALTERNATION IN THIS ASSERTION WAS THE PROBLEM (round 12, MINOR). It accepted either the
+  // intended target-range refusal OR the earlier block-hash mismatch that editing the header
+  // causes, so it could be satisfied without ever reaching the rule it names. The case now
+  // re-derives the chain identity and re-signs, the same discipline the other height-one cases
+  // use, so the hash comparison passes and only the nBits rule can refuse. 0x2200ffff expands
+  // past the 256-bit range, which the compact form reports as its OVERFLOW flag, so that is the
+  // refusal this reaches and the assertion names it rather than the range comparison below it.
   {
-    const bad = patch(mined.blockHex, (b) => b.writeUInt32LE(0x2200ffff, 72));
-    const r = verifyCheckpointRecognition(signed, { coreNode: nodeOf(bad) });
-    ok("an nBits expanding outside the 256-bit range is refused",
-       r.ok === false && /valid 256-bit target range|hashes to/.test(r.reason));
+    const bad = Buffer.from(patch(mined.blockHex, (b) => b.writeUInt32LE(0x2200ffff, 72)), "hex");
+    const r = verifyCheckpointRecognition(resignFor(blockHashOf(bad.subarray(0, 80))),
+                                          { coreNode: nodeOf(bad.toString("hex")) });
+    ok("an nBits expanding outside the 256-bit range is refused", r.ok === false);
+    ok("and the refusal reaches the nBits rule, not the hash comparison",
+       /overflows/.test(r.reason || ""));
   }
   // THESE THREE REFUSED FOR THE WRONG REASON UNTIL 2026-07-30 (round 8, finding 3). Each altered
   // the block WITHOUT updating the envelope's expected block hash, so every one of them stopped
@@ -918,6 +1011,7 @@ ok("...and its digest differs from the other evidence set",
       cp.signerPublicKey = rawPub.toString("hex");
       cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
     }
+    syncPins(env);
     return { env, blk };
   };
   {
@@ -992,6 +1086,7 @@ ok("...and its digest differs from the other evidence set",
       cp.signerPublicKey = rawPub.toString("hex");
       cp.signature = crypto.sign(null, dg, privateKey).toString("hex");
     }
+    syncPins(env);
     const r = verifyCheckpointRecognition(env, { coreNode: nodeOf(blk.blockHex) });
     ok("a non-canonical scriptSig length inside the coinbase is refused", r.ok === false);
     ok("that refusal also reaches the CompactSize rule",

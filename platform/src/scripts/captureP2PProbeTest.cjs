@@ -74,6 +74,23 @@ throws("70229 specifically is refused, since the decoder starts at 70230",
   () => validateOfferedVersion(70229), /outside the range this capture's decoder reads/);
 throws("an offer above the decoder's range is refused",
   () => validateOfferedVersion(CAPTURE_MAX_VERSION + 1), /outside the range this capture's decoder reads/);
+// THE CONSTRUCTOR ENFORCES THE SAME RULE AS THE COMMAND-LINE PATH (round 12, MINOR). It is an
+// exported entry point and used to take its offer on trust, so a caller reaching it directly with
+// a nonnumeric value produced NaN, both range comparisons against NaN were false, and the session
+// completed with a common version that serializes as null. Same unusable capture, different route.
+throws("the constructor refuses a nonnumeric offer rather than producing NaN",
+  () => createHandshake({ protocolVersion: "abc", baseDisplay: H0, tipDisplay: H1,
+                          target: "test:0", send() {}, capture() {}, refuse() {} }),
+  /needs an integer protocolVersion/);
+throws("the constructor refuses an offer outside the decoder's range",
+  () => createHandshake({ protocolVersion: 70229, baseDisplay: H0, tipDisplay: H1,
+                          target: "test:0", send() {}, capture() {}, refuse() {} }),
+  /outside the range this capture's decoder reads/);
+throws("the constructor refuses an absent offer rather than defaulting one",
+  () => createHandshake({ baseDisplay: H0, tipDisplay: H1, target: "test:0",
+                          send() {}, capture() {}, refuse() {} }),
+  /needs an integer protocolVersion/);
+
 ok("both ends of the decoder's range are accepted",
    validateOfferedVersion(CAPTURE_MIN_VERSION) === CAPTURE_MIN_VERSION &&
    validateOfferedVersion(CAPTURE_MAX_VERSION) === CAPTURE_MAX_VERSION);
