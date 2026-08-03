@@ -1,0 +1,303 @@
+/**
+ * The shared receipt-to-pool check, offline (phase B of docs/V9_MIGRATION_PLAN.md).
+ *
+ * THE CASE THIS SUITE EXISTS FOR is the round-four one: a receipt that is internally valid,
+ * canonical, and passes `verifyReceiptAllocation` on its own, while the target embedded in
+ * its allocation preimage contradicts the pool it names. Under v8 the receipt carried its own
+ * top-level target and the allocation verifier caught the disagreement. v9 removes that
+ * field, so nothing catches it except a comparison against the pool. The first test below
+ * asserts BOTH halves: that the allocation verifier alone still says yes, and that the shared
+ * check says no. If someone later re-adds a duplicate field or weakens duty 2, the first half
+ * keeps passing and the second fails, which is the signal worth having.
+ *
+ * Run: node src/scripts/receiptPoolCheckTest.cjs   (exits non-zero on failure)
+ */
+const core = require("./formationCore.cjs");
+const { checkReceiptAgainstPool, checkReceiptsAgainstPools, resolveNodeToPools, toDuffs } = require("./receiptPoolCheck.cjs");
+
+// THE MODULE IS LEDGER-AWARE, because targetDuffs swaps sides at v9: on v8 it is a receipt
+// field and the pool carries none, on v9 it is a pool field and the receipt carries none.
+// This suite therefore has to SAY which ledger each case is on. An earlier version did not,
+// and so was implicitly exercising one shape while appearing to be general. Everything below
+// runs pinned to v9 except the explicitly-v8 section at the end.
+process.env.LEDGER = "v9";
+
+let pass = 0, fail = 0;
+const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(`FAIL: ${name}`); } };
+const refuses = (name, res, re) => {
+  if (res.ok) { fail++; console.error(`FAIL: ${name} (accepted)`); return; }
+  ok(name, re.test(res.reason || ""));
+};
+const withLedger = (v, fn) => {
+  const prev = process.env.LEDGER;
+  process.env.LEDGER = v;
+  try { return fn(); } finally { process.env.LEDGER = prev; }
+};
+
+// the published golden vector from formationCoreTest, reused so both suites move together
+const GC = "3EbgWjxUoX6J9XbqqxrEktm7tUFBQ5fQyKaiAzXCULxf"; // contract id
+const GP = "47doihuxfjfeoqi4PrKLY58Z56J6BhXekMmhW3z63QT8"; // pool id
+const OTHER_POOL = "52D4DcjgFZU1KktALjGpcfGoxR1987BEjTXxbnNcNfAc";
+const OA = "8sCudmZNvmDC9nXCGRWk1NMStKaeqCaWLa7eYTEKuT8Y";
+const OB = "52D4DcjgFZU1KktALjGpcfGoxR1987BEjTXxbnNcNfAc";
+const OC = "FZ9HF6oANQxZDXGXGiKh8uXdPfwcp4rwfrzqQJcdRNgv";
+
+const REGULAR = "100000000000"; // 1000 DASH
+const EVO = "400000000000";     // 4000 DASH
+
+const manifest = (target = REGULAR, poolId = GP) => {
+  // amounts are 50/30/20 percent of the target, so the allocation stays self-consistent at
+  // ANY target and the only thing that varies is the number the preimage embeds
+  const t = BigInt(target);
+  return {
+    v: 1, poolId, realHash: "aa".repeat(32), target,
+    owners: [
+      { owner: OA, amountDuffs: String(t / 2n), bps: 5000, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
+      { owner: OB, amountDuffs: String(t * 3n / 10n), bps: 3000, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
+      { owner: OC, amountDuffs: String(t / 5n), bps: 2000, rewardScriptHex: "76a914" + "33".repeat(20) + "88ac" },
+    ],
+  };
+};
+
+/** a v9-shaped receipt: no top-level nodeType, operatorFeeBps or targetDuffs */
+const receiptFor = (m, { slotIndex = 0 } = {}) => {
+  const rows = core.allocationPreimage(GC, m);
+  return {
+    poolId: m.poolId, slotIndex, formatVersion: 1,
+    allocationRows: rows, allocationHash: core.allocationHash(rows),
+    participantCount: m.owners.length, l1Verification: "demo-unverified", verificationMethodVersion: 1,
+  };
+};
+
+const poolFor = ({ target = REGULAR, nodeType = "regular", slotIndex = 0, book = null } = {}) => ({
+  slotIndex, nodeType, operatorFeeBps: 2000, targetDuffs: Number(target),
+  ...(book ? { slotDuffs: book[0], slotCount: book[1] } : {}),
+});
+
+// ---------------------------------------------------------------------------
+// 1. THE ROUND-FOUR CASE
+// ---------------------------------------------------------------------------
+{
+  // a receipt whose allocation is entirely self-consistent, but at the EVO target
+  const rogue = receiptFor(manifest(EVO));
+  const realPool = poolFor({ target: REGULAR, nodeType: "regular" });
+
+  // half one: the allocation verifier alone is satisfied. On a v9 receipt there is no
+  // top-level targetDuffs for it to disagree with, so it has nothing to catch.
+  const alone = core.verifyReceiptAllocation(GC, rogue);
+  ok("round four: the allocation verifier ALONE accepts the contradicting receipt", alone.ok === true);
+  ok("round four: and it reports the embedded target it accepted", alone.targetDuffs === EVO);
+
+  // half two: the shared check refuses it, which is the whole point of duty 2
+  refuses("round four: the shared check REFUSES it on the embedded target",
+    checkReceiptAgainstPool({ contractId: GC, receipt: rogue, pool: realPool, poolId: GP }),
+    /embedded target 400000000000 contradicts pool targetDuffs 100000000000/);
+}
+
+// ---------------------------------------------------------------------------
+// 2. the happy paths
+// ---------------------------------------------------------------------------
+{
+  const m = manifest();
+  const r = checkReceiptAgainstPool({
+    contractId: GC, receipt: receiptFor(m), pool: poolFor(), poolId: GP });
+  ok("a matching receipt and pool pass", r.ok === true);
+  ok("and the embedded allocation comes back for the caller", r.ok && r.embedded.participantCount === 3);
+}
+{
+  // with a slot book whose product equals the target
+  const r = checkReceiptAgainstPool({
+    contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
+    pool: poolFor({ book: [25000000000, 4] }) });
+  ok("a consistent slot book passes", r.ok === true);
+}
+{
+  // an evo pool, to prove the nodeType target is read rather than assumed
+  const r = checkReceiptAgainstPool({
+    contractId: GC, receipt: receiptFor(manifest(EVO)), poolId: GP,
+    pool: poolFor({ target: EVO, nodeType: "evo" }) });
+  ok("an evo pool passes at its own target", r.ok === true);
+}
+{
+  // poolId in the shape that actually crosses the seam at the call sites: a document id
+  // OBJECT exposing toBuffer(), which is what `pool.getId()` returns from the SDK (and
+  // from the harness mock). Every offline case above passes a base58 string, which is
+  // exactly how a decoder gap for this shape stayed green while the v9 crash harness
+  // caught the classifier reading every completed pool as non-verifying.
+  const idObject = { toBuffer: () => core.toId32(GP), toString: () => GP };
+  const r = checkReceiptAgainstPool({
+    contractId: GC, receipt: receiptFor(manifest()), pool: poolFor(), poolId: idObject });
+  ok("a matching pair passes when poolId is an SDK-style id object", r.ok === true);
+  // and the identity precondition still refuses a WRONG pool given in the same shape
+  const wrongIdObject = { toBuffer: () => core.toId32(OTHER_POOL), toString: () => OTHER_POOL };
+  refuses("an id object naming a different pool is still refused",
+    checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), pool: poolFor(),
+      poolId: wrongIdObject }),
+    /not the pool this receipt names/);
+}
+
+// ---------------------------------------------------------------------------
+// 3. duty 3, the pool's own coherence
+// ---------------------------------------------------------------------------
+refuses("a pool whose target is not its nodeType's target is refused",
+  checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest(EVO)), poolId: GP,
+    pool: poolFor({ target: EVO, nodeType: "regular" }) }),
+  /is not the regular target/);
+refuses("an unknown nodeType is refused",
+  checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
+    pool: { ...poolFor(), nodeType: "gold" } }),
+  /is not regular or evo/);
+refuses("a slot book that does not multiply to the target is refused",
+  checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
+    pool: poolFor({ book: [25000000000, 3] }) }),
+  /does not equal targetDuffs/);
+refuses("a one-sided slot book is refused",
+  checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
+    pool: { ...poolFor(), slotDuffs: 25000000000 } }),
+  /one-sided slot book/);
+
+// ---------------------------------------------------------------------------
+// 4. duty 4 and the identity precondition
+// ---------------------------------------------------------------------------
+refuses("a receipt whose slotIndex differs from the pool's is refused",
+  checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest(), { slotIndex: 3 }),
+    pool: poolFor({ slotIndex: 1 }), poolId: GP }),
+  /slotIndex 3 does not match pool slotIndex 1/);
+refuses("a receipt checked against the WRONG pool is refused before any comparison",
+  checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()),
+    pool: poolFor(), poolId: OTHER_POOL }),
+  /not the pool this receipt names/);
+refuses("a receipt bound to another contract is refused",
+  checkReceiptAgainstPool({ contractId: OTHER_POOL, receipt: receiptFor(manifest()),
+    pool: poolFor(), poolId: GP }),
+  /allocation: /);
+
+// ---------------------------------------------------------------------------
+// 5. fail-closed on malformed input, never a throw
+// ---------------------------------------------------------------------------
+for (const [name, args] of [
+  ["missing receipt", { contractId: GC, receipt: null, pool: poolFor(), poolId: GP }],
+  ["missing pool", { contractId: GC, receipt: receiptFor(manifest()), pool: null, poolId: GP }],
+  ["pool target is a float", { contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
+    pool: { ...poolFor(), targetDuffs: 100000000000.5 } }],
+  ["pool target is an object", { contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
+    pool: { ...poolFor(), targetDuffs: { toString() { throw new Error("boom"); } } } }],
+  ["receipt slotIndex is a string", { contractId: GC, poolId: GP, pool: poolFor(),
+    receipt: { ...receiptFor(manifest()), slotIndex: "0" } }],
+]) {
+  let threw = false, res = null;
+  try { res = checkReceiptAgainstPool(args); } catch { threw = true; }
+  ok(`${name}: refused without throwing`, !threw && res && res.ok === false);
+}
+
+// a float target must not compare equal to the exact duff amount
+ok("toDuffs rejects a non-integer number", toDuffs(1.5) === null);
+ok("toDuffs rejects a negative string", toDuffs("-1") === null);
+ok("toDuffs accepts an integer, a bigint and a decimal string",
+  toDuffs(7) === 7n && toDuffs(7n) === 7n && toDuffs("7") === 7n);
+
+// ---------------------------------------------------------------------------
+// 5b. the UNPARED (v8) shape, where the target lives on the receipt
+// ---------------------------------------------------------------------------
+// A v8 pool has NO targetDuffs at all. Asking one for it, which the first version of this
+// module did, refuses every valid v8 receipt. These cases pin the other carrier.
+{
+  const unpared = (m, extra = {}) => ({ ...receiptFor(m), nodeType: "regular",
+    operatorFeeBps: 2000, targetDuffs: Number(m.target), ...extra });
+  const v8pool = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+    proTxHash: Buffer.alloc(32, 0xaa), status: "live" };
+
+  ok("v8: a receipt carrying its own target passes against a pool that has none",
+    withLedger("v8", () => checkReceiptAgainstPool({
+      contractId: GC, receipt: unpared(manifest()), pool: v8pool, poolId: GP })).ok === true);
+
+  refuses("v8: a receipt target that is not the nodeType's target is refused",
+    withLedger("v8", () => checkReceiptAgainstPool({
+      contractId: GC, receipt: unpared(manifest(EVO)), pool: v8pool, poolId: GP })),
+    /receipt targetDuffs 400000000000 is not the regular target/);
+
+  refuses("v8: a receipt nodeType contradicting the pool is refused",
+    withLedger("v8", () => checkReceiptAgainstPool({
+      contractId: GC, receipt: unpared(manifest(), { nodeType: "evo" }), pool: v8pool, poolId: GP })),
+    /receipt nodeType "evo" contradicts pool "regular"/);
+
+  // and the pared shape is refused on v8, since its target is nowhere to be found
+  refuses("v8: a PARED receipt has no target to check and is refused",
+    withLedger("v8", () => checkReceiptAgainstPool({
+      contractId: GC, receipt: receiptFor(manifest()), pool: v8pool, poolId: GP })),
+    /receipt targetDuffs is not a duff amount/);
+}
+
+// ---------------------------------------------------------------------------
+// 6. the batched resolver
+// ---------------------------------------------------------------------------
+(async () => {
+  const good = receiptFor(manifest());
+  const rogue = receiptFor(manifest(EVO));
+  const orphan = receiptFor(manifest(REGULAR, OTHER_POOL));
+
+  let calls = 0, sawIds = null;
+  const fetchPoolsByIds = async (ids) => {
+    calls++; sawIds = ids;
+    return [{ getId: () => GP, toObject: () => poolFor() }];
+  };
+
+  const results = await checkReceiptsAgainstPools({
+    contractId: GC, receipts: [good, rogue, good, orphan], fetchPoolsByIds });
+
+  ok("batched: exactly ONE fetch for four receipts", calls === 1);
+  ok("batched: the fetch asked for the two DISTINCT pools only", sawIds.length === 2);
+  ok("batched: results are per receipt, in order", results.length === 4);
+  ok("batched: the matching receipts pass", results[0].ok === true && results[2].ok === true);
+  ok("batched: the contradicting receipt is refused", results[1].ok === false);
+  ok("batched: a receipt whose pool is absent is REFUSED, not skipped",
+    results[3].ok === false && /no pool found/.test(results[3].reason));
+
+  const empty = await checkReceiptsAgainstPools({ contractId: GC, receipts: [], fetchPoolsByIds: async () => {
+    throw new Error("must not fetch for an empty batch");
+  } });
+  ok("batched: an empty batch fetches nothing", empty.length === 0);
+
+  // -------------------------------------------------------------------------
+  // 7. resolving a masternode slot to its pool, the v9 replacement for a query
+  //    against a pool field that no longer exists
+  // -------------------------------------------------------------------------
+  const NODE = Buffer.alloc(32, 0xaa);
+  const poolDoc = { getId: () => GP, toObject: () => poolFor() };
+  const goodReceipt = { ...receiptFor(manifest()), proTxHash: NODE };
+  const badReceipt = { ...receiptFor(manifest(EVO)), proTxHash: NODE };
+
+  const resolve = (receipts, pool) => resolveNodeToPools({
+    contractId: GC, nodeHash: NODE, slotIndex: 0,
+    fetchReceipts: async () => receipts,
+    fetchPoolById: async () => pool,
+  });
+
+  const hit = await resolve([goodReceipt], poolDoc);
+  ok("resolve: a verifying receipt yields its pool", hit.ok === true && hit.pools.length === 1);
+
+  const miss = await resolve([], poolDoc);
+  ok("resolve: no receipt is an EMPTY result, not a refusal", miss.ok === true && miss.pools.length === 0);
+
+  const orphanPool = await resolve([goodReceipt], null);
+  ok("resolve: a receipt naming a pool that does not exist REFUSES", orphanPool.ok === false);
+  ok("resolve: and says the record is unresolvable", /unresolvable record/.test(orphanPool.reason));
+
+  // THE CASE THAT MATTERS. A contradicting receipt must refuse rather than resolve to
+  // nothing: the caller treats an empty result as "this node has no pool" and goes on to
+  // CREATE one, so a silent skip here would mint a second pool over a contradiction.
+  const contradiction = await resolve([badReceipt], poolDoc);
+  ok("resolve: a contradicting receipt REFUSES rather than resolving to nothing",
+    contradiction.ok === false);
+  ok("resolve: and names the verification failure",
+    /does not verify against its pool/.test(contradiction.reason));
+  ok("resolve: the refusal is distinguishable from the empty case, which is the whole point",
+    contradiction.ok === false && miss.ok === true);
+
+  let threw = false;
+  try { await resolveNodeToPools({ contractId: GC, nodeHash: NODE, slotIndex: 0 }); } catch { threw = true; }
+  ok("resolve: missing fetchers is a programming error and throws", threw);
+
+  console.log(`receiptPoolCheckTest: ${pass} passed, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();

@@ -27,8 +27,32 @@ module.exports = async (ctx) => {
       const core = require("./formationCore.cjs");
       // v5's lifecycle field is authoritative; the placeholder-hash convention decides
       // on the earlier ledgers
-      const forming = isV5() && po.status !== undefined
-        ? po.status === "forming" : core.isFormingHash(Buffer.from(po.proTxHash));
+      // WHETHER THIS POOL IS OPEN. v5's lifecycle field is authoritative where it exists, and
+      // the placeholder-hash convention decides on the earlier ledgers. An immutable pool has
+      // NEITHER, and cannot answer at all, so the admission rule below decides instead and
+      // this expression is not evaluated there (Buffer.from(undefined) would throw).
+      const lifecycle = require("../poolLifecycle.cjs");
+      const { hasImmutablePool } = require("../envStore.cjs");
+      const { checkReceiptAgainstPool } = require("../receiptPoolCheck.cjs");
+      let forming;
+      let admission = { ok: true };
+      if (hasImmutablePool()) {
+        // the member can see the receipt, and nothing else that bears on openness
+        const receiptDoc = (await client.platform.documents.get(
+          "poolLedger.completionReceipt", { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+        const cls = lifecycle.classifyPool({
+          contractId: activeContractId(env), pool: po, poolId: pool.getId(),
+          receipt: receiptDoc ? receiptDoc.toObject() : null,
+          operatorHasInFlight: false, // a member never holds the operator's local state
+        });
+        admission = lifecycle.admissionVerdict({
+          classification: cls, poolIdStr, participateEnv: process.env.TEGARA_PARTICIPATE,
+        });
+        forming = admission.ok;
+      } else {
+        forming = isV5() && po.status !== undefined
+          ? po.status === "forming" : core.isFormingHash(Buffer.from(po.proTxHash));
+      }
       const target = core.TARGETS[po.nodeType];
       const joins = (await fetchAll(client, "poolLedger.membershipRequest", {
         where: [["poolId", "==", pool.getId()], ["status", "==", "pending"]],
@@ -48,7 +72,15 @@ module.exports = async (ctx) => {
       }
 
       if (!forming) {
-        throw new Error("this pool is LIVE (a real node backs it); use join, which the matching engine pairs");
+        // the admission rule's own words when it decided, because "this pool is LIVE" is a
+        // claim an immutable ledger cannot support and a member acting on it would be misled
+        throw new Error(admission.ok
+          ? "this pool is LIVE (a real node backs it); use join, which the matching engine pairs"
+          : admission.reason);
+      }
+      if (admission.viaInstruction) {
+        console.log("proceeding on the operator's advertised participate instruction " +
+          "(the ledger cannot confirm this pool is still open; the instruction is your evidence)");
       }
       if (!/^[1-9][0-9]*$/.test(duffsStr || "")) throw new Error("usage: pledge <poolId> <amountDuffs>");
       const amountBig = journal.toBig(duffsStr, "pledge amount");

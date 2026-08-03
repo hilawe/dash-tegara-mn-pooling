@@ -1,3 +1,7 @@
+const lifecycle = require("../poolLifecycle.cjs");
+const { hasImmutablePool } = require("../envStore.cjs");
+const { checkReceiptAgainstPool } = require("../receiptPoolCheck.cjs");
+
 module.exports = async (ctx) => {
   const { client, env, args, cmd, who, whoIdKey, DASHfmt, short, Identifier, Dash, fetchAll,
     updateEnvKey, activeContractId, activeCastId, isV3, isV5, journal, journalContract,
@@ -13,7 +17,21 @@ module.exports = async (ctx) => {
         });
         const bps = shares.reduce((s, d) => s + Number(d.toObject().shareBps), 0);
         const mine = shares.some((d) => d.getOwnerId().toString() === myId) ? "  <- member" : "";
-        console.log(`  ${p.getId().toString()}  node ${Buffer.from(o.proTxHash).toString("hex").slice(0, 12)}... ` +
+        // the node column must not silently empty on an immutable ledger, where the pool
+        // names no node and only a verified completion receipt does. A blank would read to a
+        // member as "this pool backs nothing", which is a different claim from "the ledger
+        // does not tell me". A member listing pools does not act on the node, so it reports.
+        let node = lifecycle.backingNode({ pool: o });
+        if (hasImmutablePool()) {
+          const rd = (await client.platform.documents.get("poolLedger.completionReceipt",
+            { where: [["poolId", "==", p.getId()]] }))[0] || null;
+          const ro = rd ? rd.toObject() : null;
+          const okR = ro ? checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: ro,
+            pool: o, poolId: p.getId() }).ok === true : false;
+          node = lifecycle.backingNode({ pool: o, receipt: ro, receiptOk: okR });
+        }
+        const nodeLabel = node.known ? `node ${node.hex.slice(0, 12)}...` : "node UNKNOWN";
+        console.log(`  ${p.getId().toString()}  ${nodeLabel} ` +
           `slot ${o.slotIndex}, fee ${Number(o.operatorFeeBps)} bps, shares ${bps}/10000${mine}`);
       }
       return;

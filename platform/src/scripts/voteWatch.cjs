@@ -63,7 +63,28 @@ const { fetchL1Vote } = require("./l1gov.cjs");
       where: [["$id", "==", poolId]],
     }))[0];
     if (!pool) throw new Error(`no pool ${poolIdStr} on the ledger`);
-    const proTxHex = Buffer.from(pool.toObject().proTxHash).toString("hex");
+    // THE NODE THIS VOTE IS ABOUT. On v8 the pool names it. On v9 the pool names nothing and
+    // only a VERIFIED completion receipt establishes the node, so the identity is taken from
+    // there or the run refuses. This is not display: the hex is used to fetch the L1 vote and
+    // is written into the observation, so an unestablished node here would publish a false
+    // statement attributing a governance vote to a masternode the ledger does not tie to this
+    // pool. requireBackingNode makes that a crash rather than a record.
+    const lifecycle = require("./poolLifecycle.cjs");
+    const { hasImmutablePool } = require("./envStore.cjs");
+    const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
+    let receiptObj = null, receiptOk = false;
+    if (hasImmutablePool()) {
+      const rd = (await client.platform.documents.get("poolLedger.completionReceipt",
+        { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+      if (rd) {
+        receiptObj = rd.toObject();
+        receiptOk = checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: receiptObj,
+          pool: pool.toObject(), poolId: pool.getId() }).ok === true;
+      }
+    }
+    const proTxHex = lifecycle.requireBackingNode(
+      lifecycle.backingNode({ pool: pool.toObject(), receipt: receiptObj, receiptOk }),
+      "record a vote observation for this pool");
     const proposalBuf = Buffer.from(proposalHex, "hex");
 
     if (cmd === "list") {
