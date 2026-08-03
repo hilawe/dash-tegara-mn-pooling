@@ -977,19 +977,21 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // state asserts a node; when Core is reachable, confirm the node is actually in
       // the DMN list rather than waiting for an eventual settlement failure.
       //
-      // THIS CHECK IS UNAVAILABLE ON AN IMMUTABLE-POOL LEDGER, because it needs a proTxHash
-      // and the v9 pool carries none. The node identity there lives on the completion
-      // receipt, so the equivalent check reads it from `cls.receiptDoc` once the receipt
-      // readers land; until then it is skipped ALOUD rather than silently, since a check
-      // that quietly stops running is worse than one that says it cannot.
-      if (!forming && hasImmutablePool()) {
-        console.log("L1 check: skipped, the immutable pool carries no proTxHash " +
-          "(the node identity is on the completion receipt; reader not migrated yet)");
-      } else if (!forming) {
-        if (process.env.FORK_RPC_URL) {
+      // THE NODE IDENTITY IS ROUTED THROUGH THE DESIGN'S ONE PRODUCER, backingNode: on
+      // v8 that is the pool's own proTxHash (the value this check always read), on v9 it
+      // is the VERIFYING completion receipt, and a pool with no established node prints
+      // WHY rather than a blank, because a check that quietly stops running is worse
+      // than one that says it cannot (a receipt-less v9 pool asserts no node at all,
+      // and a non-verifying receipt establishes nothing).
+      if (!forming) {
+        const node = lifecycle.backingNode({ pool: po,
+          receipt: cls.receiptDoc ? cls.receiptDoc.toObject() : null, receiptOk: cls.receiptOk });
+        if (!node.known) {
+          console.log(`L1 check: no established node to check (${node.why})`);
+        } else if (process.env.FORK_RPC_URL) {
           try {
             const { fetchCollateral } = require("./l1gov.cjs");
-            const c = await fetchCollateral(Buffer.from(po.proTxHash).toString("hex"));
+            const c = await fetchCollateral(node.hex);
             console.log(`L1 check: the backing node is in the DMN list (collateral ${c.txid.slice(0, 16)}...:${c.vout})`);
           } catch (e) {
             // ONLY a genuine protx-not-found from Core supports the missing-node claim
