@@ -56,9 +56,9 @@
  * The kept claims mean the unique index keeps guarding slot numbers even after the pool
  * goes live, so a late claim can only land out of range, where it is inert. The
  * operator-created slot inventory that would give completion and reservation a shared
- * conflict point is the v7 design. FORMATION_HALT_AFTER=commit|shares is a
+ * conflict point is the v7 design. FORMATION_HALT_AFTER=commit|shares|flip is a
  * deterministic test hook that exits at the named phase boundary so the resume path is
- * exercisable.
+ * exercisable (`flip` only on ledgers that have one; an immutable-pool ledger refuses it).
  */
 const crypto = require("crypto");
 const Dash = require("dash");
@@ -74,8 +74,11 @@ const { fetchAll, fetchUpTo } = require("./query.cjs");
 const MAX_SLOT_COUNT = 512;
 const MAX_PLEDGE_CLAIMS = MAX_SLOT_COUNT + 128;
 const { loadEnv, updateEnvKey, reserveAddrIndex, activeContractId, isV5, isV6, isV7, isV8,
-  acquireOpLock, releaseOpLock } = require("./envStore.cjs");
+  acquireOpLock, releaseOpLock, assertSupportedLedger, hasParedReceipt,
+  hasImmutablePool } = require("./envStore.cjs");
 const journal = require("./compoundJournal.cjs");
+const lifecycle = require("./poolLifecycle.cjs");
+const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
 const core = require("./formationCore.cjs");
 
 const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
@@ -86,14 +89,19 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     console.error("run register.cjs first (need MNEMONIC, IDENTITY_ID, CONTRACT_ID)");
     process.exit(1);
   }
-  if (process.env.LEDGER && !["v1", "v3", "v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER)) {
-    console.error(`unsupported LEDGER value "${process.env.LEDGER}" (use v1, v3, v4, v5, v6, v7, or v8)`);
-    process.exit(1);
-  }
-
+  // the supported set lives in envStore's version table, never in a second copy here
+  try { assertSupportedLedger(); } catch (e) { console.error(e.message); process.exit(1); }
   const cmd = process.argv[2];
   const args = process.argv.slice(3);
   const HALT = process.env.FORMATION_HALT_AFTER || "";
+  // `flip` names the gap between the flip and the receipt, which does not exist on an
+  // immutable-pool ledger. Refuse it LOUDLY rather than ignore it (invariant list item 7):
+  // a test hook that silently does nothing lets a harness setup pass vacuously.
+  if (HALT === "flip" && hasImmutablePool()) {
+    console.error("FORMATION_HALT_AFTER=flip names a phase boundary that does not exist on an " +
+      "immutable-pool ledger (there is no flip); use commit or shares");
+    process.exit(1);
+  }
 
   if (cmd === "done") {
     // (hoisted ABOVE the Dash.Client construction: the constructor itself needs a
@@ -567,7 +575,13 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (Identifier.from(Buffer.from(o.poolId)).toString() !== draft.poolId) bad.push("poolId differs");
       if (Buffer.from(o.proTxHash).toString("hex") !== draft.proTxHash) bad.push("proTxHash differs");
       if (Number(o.slotIndex) !== draft.slotIndex) bad.push(`slotIndex ${o.slotIndex} != ${draft.slotIndex}`);
-      if (o.nodeType !== draft.nodeType) bad.push(`nodeType ${o.nodeType} != ${draft.nodeType}`);
+      // nodeType and targetDuffs are only ON the receipt before the paring. On v9 they live
+      // on the immutable pool, so the draft is compared against the POOL instead, in
+      // requireDraftMatchesPool. Reading them here on v9 would compare undefined to a real
+      // value and reject every valid receipt.
+      if (!hasParedReceipt() && o.nodeType !== draft.nodeType) {
+        bad.push(`nodeType ${o.nodeType} != ${draft.nodeType}`);
+      }
       // NOTE (F-I): operatorFeeBps is NOT compared here. The fee is pinned to the pool
       // pre-flip (requireDraftMatchesPool with requireFee while forming) and written into
       // the receipt from that draft, so a freshly-created receipt trivially matches. This
@@ -577,7 +591,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // immutable receipt. The `receipt` command's reconcile already excludes fee likewise.
       if (Number(o.formatVersion) !== 1) bad.push("formatVersion is not 1");
       if (Number(o.participantCount) !== draft.participantCount) bad.push("participantCount differs");
-      if (Number(o.targetDuffs) !== draft.targetDuffs) bad.push("targetDuffs differs");
+      if (!hasParedReceipt() && Number(o.targetDuffs) !== draft.targetDuffs) bad.push("targetDuffs differs");
       if (o.l1Verification !== draft.l1Verification) {
         bad.push(`l1Verification "${o.l1Verification}" != draft "${draft.l1Verification}"`);
       }
@@ -594,7 +608,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       let doc = await queryReceipt();
       if (doc) {
         verifyReceiptAgainstDraft(doc, draft);
-        requireReceiptBindsPool(doc.toObject(), (await getPool(poolIdStr)).toObject()); // round-6: fresh pool bind
+        requireReceiptBindsPool(doc.toObject(), (await getPool(poolIdStr)).toObject(), poolIdStr); // round-6: fresh pool bind
         console.log(`completion receipt already recorded (${doc.getId().toString()}), matches the draft and pool`);
         return doc;
       }
@@ -611,18 +625,28 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const receipt = await client.platform.documents.create(
         "poolLedger.completionReceipt", operator, receiptPropertiesFromDraft(pool, draft));
       const preBroadcast = (await getPool(poolIdStr)).toObject();
-      const liveNow = Buffer.from(preBroadcast.proTxHash);
-      if (core.isFormingHash(liveNow) || liveNow.toString("hex") !== draft.proTxHash) {
-        throw new Error(`the pool is ${core.isFormingHash(liveNow) ? "still FORMING" :
-          `live under ${liveNow.toString("hex")}`}, not live under the draft's ` +
-          `${draft.proTxHash}; refusing to record a receipt that contradicts the pool ` +
-          "(the draft and manifest are kept, resolve by hand)");
+      if (!hasImmutablePool()) {
+        // v8: the pool asserts a node itself, so a receipt naming a different one would
+        // contradict it. The v9 pool asserts none (invariant list item 8), so this gate's
+        // subject does not exist there and the binding that remains is the draft-to-pool
+        // constants check below.
+        const liveNow = Buffer.from(preBroadcast.proTxHash);
+        if (core.isFormingHash(liveNow) || liveNow.toString("hex") !== draft.proTxHash) {
+          throw new Error(`the pool is ${core.isFormingHash(liveNow) ? "still FORMING" :
+            `live under ${liveNow.toString("hex")}`}, not live under the draft's ` +
+            `${draft.proTxHash}; refusing to record a receipt that contradicts the pool ` +
+            "(the draft and manifest are kept, resolve by hand)");
+        }
+        if (preBroadcast.status !== undefined && preBroadcast.status !== "live") {
+          throw new Error(`the pool status is "${preBroadcast.status}", not live, immediately before ` +
+            "the receipt broadcast; refusing (the draft and manifest are kept, resolve by hand)");
+        }
       }
-      if (preBroadcast.status !== undefined && preBroadcast.status !== "live") {
-        throw new Error(`the pool status is "${preBroadcast.status}", not live, immediately before ` +
-          "the receipt broadcast; refusing (the draft and manifest are kept, resolve by hand)");
-      }
-      requireDraftMatchesPool(draft, preBroadcast); // slot/node vs the fresh pool (fee is historical here: post-flip)
+      // slot/node/target vs the fresh pool. The fee context differs by ledger (invariant
+      // list item 5): on v8 it is historical here (post-flip, legitimately mutable), on an
+      // immutable pool it cannot have drifted, so requiring it costs nothing and a mismatch
+      // means the DRAFT is damaged.
+      requireDraftMatchesPool(draft, preBroadcast, { requireFee: hasImmutablePool() });
       try {
         await client.platform.documents.broadcast({ create: [receipt] }, operator);
         console.log(`completion receipt created: ${receipt.getId().toString()}`);
@@ -636,7 +660,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           "the manifest and draft are KEPT, re-run to verify (never assume the write landed)");
       }
       verifyReceiptAgainstDraft(doc, draft);
-      requireReceiptBindsPool(doc.toObject(), (await getPool(poolIdStr)).toObject()); // round-6: fresh pool bind
+      requireReceiptBindsPool(doc.toObject(), (await getPool(poolIdStr)).toObject(), poolIdStr); // round-6: fresh pool bind
       return doc;
     };
 
@@ -656,14 +680,24 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
 
     // one construction for the receipt's document properties, used by BOTH the mixed
     // probe and the sequential writer so the two can never drift (review, lens 2)
+    // On a PARED-RECEIPT ledger (v9) the three fields the immutable pool already pins are
+    // omitted: emitting them would be schema-rejected, and their duplication was the
+    // contradiction surface the v9 review closed. slotIndex STAYS on both shapes because the
+    // unique bySlot index needs it, which is why it is the one duplicated field left and the
+    // one the shared receipt-to-pool check still has to compare.
     const receiptPropertiesFromDraft = (pool, draft) => ({
       poolId: pool.getId().toBuffer(),
       proTxHash: Buffer.from(draft.proTxHash, "hex"),
-      slotIndex: draft.slotIndex, nodeType: draft.nodeType,
-      operatorFeeBps: draft.operatorFeeBps, formatVersion: 1,
+      slotIndex: draft.slotIndex,
+      ...(hasParedReceipt() ? {} : {
+        nodeType: draft.nodeType,
+        operatorFeeBps: draft.operatorFeeBps,
+        targetDuffs: draft.targetDuffs,
+      }),
+      formatVersion: 1,
       allocationRows: Buffer.from(draft.allocationRowsHex, "hex"),
       allocationHash: Buffer.from(draft.allocationHashHex, "hex"),
-      participantCount: draft.participantCount, targetDuffs: draft.targetDuffs,
+      participantCount: draft.participantCount,
       l1Verification: draft.l1Verification, verificationMethodVersion: 1,
     });
 
@@ -726,6 +760,18 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const bad = [];
       if (draft.slotIndex !== Number(po.slotIndex)) bad.push(`slotIndex ${draft.slotIndex} != pool ${po.slotIndex}`);
       if (draft.nodeType !== po.nodeType) bad.push(`nodeType ${draft.nodeType} != pool ${po.nodeType}`);
+      // THE v9 TARGET COMPARISON. targetDuffs swaps sides at v9: before the paring it is a
+      // receipt field and verifyReceiptAgainstDraft compares it to the draft, while the pool
+      // carries none. On v9 the pool carries it and the receipt does not, so without this
+      // the draft's target would be pinned against nothing and a drifted draft could freeze
+      // a wrong target into the allocation preimage of an immutable receipt.
+      if (hasParedReceipt()) {
+        if (po.targetDuffs === undefined || po.targetDuffs === null) {
+          bad.push("the pool carries no targetDuffs, which a pared-receipt ledger requires");
+        } else if (Number(draft.targetDuffs) !== Number(po.targetDuffs)) {
+          bad.push(`targetDuffs ${draft.targetDuffs} != pool ${po.targetDuffs}`);
+        }
+      }
       if (requireFee && draft.operatorFeeBps !== Number(po.operatorFeeBps || 0)) {
         bad.push(`operatorFeeBps ${draft.operatorFeeBps} != pool ${Number(po.operatorFeeBps || 0)} ` +
           "(the fee changed before the flip; the receipt must record the completion-time fee)");
@@ -738,19 +784,67 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // an existing on-ledger receipt must bind to the CURRENT pool before it is accepted or
     // before local state is finalized (round-6): re-fetched fresh at the point of use, so a
     // credentialed external pool mutation during an await cannot slip a contradicting
-    // receipt past. Hash + status + pool constants; fee excluded (historical, as above).
-    const requireReceiptBindsPool = (receiptObj, poolObj) => {
+    // receipt past. On v8, hash + status + pool constants; fee excluded (historical, as
+    // above). On an immutable pool the hash and status have no pool side (invariant list
+    // item 9), so the binding routes through the SHARED four-duty check instead, which is
+    // stronger on the fields that do exist: it also pins the receipt's embedded target to
+    // the pool, which the v8 binding never did.
+    const requireReceiptBindsPool = (receiptObj, poolObj, poolIdStr) => {
+      if (hasImmutablePool()) {
+        const res = checkReceiptAgainstPool({ contractId: activeContractId(env),
+          receipt: receiptObj, pool: poolObj, poolId: poolIdStr });
+        if (!res.ok) {
+          throw new Error(`the on-ledger receipt does not verify against the current pool ` +
+            `(${res.reason}). Refusing; local state is kept, resolve by hand.`);
+        }
+        return;
+      }
       const bad = [];
       const liveHash = Buffer.from(poolObj.proTxHash);
       if (core.isFormingHash(liveHash)) bad.push("the pool is still forming");
       else if (!liveHash.equals(Buffer.from(receiptObj.proTxHash))) bad.push("proTxHash differs from the live pool");
       if (poolObj.status !== undefined && poolObj.status !== "live") bad.push(`pool status is "${poolObj.status}", not live`);
       if (Number(receiptObj.slotIndex) !== Number(poolObj.slotIndex)) bad.push("slotIndex differs from the pool");
-      if (receiptObj.nodeType !== poolObj.nodeType) bad.push("nodeType differs from the pool");
+      // on a pared receipt there is no nodeType to differ; the pool is its only carrier
+      if (!hasParedReceipt() && receiptObj.nodeType !== poolObj.nodeType) {
+        bad.push("nodeType differs from the pool");
+      }
       if (bad.length > 0) {
         throw new Error("the on-ledger receipt CONTRADICTS the current pool: " + bad.join("; ") +
           ". Refusing; local state is kept, resolve by hand.");
       }
+    };
+
+    // WHAT STATE IS THIS POOL IN, asked once and answered the same way everywhere (phase E).
+    //
+    // On v8 the pool answers by itself, because `proTxHash` starts in the forming namespace
+    // and the flip mutates it. On v9 the pool is immutable and carries neither `proTxHash`
+    // nor `status`, so the COMPLETION RECEIPT is the state machine and the operator's own
+    // local manifest or draft is the only thing that can narrow a receipt-less pool to
+    // in-flight. `poolLifecycle` holds that distinction; this wrapper supplies the three
+    // inputs it cannot fetch for itself.
+    //
+    // The local-evidence argument is deliberately the OPERATOR's own state and nothing else.
+    // A caller without it gets UNDETERMINED rather than a guess, which is the same reason
+    // the funder client's admission rule fails closed.
+    const fetchReceiptFor = async (pool) => (await client.platform.documents.get(
+      "poolLedger.completionReceipt", { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+
+    const classifyPoolNow = async (pool, poolIdStr, poolObj = null) => {
+      const po = poolObj || pool.toObject();
+      // only ledgers that HAVE a completion receipt can have one to fetch
+      const receiptDoc = isV8() ? await fetchReceiptFor(pool) : null;
+      const envNow = loadEnv();
+      const operatorHasInFlight = envNow[manifestKeyOf(poolIdStr)] !== undefined
+        || envNow[receiptDraftKeyOf(poolIdStr)] !== undefined;
+      return {
+        ...lifecycle.classifyPool({
+          contractId: activeContractId(env), pool: po, poolId: pool.getId(),
+          receipt: receiptDoc ? receiptDoc.toObject() : null,
+          operatorHasInFlight,
+        }),
+        receiptDoc,
+      };
     };
 
     // ONE finalization for `complete` and `receipt` (review major): the receipt is
@@ -785,7 +879,6 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (!core.TARGETS[nodeType] || !/^[0-9]{1,5}$/.test(feeStr || "") || parseInt(feeStr, 10) > 10000) {
         throw new Error("usage: create <regular|evo> <feeBps 0..10000>");
       }
-      const placeholder = Buffer.concat([Buffer.alloc(16, 0), crypto.randomBytes(16)]);
       // v7: the slot economics are creation-time POOL DATA (review finding A1), the
       // single on-ledger source every client reads; SLOT_DUFFS configures the OPERATOR
       // at creation only, members never choose a size
@@ -811,23 +904,48 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           slotCount,
         };
       }
+      // THE POOL SHAPE IS LEDGER-DEPENDENT (invariant list item 13). Through v8 the pool
+      // carries the forming placeholder, the operator identity, and (v5+) an explicit
+      // status; the flip later mutates it live. The v9 pool is IMMUTABLE and final at
+      // creation: no proTxHash, no status, no operatorIdentityId (the $ownerId is the
+      // binding), and the REQUIRED targetDuffs the paring moved onto it. Emitting the v8
+      // fields there would be schema-rejected (additionalProperties: false).
+      const poolProps = hasImmutablePool()
+        ? {
+          slotIndex: 0, nodeType, operatorFeeBps: parseInt(feeStr, 10),
+          targetDuffs: journal.toSafeNumber(core.TARGETS[nodeType], "target"),
+        }
+        : {
+          proTxHash: Buffer.concat([Buffer.alloc(16, 0), crypto.randomBytes(16)]),
+          slotIndex: 0, nodeType,
+          operatorIdentityId: operator.getId().toBuffer(), operatorFeeBps: parseInt(feeStr, 10),
+          // v5 carries the lifecycle explicitly; the placeholder convention stays as
+          // belt and braces for the hash itself
+          ...(isV5() ? { status: "forming" } : {}),
+        };
       const doc = await client.platform.documents.create("poolLedger.pool", operator, {
-        proTxHash: placeholder, slotIndex: 0, nodeType,
-        operatorIdentityId: operator.getId().toBuffer(), operatorFeeBps: parseInt(feeStr, 10),
-        // v5 carries the lifecycle explicitly; the placeholder convention stays as
-        // belt and braces for the hash itself
-        ...(isV5() ? { status: "forming" } : {}),
+        ...poolProps,
         ...slotFields,
       });
       await client.platform.documents.broadcast({ create: [doc] }, operator);
-      console.log(`forming pool created: ${doc.getId().toString()}`);
+      console.log(hasImmutablePool()
+        ? `pool created (immutable; its completion state will live on the completion receipt): ${doc.getId().toString()}`
+        : `forming pool created: ${doc.getId().toString()}`);
       console.log(`  target ${DASHfmt(core.TARGETS[nodeType])} DASH (${nodeType}), fee ${feeStr} bps`);
       if (isV7()) console.log(`  slot book: ${slotFields.slotCount} slots of ` +
         `${DASHfmt(slotFields.slotDuffs)} DASH (on the pool document)`);
       // the participation instruction matches the ledger (F-P: pledge REFUSES on the
-      // slot-book ledgers, so never advertise it there)
+      // slot-book ledgers, so never advertise it there). On an immutable-pool ledger the
+      // admission rule fails closed on a receipt-less pool, so the advertised instruction
+      // must carry the explicit coordination the rule's one exception requires.
       console.log(isV6()
-        ? `  members participate with: funderClient reserve ${doc.getId().toString()} <slotNo>`
+        ? (hasImmutablePool()
+          ? `  members participate with: TEGARA_PARTICIPATE=${doc.getId().toString()} ` +
+            `funderClient reserve ${doc.getId().toString()} <slotNo>\n` +
+            "  (the explicit TEGARA_PARTICIPATE naming THIS pool is required: a receipt-less " +
+            "immutable pool is indistinguishable from an abandoned one, so admission fails " +
+            "closed without it)"
+          : `  members participate with: funderClient reserve ${doc.getId().toString()} <slotNo>`)
         : `  members pledge with: funderClient pledge ${doc.getId().toString()} <duffs>`);
       return;
     }
@@ -837,10 +955,16 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (!poolIdStr) throw new Error("usage: status <poolId>");
       const pool = await getPool(poolIdStr);
       const po = pool.toObject();
-      const forming = core.isFormingHash(Buffer.from(po.proTxHash));
+      // ONE classification, shared with `complete`, `receipt` and `abandon`. The printed
+      // state is the classifier's, not a two-way forming/live guess, because on an immutable
+      // ledger a receipt-less pool genuinely IS open, in flight and abandoned at once and
+      // printing "FORMING" for it would be a claim the data does not support.
+      const cls = await classifyPoolNow(pool, poolIdStr, po);
+      const forming = cls.state === lifecycle.STATES.FORMING;
       const target = core.TARGETS[po.nodeType];
-      console.log(`pool ${poolIdStr}: ${forming ? "FORMING" : "LIVE"} (${po.nodeType}, ` +
+      console.log(`pool ${poolIdStr}: ${cls.state.toUpperCase()} (${po.nodeType}, ` +
         `fee ${Number(po.operatorFeeBps)} bps)`);
+      console.log(`  ${cls.reason}`);
       if (loadEnv()[manifestKeyOf(poolIdStr)]) {
         console.log("  a completion manifest is COMMITTED; finish it with the same complete command");
       }
@@ -851,8 +975,17 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       for (const r of rows) console.log(`  ${DASHfmt(r.amount)} DASH by ${r.owner} (request ${r.id})`);
       // proactive L1 check for a LIVE pool (review follow-on, review): the on-ledger
       // state asserts a node; when Core is reachable, confirm the node is actually in
-      // the DMN list rather than waiting for an eventual settlement failure
-      if (!forming) {
+      // the DMN list rather than waiting for an eventual settlement failure.
+      //
+      // THIS CHECK IS UNAVAILABLE ON AN IMMUTABLE-POOL LEDGER, because it needs a proTxHash
+      // and the v9 pool carries none. The node identity there lives on the completion
+      // receipt, so the equivalent check reads it from `cls.receiptDoc` once the receipt
+      // readers land; until then it is skipped ALOUD rather than silently, since a check
+      // that quietly stops running is worse than one that says it cannot.
+      if (!forming && hasImmutablePool()) {
+        console.log("L1 check: skipped, the immutable pool carries no proTxHash " +
+          "(the node identity is on the completion receipt; reader not migrated yet)");
+      } else if (!forming) {
         if (process.env.FORK_RPC_URL) {
           try {
             const { fetchCollateral } = require("./l1gov.cjs");
@@ -915,7 +1048,22 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         validateManifest(manifest, poolIdStr, proTxHex, po);
         console.log("resuming the COMMITTED completion (driving from the manifest, not live state)");
       } else {
-        if (!core.isFormingHash(Buffer.from(po.proTxHash))) {
+        // NOTHING TO DO HERE, asked through the classifier so it means something on both
+        // ledgers. On v8 that is "the pool already flipped". On v9 there is no flip, so the
+        // equivalent is "a completion receipt already verifies against this pool"; a
+        // receipt-less v9 pool is UNDETERMINED and completion is exactly what resolves it,
+        // so only COMPLETED refuses. A receipt that CONTRADICTS the pool also refuses, via
+        // the classifier's own refusal to read a contradiction as absence.
+        const pre = await classifyPoolNow(pool, poolIdStr, po);
+        if (pre.state === lifecycle.STATES.COMPLETED) {
+          throw new Error("this pool has already COMPLETED (a receipt verifies against it) and no " +
+            "completion manifest exists; nothing to do");
+        }
+        if (pre.receiptDoc && !pre.receiptOk) {
+          throw new Error(`a completion receipt exists for this pool but does not verify against it ` +
+            `(${pre.reason}). Refusing to start a second completion over a contradiction; resolve by hand.`);
+        }
+        if (!hasImmutablePool() && !core.isFormingHash(Buffer.from(po.proTxHash))) {
           throw new Error("pool is already LIVE and no completion manifest exists; nothing to do");
         }
         const rows = await pendingJoinRows(pool.getId(), po);
@@ -1075,10 +1223,18 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       //     both sides of all three fields in the refusal.
       // The pool is RE-FETCHED here so the hash check sees the state at preflight time,
       // not the copy from before manifest processing (re-check finding).
-      const currentHash = Buffer.from((await getPool(poolIdStr)).toObject().proTxHash);
-      if (!core.isFormingHash(currentHash) && currentHash.toString("hex") !== manifest.realHash) {
-        throw new Error(`the pool is live under ${currentHash.toString("hex")}, which contradicts the ` +
-          `committed manifest's ${manifest.realHash}; the manifest is kept, resolve by hand`);
+      // THE POOL-VERSUS-MANIFEST NODE CHECK. On v8 the flipped pool names the node, so a
+      // manifest naming a different one is a contradiction. On v9 the pool names no node at
+      // all, so this specific contradiction is UNREPRESENTABLE there and the equivalent
+      // binding is the completion receipt's own proTxHash, which the receipt readers check.
+      // Skipping it on v9 is therefore not a weakened check, it is a check whose subject
+      // does not exist; the binding it protected moved rather than vanished.
+      if (!hasImmutablePool()) {
+        const currentHash = Buffer.from((await getPool(poolIdStr)).toObject().proTxHash);
+        if (!core.isFormingHash(currentHash) && currentHash.toString("hex") !== manifest.realHash) {
+          throw new Error(`the pool is live under ${currentHash.toString("hex")}, which contradicts the ` +
+            `committed manifest's ${manifest.realHash}; the manifest is kept, resolve by hand`);
+        }
       }
       const existingShares = {};
       for (const o of manifest.owners) {
@@ -1122,8 +1278,11 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           // parseable-but-damaged draft drives an immutable write, so every field is
           // validated and cross-checked against the frozen manifest before use
           validateReceiptDraft(receiptDraft, poolIdStr, manifest);
-          requireDraftMatchesPool(receiptDraft, po,
-            { requireFee: core.isFormingHash(Buffer.from(po.proTxHash)) });
+          // the fee context (invariant list item 5): pre-flip exact on v8, historical once
+          // flipped; always exact on an immutable pool, where the fee cannot have drifted
+          requireDraftMatchesPool(receiptDraft, po, {
+            requireFee: hasImmutablePool() || core.isFormingHash(Buffer.from(po.proTxHash)),
+          });
           console.log("resuming with the FROZEN receipt draft (verification level " +
             `${receiptDraft.l1Verification} from the original preflight)`);
         } else {
@@ -1225,7 +1384,17 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const participantShareCount = manifest.owners.length;
       if (HALT === "shares") { console.log("[test hook] halting after SETTLE, before the flip"); return; }
 
-      // phase 3, FLIP LAST: no reader ever sees a live pool without its shares.
+      // phase 3, COMPLETION-RECORD LAST: no reader ever sees a completed pool without its
+      // shares (invariant list item 1). On the flip ledgers the record is the pool's own
+      // flip; on an immutable-pool ledger it is the receipt alone, and THERE IS NO FLIP:
+      // the entire flip block below is v8-and-earlier, and the v9 path drops straight
+      // through to the receipt publication, which the review named "the flip step becomes
+      // receipt publication only". The probe's atomicity has nothing left to protect with
+      // one document to write (item 2), the laundering guard's anomaly class is carried by
+      // the classifier preflight, verifyReceiptAgainstDraft and the byPool unique index
+      // (item 3), and the drift re-checks' subject cannot occur on an immutable pool
+      // (items 4 to 6).
+      //
       // v8 couples the receipt to the flip when the SDK can express it (spec C-G):
       // the mixed create-receipt + replace-pool transition is PROBED live; if the
       // probe fails, the sequential fallback (flip, then the idempotent receipt
@@ -1237,120 +1406,122 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // before ANY flip, closing a mid-run operator-credentialed slot change that a
       // load-time validateManifest would miss. Called for the first fetch here AND after
       // the mixed-transition fallback re-fetch (re-check: that path is also a flip path).
-      const requireSlotsMatchFresh = (fo) => {
-        if (manifest.slotDuffs !== undefined && Number(fo.slotDuffs) !== manifest.slotDuffs) {
-          throw new Error(`the pool's slotDuffs changed to ${fo.slotDuffs} (committed ${manifest.slotDuffs}) ` +
-            "before the flip; not flipping (the manifest and draft are kept)");
-        }
-        if (manifest.slotCount !== undefined && Number(fo.slotCount) !== manifest.slotCount) {
-          throw new Error(`the pool's slotCount changed to ${fo.slotCount} (committed ${manifest.slotCount}) ` +
-            "before the flip; not flipping (the manifest and draft are kept)");
-        }
-      };
-      let fresh = await getPool(poolIdStr);
-      requireSlotsMatchFresh(fresh.toObject());
-      let freshHash = Buffer.from(fresh.toObject().proTxHash);
-      if (core.isFormingHash(freshHash)) {
-        // FLIP-FIRST ordering guard (round-4 blocker): a receipt must never exist while
-        // the pool is still forming (the flip precedes the receipt). If one is already
-        // there, it is an anomaly (a squatter refused by owner-only would not have
-        // landed, so this is our own inconsistent state or a credentialed external
-        // write), and flipping the pool "to fit it" would launder that anomaly. Stop
-        // loudly BEFORE any flip; do not let the mixed probe's broad catch flip past it.
-        if (isV8()) {
-          const preExisting = (await client.platform.documents.get("poolLedger.completionReceipt",
-            { where: [["poolId", "==", pool.getId()]] }))[0] || null;
-          if (preExisting) {
-            throw new Error(`a completionReceipt (${preExisting.getId().toString()}) already exists for ` +
-              "this pool while it is still FORMING; the flip must precede the receipt, so this is an " +
-              "anomalous state. Refusing to flip; the manifest and draft are kept, resolve by hand.");
+      if (!hasImmutablePool()) {
+        const requireSlotsMatchFresh = (fo) => {
+          if (manifest.slotDuffs !== undefined && Number(fo.slotDuffs) !== manifest.slotDuffs) {
+            throw new Error(`the pool's slotDuffs changed to ${fo.slotDuffs} (committed ${manifest.slotDuffs}) ` +
+              "before the flip; not flipping (the manifest and draft are kept)");
           }
-          // and the pool must still match the frozen draft BEFORE the flip (round-5): if
-          // slotIndex/nodeType/fee drifted since the draft froze, flipping first would
-          // leave a live pool whose only publishable receipt contradicts it (and a mixed
-          // transition, if ever accepted, would atomically record the stale receipt).
-          // Catch it here, before either flip path mutates anything.
-          requireDraftMatchesPool(receiptDraft, fresh.toObject(), { requireFee: true });
-        }
-        let flippedByMixed = false;
-        if (isV8() && process.env.FORMATION_NO_MIXED !== "1") {
-          // the MIXED-TRANSITION PROBE (like the v6/v7 transfer probes): create the
-          // receipt from the frozen draft and replace the pool in ONE operator batch
-          const receiptDoc = await client.platform.documents.create(
-            "poolLedger.completionReceipt", operator, receiptPropertiesFromDraft(pool, receiptDraft));
-          fresh.set("proTxHash", realHash);
-          fresh.set("status", "live"); // v8 is v5+, the one legitimate forming -> live edge
-          try {
-            await client.platform.documents.broadcast(
-              { create: [receiptDoc], replace: [fresh] }, operator);
-            flippedByMixed = true;
-            console.log(`pool flipped LIVE with its receipt in ONE transition (mixed probe OK): ` +
-              `proTxHash ${proTxHex}, receipt ${receiptDoc.getId().toString()}`);
-          } catch (e) {
-            // ONLY fall back on the known one-transition-limit rejection (round-4
-            // blocker: catching EVERY error meant a duplicate-unique, i.e. a receipt
-            // that appeared under a race, would still flip the pool). Anything else,
-            // including a duplicate-unique, rethrows WITHOUT flipping.
-            // ONLY the one-transition-limit rejection falls back (round-4). Match it by
-            // the typed error name (robust to any message wrapping), else by EXACT
-            // message equality. A SUBSTRING match is unsafe: a compound message such as
-            // "Amount of document transitions must be less or equal to 1; duplicate
-            // unique index" would then fall back and flip past a receipt that already
-            // exists, re-opening the laundering path (round-4 re-check-2).
-            const msg = (e && e.message) || String(e);
-            const isTxnLimit = (e && e.name === "MaxDocumentsTransitionsExceededError")
-              || msg === "Amount of document transitions must be less or equal to 1";
-            if (!isTxnLimit) {
-              throw new Error(`the coupled create+replace transition failed for a reason other than the ` +
-                `one-transition limit (${msg}); NOT flipping. The manifest and draft are kept, resolve by hand.`);
-            }
-            console.log(`MIXED-TRANSITION PROBE hit the one-transition limit; falling back to the ` +
-              "sequential flip-then-receipt path (the draft and manifest are retained)");
-            // the failed broadcast may have touched the local document objects, so the
-            // sequential path re-fetches the pool before mutating anything, and re-asserts
-            // the slot economics against THIS fresh object too (F-D re-check: a slot change
-            // during the mixed attempt must not slip through the fallback flip)
-            fresh = await getPool(poolIdStr);
-            requireSlotsMatchFresh(fresh.toObject());
-            freshHash = Buffer.from(fresh.toObject().proTxHash);
-            // RE-QUERY for a receipt immediately before the sequential flip (round-4
-            // re-check): a credentialed external writer could have created one DURING
-            // the mixed probe's create/broadcast awaits, and Platform may surface the
-            // transition-count error before the uniqueness check, so the earlier
-            // pre-flip guard is not enough. The only irreducible window is between this
-            // query and consensus inclusion of the flip.
-            const raced = (await client.platform.documents.get("poolLedger.completionReceipt",
+          if (manifest.slotCount !== undefined && Number(fo.slotCount) !== manifest.slotCount) {
+            throw new Error(`the pool's slotCount changed to ${fo.slotCount} (committed ${manifest.slotCount}) ` +
+              "before the flip; not flipping (the manifest and draft are kept)");
+          }
+        };
+        let fresh = await getPool(poolIdStr);
+        requireSlotsMatchFresh(fresh.toObject());
+        let freshHash = Buffer.from(fresh.toObject().proTxHash);
+        if (core.isFormingHash(freshHash)) {
+          // FLIP-FIRST ordering guard (round-4 blocker): a receipt must never exist while
+          // the pool is still forming (the flip precedes the receipt). If one is already
+          // there, it is an anomaly (a squatter refused by owner-only would not have
+          // landed, so this is our own inconsistent state or a credentialed external
+          // write), and flipping the pool "to fit it" would launder that anomaly. Stop
+          // loudly BEFORE any flip; do not let the mixed probe's broad catch flip past it.
+          if (isV8()) {
+            const preExisting = (await client.platform.documents.get("poolLedger.completionReceipt",
               { where: [["poolId", "==", pool.getId()]] }))[0] || null;
-            if (raced) {
-              throw new Error(`a completionReceipt (${raced.getId().toString()}) appeared for this pool ` +
-                "during the coupled-transition attempt, while it is still FORMING; refusing to flip past " +
-                "it. The manifest and draft are kept, resolve by hand.");
+            if (preExisting) {
+              throw new Error(`a completionReceipt (${preExisting.getId().toString()}) already exists for ` +
+                "this pool while it is still FORMING; the flip must precede the receipt, so this is an " +
+                "anomalous state. Refusing to flip; the manifest and draft are kept, resolve by hand.");
             }
-            // re-check the draft against the freshly re-fetched pool before the
-            // sequential flip too (round-5): the pool could have drifted during the
-            // mixed-probe awaits
-            // requireFee from the RE-FETCHED hash (round-6 re-check-2): a concurrent
-            // actor could have flipped the pool during the mixed attempt, and post-flip
-            // the fee is historical
-            requireDraftMatchesPool(receiptDraft, fresh.toObject(), { requireFee: core.isFormingHash(freshHash) });
+            // and the pool must still match the frozen draft BEFORE the flip (round-5): if
+            // slotIndex/nodeType/fee drifted since the draft froze, flipping first would
+            // leave a live pool whose only publishable receipt contradicts it (and a mixed
+            // transition, if ever accepted, would atomically record the stale receipt).
+            // Catch it here, before either flip path mutates anything.
+            requireDraftMatchesPool(receiptDraft, fresh.toObject(), { requireFee: true });
           }
-        }
-        if (!flippedByMixed) {
-          if (core.isFormingHash(freshHash)) {
+          let flippedByMixed = false;
+          if (isV8() && process.env.FORMATION_NO_MIXED !== "1") {
+            // the MIXED-TRANSITION PROBE (like the v6/v7 transfer probes): create the
+            // receipt from the frozen draft and replace the pool in ONE operator batch
+            const receiptDoc = await client.platform.documents.create(
+              "poolLedger.completionReceipt", operator, receiptPropertiesFromDraft(pool, receiptDraft));
             fresh.set("proTxHash", realHash);
-            if (isV5()) fresh.set("status", "live"); // the one legitimate forming -> live edge
-            await client.platform.documents.broadcast({ replace: [fresh] }, operator);
-            console.log(`pool flipped LIVE: proTxHash ${proTxHex}`);
+            fresh.set("status", "live"); // v8 is v5+, the one legitimate forming -> live edge
+            try {
+              await client.platform.documents.broadcast(
+                { create: [receiptDoc], replace: [fresh] }, operator);
+              flippedByMixed = true;
+              console.log(`pool flipped LIVE with its receipt in ONE transition (mixed probe OK): ` +
+                `proTxHash ${proTxHex}, receipt ${receiptDoc.getId().toString()}`);
+            } catch (e) {
+              // ONLY fall back on the known one-transition-limit rejection (round-4
+              // blocker: catching EVERY error meant a duplicate-unique, i.e. a receipt
+              // that appeared under a race, would still flip the pool). Anything else,
+              // including a duplicate-unique, rethrows WITHOUT flipping.
+              // ONLY the one-transition-limit rejection falls back (round-4). Match it by
+              // the typed error name (robust to any message wrapping), else by EXACT
+              // message equality. A SUBSTRING match is unsafe: a compound message such as
+              // "Amount of document transitions must be less or equal to 1; duplicate
+              // unique index" would then fall back and flip past a receipt that already
+              // exists, re-opening the laundering path (round-4 re-check-2).
+              const msg = (e && e.message) || String(e);
+              const isTxnLimit = (e && e.name === "MaxDocumentsTransitionsExceededError")
+                || msg === "Amount of document transitions must be less or equal to 1";
+              if (!isTxnLimit) {
+                throw new Error(`the coupled create+replace transition failed for a reason other than the ` +
+                  `one-transition limit (${msg}); NOT flipping. The manifest and draft are kept, resolve by hand.`);
+              }
+              console.log(`MIXED-TRANSITION PROBE hit the one-transition limit; falling back to the ` +
+                "sequential flip-then-receipt path (the draft and manifest are retained)");
+              // the failed broadcast may have touched the local document objects, so the
+              // sequential path re-fetches the pool before mutating anything, and re-asserts
+              // the slot economics against THIS fresh object too (F-D re-check: a slot change
+              // during the mixed attempt must not slip through the fallback flip)
+              fresh = await getPool(poolIdStr);
+              requireSlotsMatchFresh(fresh.toObject());
+              freshHash = Buffer.from(fresh.toObject().proTxHash);
+              // RE-QUERY for a receipt immediately before the sequential flip (round-4
+              // re-check): a credentialed external writer could have created one DURING
+              // the mixed probe's create/broadcast awaits, and Platform may surface the
+              // transition-count error before the uniqueness check, so the earlier
+              // pre-flip guard is not enough. The only irreducible window is between this
+              // query and consensus inclusion of the flip.
+              const raced = (await client.platform.documents.get("poolLedger.completionReceipt",
+                { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+              if (raced) {
+                throw new Error(`a completionReceipt (${raced.getId().toString()}) appeared for this pool ` +
+                  "during the coupled-transition attempt, while it is still FORMING; refusing to flip past " +
+                  "it. The manifest and draft are kept, resolve by hand.");
+              }
+              // re-check the draft against the freshly re-fetched pool before the
+              // sequential flip too (round-5): the pool could have drifted during the
+              // mixed-probe awaits
+              // requireFee from the RE-FETCHED hash (round-6 re-check-2): a concurrent
+              // actor could have flipped the pool during the mixed attempt, and post-flip
+              // the fee is historical
+              requireDraftMatchesPool(receiptDraft, fresh.toObject(), { requireFee: core.isFormingHash(freshHash) });
+            }
           }
-          if (HALT === "flip") { console.log("[test hook] halting after the FLIP, before the receipt"); return; }
+          if (!flippedByMixed) {
+            if (core.isFormingHash(freshHash)) {
+              fresh.set("proTxHash", realHash);
+              if (isV5()) fresh.set("status", "live"); // the one legitimate forming -> live edge
+              await client.platform.documents.broadcast({ replace: [fresh] }, operator);
+              console.log(`pool flipped LIVE: proTxHash ${proTxHex}`);
+            }
+            if (HALT === "flip") { console.log("[test hook] halting after the FLIP, before the receipt"); return; }
+          }
+        } else if (freshHash.toString("hex") === manifest.realHash) {
+          console.log("pool already live under the manifest's hash (resume after a post-flip crash)");
+        } else {
+          // the durable intent is NOT cleared: the on-ledger hash contradicts it, which
+          // someone must look at (re-check blocker: never delete intent on a mismatch)
+          throw new Error(`the pool is live under ${freshHash.toString("hex")}, which contradicts the ` +
+            `committed manifest's ${manifest.realHash}; the manifest is kept, resolve by hand`);
         }
-      } else if (freshHash.toString("hex") === manifest.realHash) {
-        console.log("pool already live under the manifest's hash (resume after a post-flip crash)");
-      } else {
-        // the durable intent is NOT cleared: the on-ledger hash contradicts it, which
-        // someone must look at (re-check blocker: never delete intent on a mismatch)
-        throw new Error(`the pool is live under ${freshHash.toString("hex")}, which contradicts the ` +
-          `committed manifest's ${manifest.realHash}; the manifest is kept, resolve by hand`);
       }
 
       // v8: the receipt must be CONFIRMED on-ledger before any durable intent is
@@ -1369,7 +1540,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // `receipt` recovery path, so no path can leave a completion half-finalized.
       const doneKey = finalizeCompletion(poolIdStr, manifest);
       console.log(`\n=== FORMATION COMPLETE: ${participantShareCount} share(s), weights sum 10000 bps, ` +
-        `flip done last${isV8() ? ", receipt confirmed" : ""}, finalized manifest retained as ${doneKey} ===`);
+        `${hasImmutablePool() ? "receipt published last (no flip on this ledger)"
+          : `flip done last${isV8() ? ", receipt confirmed" : ""}`}, ` +
+        `finalized manifest retained as ${doneKey} ===`);
       return;
     }
 
@@ -1380,7 +1553,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // pre-v8 completion migrated forward), publishes it from the FROZEN RECEIPT
       // DRAFT, or rebuilds the draft from the retained FORMATION_DONE_ manifest (the
       // verification level is re-decided by the SAME preflight check).
-      if (!isV8()) throw new Error("the receipt command needs LEDGER=v8");
+      if (!isV8()) throw new Error("the receipt command needs a completion-receipt ledger (v8 or later)");
       const [poolIdStr] = args;
       if (!poolIdStr) throw new Error("usage: receipt <poolId>");
       takePoolOpLock(poolIdStr);
@@ -1402,21 +1575,40 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           throw new Error("the frozen receipt draft is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated against the manifest and pool before use)");
         }
       }
+      // the on-ledger receipt is fetched BEFORE the manifest-source selection, because on
+      // an immutable-pool ledger the archive filter below needs it
+      const existing = (await client.platform.documents.get("poolLedger.completionReceipt", {
+        where: [["poolId", "==", pool.getId()]],
+      }))[0] || null;
       // sources in priority: ACTIVE (a completion in flight) > DONE (retained record) >
-      // ABANDONED (round-7 P1: a pool that went live during/after an abandon still has its
-      // recovery inputs here, so `receipt` can publish rather than strand it).
-      // the archive is used ONLY when its committed realHash matches the pool's CURRENT
-      // hash (round-7 re-check P2): a stale archive from an EARLIER abandon of this same
-      // pool (later re-formed under a different hash) must never be picked as the manifest
-      // source, or it would falsely contradict the real completion's receipt.
+      // ABANDONED (round-7 P1: a completion that landed during/after an abandon still has
+      // its recovery inputs here, so `receipt` can finalize rather than strand it).
+      // THE STALENESS FILTER IS LEDGER-DEPENDENT (invariant list item 12). On v8 the
+      // archive is used ONLY when its committed realHash matches the pool's CURRENT hash
+      // (round-7 re-check P2): a stale archive from an EARLIER abandon of this same pool
+      // (later re-formed under a different hash) must never be picked as the manifest
+      // source, or it would falsely contradict the real completion's receipt. On an
+      // immutable pool there is no live hash, and the honest equivalent is STRICTER: the
+      // archive is consulted only when an EXISTING RECEIPT matches its committed hash (the
+      // lost-race finalize round-7 P1 protects), and never as a source to publish from,
+      // because a receipt-less ledger carries no evidence the abandoned completion's
+      // registration ever happened, and publishing from the archive alone would resurrect
+      // an abandoned completion on no evidence.
       const abandonedKey = "FORMATION_ABANDONED_" + journal.suffixFor(activeContractId(env), poolIdStr);
       let abandonedManifest;
       if (envNow[abandonedKey] !== undefined) {
         try {
           const m = JSON.parse(envNow[abandonedKey]).manifest;
           const parsed = m ? JSON.parse(m) : null;
-          const liveHex = Buffer.from(po.proTxHash).toString("hex");
-          if (parsed && parsed.realHash === liveHex) abandonedManifest = m;
+          if (parsed) {
+            if (!hasImmutablePool()) {
+              const liveHex = Buffer.from(po.proTxHash).toString("hex");
+              if (parsed.realHash === liveHex) abandonedManifest = m;
+            } else if (existing &&
+                Buffer.from(existing.toObject().proTxHash).toString("hex") === parsed.realHash) {
+              abandonedManifest = m;
+            }
+          }
         } catch { abandonedManifest = undefined; }
       }
       const rawManifest = envNow[activeKey] !== undefined ? envNow[activeKey]
@@ -1435,9 +1627,6 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       }
       if (draft) validateReceiptDraft(draft, poolIdStr, manifest);
 
-      const existing = (await client.platform.documents.get("poolLedger.completionReceipt", {
-        where: [["poolId", "==", pool.getId()]],
-      }))[0] || null;
       if (existing) {
         const o = existing.toObject();
         // the receipt must be owned by the pool's operator (round-6): with no local draft
@@ -1450,65 +1639,85 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         // the nodeType -> targetDuffs invariant (round-6): the schema only bounds targetDuffs
         // by a minimum, so a receipt could pair a regular nodeType with an evo target; the
         // two must agree
-        if (String(core.TARGETS[o.nodeType]) !== String(o.targetDuffs)) {
+        if (!hasParedReceipt() && String(core.TARGETS[o.nodeType]) !== String(o.targetDuffs)) {
+          // only the UNPARED receipt carries both fields; on a pared one the pool is the
+          // sole carrier and the shared check below owns exactly this coherence (duty 3)
           throw new Error(`the receipt's targetDuffs ${o.targetDuffs} is not the ${o.nodeType} target ` +
             `${core.TARGETS[o.nodeType]}; internally contradictory receipt, treat it as suspect`);
         }
         // bind the receipt to CURRENT pool state (round-3, re-fetched round-6): re-read the
         // pool HERE, after the receipt query await, so a credentialed external pool mutation
         // during the window cannot slip a contradicting receipt past. A receipt for a still-
-        // forming pool, or one whose hash contradicts the live pool, must stop loudly.
+        // forming pool, or one whose hash contradicts the live pool, must stop loudly. The
+        // hash and status halves exist only where the pool asserts a node (invariant list
+        // item 9); the immutable pool asserts none, and its binding is the shared check.
         const poolNow = (await getPool(poolIdStr)).toObject();
-        const poolHashNow = Buffer.from(poolNow.proTxHash);
-        if (core.isFormingHash(poolHashNow)) {
-          throw new Error("a completionReceipt exists but the pool is still FORMING; that receipt " +
-            "was not written by this flow (the flip precedes the receipt). Local state is kept, " +
-            "resolve by hand.");
-        }
-        if (poolNow.status !== undefined && poolNow.status !== "live") {
-          throw new Error(`a completionReceipt exists but the pool status is "${poolNow.status}", not ` +
-            "live; local state is kept, resolve by hand");
-        }
-        if (!poolHashNow.equals(Buffer.from(o.proTxHash))) {
-          throw new Error(`the receipt records proTxHash ${Buffer.from(o.proTxHash).toString("hex")} ` +
-            `but the pool is live under ${poolHashNow.toString("hex")}; the receipt contradicts the ` +
-            "pool, local state is kept, resolve by hand");
+        if (!hasImmutablePool()) {
+          const poolHashNow = Buffer.from(poolNow.proTxHash);
+          if (core.isFormingHash(poolHashNow)) {
+            throw new Error("a completionReceipt exists but the pool is still FORMING; that receipt " +
+              "was not written by this flow (the flip precedes the receipt). Local state is kept, " +
+              "resolve by hand.");
+          }
+          if (poolNow.status !== undefined && poolNow.status !== "live") {
+            throw new Error(`a completionReceipt exists but the pool status is "${poolNow.status}", not ` +
+              "live; local state is kept, resolve by hand");
+          }
+          if (!poolHashNow.equals(Buffer.from(o.proTxHash))) {
+            throw new Error(`the receipt records proTxHash ${Buffer.from(o.proTxHash).toString("hex")} ` +
+              `but the pool is live under ${poolHashNow.toString("hex")}; the receipt contradicts the ` +
+              "pool, local state is kept, resolve by hand");
+          }
         }
         // the pool's CREATION-TIME constants (slotIndex, nodeType) must match the
         // receipt even when no local draft or manifest survives (round-4: after a prune
         // the branches below have nothing to compare against, so this is the only check
         // that binds those fields). The operator FEE is deliberately excluded, because
         // the pool's fee is mutable and may legitimately change after completion, so a
-        // later divergence there is not a receipt anomaly.
+        // later divergence there is not a receipt anomaly. A pared receipt carries no
+        // nodeType to differ; slotIndex is the one duplicated field left on it.
         if (poolNow.slotIndex !== undefined && Number(o.slotIndex) !== Number(poolNow.slotIndex)) {
           throw new Error(`the receipt records slotIndex ${Number(o.slotIndex)} but the pool has ` +
             `${Number(poolNow.slotIndex)}; the receipt contradicts the pool, resolve by hand`);
         }
-        if (poolNow.nodeType !== undefined && o.nodeType !== poolNow.nodeType) {
+        if (!hasParedReceipt() && poolNow.nodeType !== undefined && o.nodeType !== poolNow.nodeType) {
           throw new Error(`the receipt records nodeType ${o.nodeType} but the pool has ${poolNow.nodeType}; ` +
             "the receipt contradicts the pool, resolve by hand");
         }
-        const check = core.verifyReceiptAllocation(activeContractId(env), {
-          allocationRows: Buffer.from(o.allocationRows),
-          allocationHash: Buffer.from(o.allocationHash),
-          poolId: Buffer.from(o.poolId),
-          targetDuffs: String(o.targetDuffs),
-          participantCount: Number(o.participantCount),
-        });
+        // the verification is ledger-dependent in who carries the target. The unpared
+        // receipt carries its own copy, so the standalone allocation verifier suffices; the
+        // pared receipt carries none, so the SHARED four-duty check against the pool is the
+        // only thing pinning the embedded target to anything (phase B, round-4 finding).
+        const check = hasParedReceipt()
+          ? checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: o,
+            pool: poolNow, poolId: poolIdStr })
+          : core.verifyReceiptAllocation(activeContractId(env), {
+            allocationRows: Buffer.from(o.allocationRows),
+            allocationHash: Buffer.from(o.allocationHash),
+            poolId: Buffer.from(o.poolId),
+            targetDuffs: String(o.targetDuffs),
+            participantCount: Number(o.participantCount),
+          });
+        const shownNode = hasParedReceipt() ? `${poolNow.nodeType} (pool)` : o.nodeType;
+        const shownFee = hasParedReceipt() ? `${Number(poolNow.operatorFeeBps)} bps (pool, pinned)`
+          : `${Number(o.operatorFeeBps)} bps`;
+        const shownTarget = hasParedReceipt() ? poolNow.targetDuffs : o.targetDuffs;
         console.log(`completion receipt ${existing.getId().toString()} (owner ` +
           `${existing.getOwnerId().toString()}):`);
         console.log(`  pool:          ${Identifier.from(Buffer.from(o.poolId)).toString()}`);
         console.log(`  proTxHash:     ${Buffer.from(o.proTxHash).toString("hex")}`);
-        console.log(`  slot ${Number(o.slotIndex)}, ${o.nodeType}, fee ${Number(o.operatorFeeBps)} bps, ` +
-          `target ${DASHfmt(BigInt(o.targetDuffs))} DASH, ${Number(o.participantCount)} participant(s)`);
+        console.log(`  slot ${Number(o.slotIndex)}, ${shownNode}, fee ${shownFee}, ` +
+          `target ${DASHfmt(BigInt(shownTarget))} DASH, ${Number(o.participantCount)} participant(s)`);
         console.log(`  l1Verification: ${o.l1Verification} (method v${Number(o.verificationMethodVersion)})`);
         console.log(`  allocationHash: ${Buffer.from(o.allocationHash).toString("hex")}`);
         if (!check.ok) {
-          throw new Error(`the receipt's OWN embedded allocation FAILS verification (${check.reason}); ` +
-            "this receipt does not prove what it claims, treat it as suspect");
+          throw new Error(`the receipt FAILS verification ` +
+            `${hasParedReceipt() ? "against this pool" : "of its OWN embedded allocation"} ` +
+            `(${check.reason}); this receipt does not prove what it claims, treat it as suspect`);
         }
         console.log("  embedded allocation: canonical, hash recomputed and matches (verified from the " +
-          "receipt alone; shares are mutable, so a live cross-check is `status`)");
+          `${hasParedReceipt() ? "receipt-plus-pool pair through the shared check" : "receipt alone"}; ` +
+          "shares are mutable, so a live cross-check is `status`)");
         // a mismatched existing receipt must ALWAYS stop loudly, in this command too
         // (review major): when local frozen state exists, the receipt is held to it,
         // never merely printed as self-consistent
@@ -1521,13 +1730,20 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           if (!Buffer.from(o.allocationRows).equals(rows)) bad.push("allocationRows contradict the retained manifest");
           if (Buffer.from(o.proTxHash).toString("hex") !== manifest.realHash) bad.push("proTxHash contradicts the retained manifest");
           if (Number(o.participantCount) !== manifest.owners.length) bad.push("participantCount contradicts the manifest");
-          if (String(o.targetDuffs) !== manifest.target) bad.push("targetDuffs contradicts the manifest");
+          // targetDuffs lives on whichever document the ledger says carries it; the
+          // manifest's committed target must match that carrier either way
+          if (hasParedReceipt()
+            ? String(poolNow.targetDuffs) !== manifest.target
+            : String(o.targetDuffs) !== manifest.target) {
+            bad.push("targetDuffs contradicts the manifest");
+          }
           // slotIndex/nodeType are pool CREATION constants and must match, compared
           // against the FRESH poolNow (round-6 re-check: the pre-query po could be stale
           // and falsely reject). The fee is NOT compared to the current pool (round-5),
           // because the pool fee is mutable and may legitimately change after
           // completion (the receipt records the completion-time fee).
-          if (Number(o.slotIndex) !== Number(poolNow.slotIndex) || o.nodeType !== poolNow.nodeType) {
+          if (Number(o.slotIndex) !== Number(poolNow.slotIndex)
+            || (!hasParedReceipt() && o.nodeType !== poolNow.nodeType)) {
             bad.push("slot/node contradict the pool document");
           }
           if (bad.length > 0) {
@@ -1550,8 +1766,33 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         }
         return;
       }
-      if (core.isFormingHash(Buffer.from(po.proTxHash))) {
+      // "nothing to recover yet". On v8 that is a pool still in the forming namespace. On v9
+      // there is no forming state on the pool, so the recoverable condition is instead
+      // "local completion state exists but no receipt does", and a pool with NEITHER has
+      // nothing to recover: `complete` is what starts it.
+      if (!hasImmutablePool() && core.isFormingHash(Buffer.from(po.proTxHash))) {
         console.log("the pool is still FORMING; a receipt is written by `complete`");
+        return;
+      }
+      if (hasImmutablePool() && !manifestIsActive && !manifestFromArchive && !draft) {
+        // a FINALIZED record with no receipt is an ANOMALY here, not a recovery path: DONE
+        // is written only after the receipt is confirmed, and the receipt document cannot
+        // be deleted (canBeDeleted: false), so this state contradicts the contract and
+        // must stop loudly rather than exit as "nothing to recover".
+        if (envNow[doneKey] !== undefined) {
+          throw new Error("a finalized completion record (FORMATION_DONE_) exists for this pool but " +
+            "no receipt is on the ledger, and the receipt document cannot be deleted; this state " +
+            "contradicts the contract, resolve by hand (the DONE record is kept)");
+        }
+        // an unaccepted ABANDON ARCHIVE deliberately does not reach this path (invariant
+        // list item 12): with no receipt on the ledger there is no evidence the abandoned
+        // completion's registration ever happened, so the abandon stands rather than being
+        // republished from the archive alone. Say the archive exists rather than hiding it.
+        console.log(envNow[abandonedKey] !== undefined
+          ? "no receipt on the ledger; an abandon archive exists for this pool but is not " +
+            "publishable on its own (the abandon stands; re-run `complete` to redo the formation)"
+          : "no local completion state for this pool and no receipt on the ledger; " +
+            "a receipt is written by `complete`");
         return;
       }
       // live without a receipt: the recoverable intermediate state. Publish from the
@@ -1559,17 +1800,23 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // survived (its allocation is the frozen commitment; slot/node/fee come from the
       // pool document, and the verification level is re-decided, never assumed).
       if (draft) {
-        requireDraftMatchesPool(draft, po);
+        // the fee context is ledger-dependent (invariant list item 5): historical on a
+        // flipped pool, exact on an immutable one where it cannot have drifted
+        requireDraftMatchesPool(draft, po, { requireFee: hasImmutablePool() });
         console.log("publishing the receipt from the FROZEN draft (post-crash recovery)");
       } else {
         if (!manifest) {
           throw new Error("no receipt, no frozen draft, and no retained manifest for this pool; " +
             "nothing durable to publish from (the honesty rule: never reconstruct from live state)");
         }
-        const liveHex = Buffer.from(po.proTxHash).toString("hex");
-        if (manifest.realHash !== liveHex) {
-          throw new Error(`the retained manifest commits to ${manifest.realHash} but the pool is live ` +
-            `under ${liveHex}; refusing to publish a receipt from a contradicted manifest`);
+        // the live-hash cross-check has a subject only where the pool asserts a node; the
+        // immutable pool asserts none, and the manifest is the operator's durable intent
+        if (!hasImmutablePool()) {
+          const liveHex = Buffer.from(po.proTxHash).toString("hex");
+          if (manifest.realHash !== liveHex) {
+            throw new Error(`the retained manifest commits to ${manifest.realHash} but the pool is live ` +
+              `under ${liveHex}; refusing to publish a receipt from a contradicted manifest`);
+          }
         }
         if (po.slotIndex === undefined || po.nodeType === undefined) {
           throw new Error("this pool lacks slotIndex/nodeType, so a v8 receipt cannot be recorded");
@@ -1612,7 +1859,22 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (!poolIdStr) throw new Error("usage: abandon <poolId>");
       takePoolOpLock(poolIdStr);
       const pool = await getPool(poolIdStr);
-      if (!core.isFormingHash(Buffer.from(pool.toObject().proTxHash))) {
+      // THE GUARD, asked so it means something on both ledgers. On v8 "still forming" was
+      // read from proTxHash. On v9 there is no such field and no flip, so the equivalent
+      // question is whether a COMPLETION RECORD exists: abandoning local state for a
+      // completed pool would orphan the real thing, while abandoning it for a pool that
+      // never completed orphans nothing, because an immutable pool with no receipt claims
+      // nothing. mayAbandon also refuses while a CONTRADICTING receipt is unresolved, which
+      // the v8 guard could not express at all.
+      //
+      // NOTE the v9 pool document survives abandonment permanently, since it cannot be
+      // deleted. That is not litter: it is the same document an OPEN pool presents, which is
+      // exactly why the funder client's admission rule fails closed rather than trying to
+      // tell them apart.
+      const cls = await classifyPoolNow(pool, poolIdStr);
+      const verdict = lifecycle.mayAbandon(cls);
+      if (!verdict.ok) throw new Error(`${verdict.reason}, refusing`);
+      if (!hasImmutablePool() && !core.isFormingHash(Buffer.from(pool.toObject().proTxHash))) {
         throw new Error("the pool is LIVE; abandoning its manifest would orphan real state, refusing");
       }
       const key = manifestKeyOf(poolIdStr);
@@ -1678,9 +1940,19 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // evidence loss abandon must not cause. Re-assert both, closing the window to the
       // synchronous clears below.
       const poolNow = (await getPool(poolIdStr)).toObject();
-      if (!core.isFormingHash(Buffer.from(poolNow.proTxHash))) {
-        throw new Error("the pool went LIVE since this run started; abandoning now would orphan a live " +
-          "pool's recovery inputs. Run `receipt` to publish from the retained manifest instead. Kept.");
+      if (!hasImmutablePool()) {
+        if (!core.isFormingHash(Buffer.from(poolNow.proTxHash))) {
+          throw new Error("the pool went LIVE since this run started; abandoning now would orphan a live " +
+            "pool's recovery inputs. Run `receipt` to publish from the retained manifest instead. Kept.");
+        }
+      } else {
+        // the immutable pool cannot flip, so the late evidence a re-fetch can catch is a
+        // RECEIPT having appeared since the classifier ran (invariant list item 11)
+        const raced = await fetchReceiptFor(pool);
+        if (raced) {
+          throw new Error("a completion receipt appeared for this pool since this run started; " +
+            "abandoning now would orphan its recovery inputs. Run `receipt` to reconcile instead. Kept.");
+        }
       }
       const settledNow = await participantSharesOnLedger(); // participant-scoped (a soundness review), like the early check
       if (settledNow.length > 0) {

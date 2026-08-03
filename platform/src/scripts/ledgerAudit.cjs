@@ -20,7 +20,9 @@ const Dash = require("dash");
 const { Identifier } = require("@dashevo/wasm-dpp");
 const { ASSET_LOCK_FEE_DUFFS, validateObservation, validateDissolution } = require("./observation.cjs");
 const { fetchAll } = require("./query.cjs");
-const { loadEnv, activeContractId, isV3 } = require("./envStore.cjs");
+const lifecycle = require("./poolLifecycle.cjs");
+const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
+const { loadEnv, activeContractId, isV3, hasImmutablePool } = require("./envStore.cjs");
 
 const DASHfmt = (duffs) => (duffs / 100000000).toFixed(8);
 
@@ -64,9 +66,35 @@ const loadObservations = () => {
     for (const pool of pools) {
       const p = pool.toObject();
       const poolId = pool.getId();
-      const proTxHex = Buffer.from(p.proTxHash).toString("hex");
+      // on an immutable-pool ledger the completion receipt is the only carrier of the node
+      let auditReceipt = null, auditReceiptOk = false;
+      if (hasImmutablePool()) {
+        const rd = (await client.platform.documents.get("poolLedger.completionReceipt",
+          { where: [["poolId", "==", poolId]] }))[0] || null;
+        if (rd) {
+          auditReceipt = rd.toObject();
+          auditReceiptOk = checkReceiptAgainstPool({ contractId: activeContractId(env),
+            receipt: auditReceipt, pool: p, poolId }).ok === true;
+        }
+      }
+      // THE NODE COLUMN MUST NOT SILENTLY EMPTY. On v9 the pool names no node, and only a
+      // verified completion receipt does, so the unknown case prints its reason rather than a
+      // blank, which would read as "this pool has none".
+      //
+      // BUT THE OLD CODE WAS FAIL-CLOSED ON v8 AND MUST STAY SO. There,
+      // `Buffer.from(p.proTxHash)` THREW on an absent or malformed field, so the audit could
+      // not emit a row it could not substantiate. An unknown node on v8 is an anomaly, not an
+      // expected state, and quietly printing UNKNOWN would have converted a hard stop into a
+      // line most readers skim past. On v9 it is expected (a pool with no completion record
+      // yet), so there it is reported and the audit continues.
+      const node = lifecycle.backingNode({ pool: p, receipt: auditReceipt, receiptOk: auditReceiptOk });
+      if (!node.known && !hasImmutablePool()) {
+        fail(`pool ${poolId.toString()} has no readable proTxHash (${node.why}); on this ledger every ` +
+          "pool carries one, so this is ledger damage rather than a pool awaiting completion");
+      }
+      const nodeLabel = node.known ? `proTxHash ${node.hex.slice(0, 16)}...` : `node UNKNOWN (${node.why})`;
       const feeBps = Number(p.operatorFeeBps || 0);
-      console.log(`\npool ${poolId.toString()} (proTxHash ${proTxHex.slice(0, 16)}..., operator fee ${feeBps} bps)`);
+      console.log(`\npool ${poolId.toString()} (${nodeLabel}, operator fee ${feeBps} bps)`);
 
       const shares = (await fetchAll(client, "poolLedger.share", {
         where: [["poolId", "==", poolId]],

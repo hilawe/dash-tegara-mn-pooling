@@ -163,13 +163,21 @@ const decodeId32 = (s) => {
   return out.length === 32 ? out : null;
 };
 
-/** Normalize an identifier given as EITHER a base58 string OR raw 32 bytes to a 32-byte Buffer,
- *  or null. Lets the verifier accept both the embedded canonical base58 form and a ledger-native
- *  byteArray for the same top-level field (review finding: the receipt document's poolId /
- *  contractId arrive as bytes, not base58). */
+/** Normalize an identifier given as a base58 string, raw 32 bytes, OR a document-id object
+ *  exposing toBuffer() to a 32-byte Buffer, or null. Lets the verifier accept the embedded
+ *  canonical base58 form, a ledger-native byteArray (review finding: the receipt document's
+ *  poolId / contractId arrive as bytes, not base58), and the object `pool.getId()` returns,
+ *  which is the shape most call sites actually hold. The toBuffer() result is length-checked
+ *  like every other form, and a throwing toBuffer() is null, never a propagated error. */
 const toId32 = (v) => {
   if (typeof v === "string") return decodeId32(v);
   if (Buffer.isBuffer(v) || v instanceof Uint8Array) { const b = Buffer.from(v); return b.length === 32 ? b : null; }
+  if (v && typeof v.toBuffer === "function") {
+    try {
+      const b = Buffer.from(v.toBuffer());
+      return b.length === 32 ? b : null;
+    } catch { return null; }
+  }
   return null;
 };
 
@@ -271,7 +279,17 @@ const allocationHash = (bytes) => {
  *  Checks: hash recompute + Buffer.equals; parse and validate the array (domain, version, the
  *  EXPECTED contractId, poolId, target, 1..8 rows, strict decoded-byte order, bps sum 10000);
  *  a byte-exact re-serialization so a non-canonical encoding is rejected; and top-level
- *  correspondence. Does NOT prove the shares still exist or match (honesty ceiling). */
+ *  correspondence. Does NOT prove the shares still exist or match (honesty ceiling).
+ *
+ *  NOT SUFFICIENT ON ITS OWN AS A COMPLETION PREDICATE, and increasingly less so. Its
+ *  target correspondence compares the embedded target against the receipt's OWN top-level
+ *  copy, so on a v9 receipt, which no longer carries that copy, the embedded target is
+ *  compared against nothing here. A receipt can pass this function completely while
+ *  embedding a target that contradicts the pool it names, which is what round four of the
+ *  v9 review demonstrated. Callers deciding whether a pool completed must use
+ *  `receiptPoolCheck.checkReceiptAgainstPool`, which defers to this function for the
+ *  allocation and adds the three pool-relative duties. This function stays the owner of
+ *  the preimage format and is not duplicated there. */
 const verifyReceiptAllocation = (contractId, receipt) => {
   const bad = (reason) => ({ ok: false, reason });
   // the whole body runs under a guard so ANY unexpected throw on malformed input (a crafted object, a

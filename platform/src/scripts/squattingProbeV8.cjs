@@ -15,10 +15,13 @@
 const crypto = require("crypto");
 const Dash = require("dash");
 const { installConsumedFilter } = require("./walletGuard.cjs");
-const { loadEnv, activeContractId, isV8 } = require("./envStore.cjs");
+const { loadEnv, activeContractId, ledgerIsExactly } = require("./envStore.cjs");
 
 (async () => {
-  if (!isV8()) { console.error("run with LEDGER=v8"); process.exit(2); }
+  // EXACT v8 on purpose. This probe is written against the v8 pool shape, so the
+  // capability predicate that replaced isV8() would wrongly admit v9, whose pool is
+  // immutable and carries different fields.
+  if (!ledgerIsExactly("v8")) { console.error("run with LEDGER=v8"); process.exit(2); }
   if (process.env.PROBE_CONFIRM !== "leave-probe-evidence") {
     console.error("the probe writes permanent evidence if enforcement is off; run it only as a " +
       "one-time deployment test with PROBE_CONFIRM=leave-probe-evidence");

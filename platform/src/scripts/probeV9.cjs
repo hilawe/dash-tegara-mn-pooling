@@ -1,9 +1,11 @@
 /**
- * One-time deployment probe suite for the v9 draft schema, run against a THROWAWAY
- * namespace (a scratch env with its own identity; never the canonical ledger env).
- * These are the post-publish probes the v9 adoption checklist mandates, executed the
- * first time. The suite writes permanent evidence documents (immutable pools and
- * receipts under the scratch contract), so it is gated like squattingProbeV8.
+ * Deployment probe suite for the v9 schema. Two sanctioned uses: a THROWAWAY namespace
+ * (the 2026-07-16 first run, V9_PROBE_RUN_2026-07-16.md), and the CANONICAL contract
+ * immediately after its phase G publish, where the adoption checklist mandates exactly
+ * these probes against the artifact actually published. The suite writes permanent
+ * evidence documents (an immutable probe pool and its receipt, whose ids the run record
+ * lists), so it is gated like squattingProbeV8 and is never run casually against a
+ * namespace whose documents readers already consume.
  *
  * Probes (each expected refusal must be the RIGHT refusal, per the squattingProbeV8
  * discipline; a network/nonce/balance error is a probe FAILURE, never a pass):

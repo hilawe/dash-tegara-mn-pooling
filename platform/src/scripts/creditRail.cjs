@@ -76,7 +76,8 @@ const rail = require("./railState.cjs");
 const { ASSET_LOCK_FEE_DUFFS, validateObservation, validateDissolution } = require("./observation.cjs");
 const { fetchAll } = require("./query.cjs");
 const { installConsumedFilter } = require("./walletGuard.cjs");
-const { loadEnv, saveEnv, activeContractId, isV3, isV4, isV5 } = require("./envStore.cjs");
+const { loadEnv, saveEnv, activeContractId, isV3, isV4, isV5, hasImmutablePool } = require("./envStore.cjs");
+const { resolveNodeToPools } = require("./receiptPoolCheck.cjs");
 
 
 const MIN_CREDITS = 40000000000;
@@ -787,15 +788,55 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
     let poolId = null;
     let shareSpec = null;
 
-    const existingPools = obs ? await client.platform.documents.get("poolLedger.pool", {
-      where: [["proTxHash", "==", Buffer.from(obs.proTxHash, "hex")]],
-    }) : [];
+    // FINDING THE POOL THAT BACKS THIS MASTERNODE.
+    //
+    // On v8 the pool itself records `proTxHash`, so one indexed query finds it. On v9 the
+    // pool is immutable and records NO node at all, so that query is not merely empty, it
+    // asks for a field the contract does not define. The node identity lives on the
+    // COMPLETION RECEIPT there, which keeps `proTxHash` precisely because its unique
+    // (proTxHash, slotIndex) index is what stops two pools claiming one covenant share.
+    //
+    // So the v9 lookup goes receipt-first: find the completion record for this node and slot,
+    // resolve it to its pool, and accept the pair ONLY if the shared check passes. That is
+    // strictly stronger than the v8 path, which trusted a mutable field: here the pool is
+    // reached through a verified completion record or not at all.
+    const findPoolsForObservation = async () => {
+      if (!obs) return [];
+      const nodeHash = Buffer.from(obs.proTxHash, "hex");
+      if (!hasImmutablePool()) {
+        return client.platform.documents.get("poolLedger.pool", {
+          where: [["proTxHash", "==", nodeHash]],
+        });
+      }
+      // the resolution itself lives in receiptPoolCheck, with the fetchers injected, so it is
+      // covered offline; a refusal is never converted into an empty result here, because an
+      // empty result would fall through to CREATING a pool over a contradiction
+      const res = await resolveNodeToPools({
+        contractId: activeContractId(env), nodeHash, slotIndex: obs.slotIndex,
+        fetchReceipts: (hash, slot) => client.platform.documents.get("poolLedger.completionReceipt", {
+          where: [["proTxHash", "==", hash], ["slotIndex", "==", slot]],
+        }),
+        fetchPoolById: async (pid) => (await client.platform.documents.get("poolLedger.pool", {
+          where: [["$id", "==", Identifier.from(Buffer.from(pid))]],
+        }))[0] || null,
+      });
+      if (!res.ok) {
+        throw new Error(`${res.reason} (node ${obs.proTxHash} slot ${obs.slotIndex})`);
+      }
+      return res.pools;
+    };
+    const existingPools = await findPoolsForObservation();
     if (existingPools.length > 0) {
       const pool = existingPools[0];
       const poolObj = pool.toObject();
-      // never pay the current operator from a pool recorded for a different one
-      const poolOperator = poolObj.operatorIdentityId
-        ? Identifier.from(Buffer.from(poolObj.operatorIdentityId)).toString() : null;
+      // Never pay the current operator from a pool recorded for a different one. v9 drops the
+      // duplicate `operatorIdentityId` field because the operator IS the document owner under
+      // owner-only creation, so there is nothing left to contradict $ownerId. Reading the
+      // owner is therefore the stronger form of the same check, not a substitute for it.
+      const poolOperator = hasImmutablePool()
+        ? pool.getOwnerId().toString()
+        : (poolObj.operatorIdentityId
+            ? Identifier.from(Buffer.from(poolObj.operatorIdentityId)).toString() : null);
       if (poolOperator !== operator.getId().toString()) {
         throw new Error(`reused pool's operator identity (${poolOperator}) does not match this run's ` +
           `operator (${operator.getId().toString()})`);
@@ -849,6 +890,20 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
       if (isDissolution(obs)) {
         throw new Error("no pool recorded for this masternode; a principal return distributes to " +
           "EXISTING members and never creates a pool");
+      }
+      // THE RAIL DOES NOT MINT POOLS ON AN IMMUTABLE LEDGER, and refusing is the sanctioned
+      // answer rather than a gap. This creator makes a pool that is LIVE AT BIRTH, which on v8
+      // it expresses by writing proTxHash and status directly. v9 has neither field, and its
+      // equivalent of "live" is a COMPLETION RECEIPT, which requires a frozen manifest and an
+      // allocation this script has never held: the rail distributes rewards, it does not run
+      // a formation round. Minting a receipt-less pool here would produce exactly the
+      // permanently ambiguous document the funder client's admission rule has to fail closed
+      // against, and it would do so from the one script with no members to ask.
+      if (hasImmutablePool()) {
+        throw new Error("no pool is recorded for this masternode, and the credit rail does not create " +
+          "pools on an immutable-pool ledger: a pool that is live at birth needs a completion receipt, " +
+          "which only a formation round can produce. Form the pool with formation.cjs first, then " +
+          "re-run this observation.");
       }
       const poolDoc = await client.platform.documents.create("poolLedger.pool", operator, {
         proTxHash: obs ? Buffer.from(obs.proTxHash, "hex") : crypto.randomBytes(32),

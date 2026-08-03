@@ -487,53 +487,106 @@ const reserveAddrIndex = (n) => {
  * maps the "poolLedger" app name to this id, so the document type names stay identical
  * across versions.
  */
-const activeContractId = (env) => {
-  // an unsupported nonempty selector is a configuration typo, never a silent fallback
-  // to the v1 namespace (independent-review finding); validated HERE so every caller
-  // gets the same protection
-  if (process.env.LEDGER && !["v1", "v3", "v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER)) {
-    throw new Error(`unsupported LEDGER value "${process.env.LEDGER}" (use v1, v3, v4, v5, v6, v7, or v8)`);
-  }
-  if (process.env.LEDGER === "v3") {
-    if (!env.CONTRACT_V3_ID) throw new Error("LEDGER=v3 but CONTRACT_V3_ID is missing; run registerV3.cjs first");
-    return env.CONTRACT_V3_ID;
-  }
-  if (process.env.LEDGER === "v4") {
-    if (!env.CONTRACT_V4_ID) throw new Error("LEDGER=v4 but CONTRACT_V4_ID is missing; run registerV4.cjs first");
-    return env.CONTRACT_V4_ID;
-  }
-  if (process.env.LEDGER === "v5") {
-    if (!env.CONTRACT_V5_ID) throw new Error("LEDGER=v5 but CONTRACT_V5_ID is missing; run registerV5.cjs first");
-    return env.CONTRACT_V5_ID;
-  }
-  if (process.env.LEDGER === "v6") {
-    if (!env.CONTRACT_V6_ID) throw new Error("LEDGER=v6 but CONTRACT_V6_ID is missing; run registerV6.cjs first");
-    return env.CONTRACT_V6_ID;
-  }
-  if (process.env.LEDGER === "v7") {
-    if (!env.CONTRACT_V7_ID) throw new Error("LEDGER=v7 but CONTRACT_V7_ID is missing; run registerV7.cjs first");
-    return env.CONTRACT_V7_ID;
-  }
-  if (process.env.LEDGER === "v8") {
-    if (!env.CONTRACT_V8_ID) throw new Error("LEDGER=v8 but CONTRACT_V8_ID is missing; run registerV8.cjs first");
-    return env.CONTRACT_V8_ID;
-  }
-  return env.CONTRACT_ID;
+/**
+ * THE LEDGER VERSION TABLE, the single source of truth for which pool-ledger versions
+ * exist, where each one's contract id lives, and WHAT EACH VERSION CAN HOLD.
+ *
+ * Before this table the same knowledge lived in eight places: three copies of the
+ * supported-version whitelist (here, clientContext.cjs, formation.cjs) and five
+ * per-predicate version lists. Adding a version meant editing eight lists, and omitting
+ * one was silent, which is precisely the shape of defect that admits a version to the
+ * selector while some predicate quietly keeps answering false for it.
+ *
+ * CAPABILITIES ARE WRITTEN OUT PER VERSION, NOT INHERITED, and that is deliberate. Every
+ * version through v8 did strictly add to the one before, so an "or later" chain read
+ * correctly, and that is exactly why v9 breaks it: v9 SUBTRACTS. Its pool document is
+ * immutable and carries no `status` at all, so `poolStatus` is FALSE on v9 while every
+ * neighbouring capability stays true. An inherited chain cannot express a removal without
+ * a special case, and a special case is what gets forgotten. Spelling each version out
+ * makes the subtraction visible in the table itself.
+ *
+ * TWO FURTHER v9 REMOVALS are NOT capabilities here, because nothing gates on them today:
+ * the v9 pool also drops `proTxHash` and `operatorIdentityId`, and the v9 completion
+ * receipt drops top-level `nodeType`, `operatorFeeBps` and `targetDuffs`. Readers consult
+ * those fields unconditionally right now. Migrating them is phase E of
+ * `docs/V9_MIGRATION_PLAN.md`, and the predicates belong here when they have call sites,
+ * not before.
+ */
+const LEDGER_VERSIONS = {
+  v1: { idKey: "CONTRACT_ID", register: null, caps: {} },
+  v3: { idKey: "CONTRACT_V3_ID", register: "registerV3.cjs", caps: { reconstructibleAccruals: true } },
+  v4: { idKey: "CONTRACT_V4_ID", register: "registerV4.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true } },
+  v5: { idKey: "CONTRACT_V5_ID", register: "registerV5.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true } },
+  v6: { idKey: "CONTRACT_V6_ID", register: "registerV6.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, pledgeSlot: true } },
+  v7: { idKey: "CONTRACT_V7_ID", register: "registerV7.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, pledgeSlot: true, slotBook: true } },
+  v8: { idKey: "CONTRACT_V8_ID", register: "registerV8.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, pledgeSlot: true, slotBook: true, completionReceipt: true } },
+  // v9 keeps everything v8 had EXCEPT poolStatus, and adds the immutable pool. The
+  // missing `poolStatus` on this row is the whole reason the table is written out.
+  // `paredReceipt` is the receipt-side consequence of the immutable pool and is named
+  // separately because it gates different code: the pool pins nodeType, operatorFeeBps and
+  // targetDuffs, so the RECEIPT stops carrying them. Note targetDuffs SWAPS SIDES at v9. On
+  // v8 it is a receipt field and the pool has none; on v9 it is a pool field and the receipt
+  // has none. That is why the draft-to-pool target comparison is a v9 addition rather than a
+  // check that was simply missing before.
+  v9: { idKey: "CONTRACT_V9_ID", register: "registerV9.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, pledgeSlot: true, slotBook: true, completionReceipt: true, immutablePool: true, paredReceipt: true } },
 };
-// isV3 means "the v3 feature set or later" (bps-carrying accruals, on-ledger
-// settlements); each later version is a strict superset, so it answers true for all of
-// them. isV4 gates what v4 added (the accrual `kind` in the unique key) and answers
-// true for v5 too; isV5 gates v5's own additions (pool status, join provenance and
-// reward scripts, delegateTo).
-const isV3 = () => ["v3", "v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER);
-const isV4 = () => ["v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER);
-const isV5 = () => ["v5", "v6", "v7", "v8"].includes(process.env.LEDGER);
-// isV6 means "the pledgeSlot reservation exists" (true for v7 and v8 too); isV7 gates
-// what v7 added (slot economics on the pool, sizeless mutable claims), which v8 keeps,
-// so it answers true for v8; isV8 gates v8's own addition (the completion receipt)
-const isV6 = () => ["v6", "v7", "v8"].includes(process.env.LEDGER);
-const isV7 = () => ["v7", "v8"].includes(process.env.LEDGER);
-const isV8 = () => process.env.LEDGER === "v8";
+
+const SUPPORTED_LEDGERS = Object.keys(LEDGER_VERSIONS);
+const ledgerVersion = () => process.env.LEDGER || "v1";
+
+// an unsupported nonempty selector is a configuration typo, never a silent fallback to
+// the v1 namespace (independent-review finding). Shared so every caller gets the same
+// protection and the message cannot drift between copies.
+const assertSupportedLedger = () => {
+  if (process.env.LEDGER && !SUPPORTED_LEDGERS.includes(process.env.LEDGER)) {
+    throw new Error(`unsupported LEDGER value "${process.env.LEDGER}" (use ${SUPPORTED_LEDGERS.join(", ")})`);
+  }
+};
+
+const activeContractId = (env) => {
+  assertSupportedLedger();
+  const entry = LEDGER_VERSIONS[ledgerVersion()];
+  if (!entry.register) return env[entry.idKey]; // v1, the original namespace
+  if (!env[entry.idKey]) {
+    throw new Error(`LEDGER=${ledgerVersion()} but ${entry.idKey} is missing; run ${entry.register} first`);
+  }
+  return env[entry.idKey];
+};
+
+// EXACT version identity, for the few places that genuinely mean one version rather than
+// a capability: a version-specific probe, and a consumer whose migration to a later
+// version has not landed yet. Prefer a capability everywhere else, because an exact test
+// is the thing that silently excludes the next version.
+const ledgerIsExactly = (v) => ledgerVersion() === v;
+
+// a capability is FALSE unless the table says otherwise, so an unknown or partially
+// described version can never be treated as more capable than it is
+const ledgerCap = (name) => {
+  const entry = LEDGER_VERSIONS[ledgerVersion()];
+  return Boolean(entry && entry.caps[name]);
+};
+
+const hasReconstructibleAccruals = () => ledgerCap("reconstructibleAccruals");
+const hasAccrualKindInKey = () => ledgerCap("accrualKindInKey");
+const hasPoolStatus = () => ledgerCap("poolStatus");
+const hasPledgeSlot = () => ledgerCap("pledgeSlot");
+const hasSlotBook = () => ledgerCap("slotBook");
+const hasCompletionReceipt = () => ledgerCap("completionReceipt");
+const hasImmutablePool = () => ledgerCap("immutablePool");
+const hasParedReceipt = () => ledgerCap("paredReceipt");
+
+// THE OLD VERSION-NUMBERED NAMES, kept as aliases over the capabilities they always
+// meant, so the existing call sites keep working unchanged and pick up the correct v9
+// answers from the table rather than from a list that never mentioned v9. Prefer the
+// capability names in new code; the later migration phases retire these as they touch
+// each caller. isV5 is the one that changes meaning under v9, and correctly so: it
+// guards writes of `status` onto the pool, and a v9 pool has no such field.
+const isV3 = hasReconstructibleAccruals;
+const isV4 = hasAccrualKindInKey;
+const isV5 = hasPoolStatus;
+const isV6 = hasPledgeSlot;
+const isV7 = hasSlotBook;
+const isV8 = hasCompletionReceipt;
 // the cast-governance namespace: CAST=v3 selects the v3 contract (formatVersion,
 // missed-vote attestations); default is the v2 snapshot-first contract
 const activeCastId = (env) => {
@@ -550,4 +603,7 @@ const isCastV3 = () => process.env.CAST === "v3";
 
 module.exports = { ENV_PATH, STATE_DIR, loadEnv, saveEnv, updateEnvKey, reserveAddrIndex, lockEnv, unlockEnv,
   acquireOpLock, releaseOpLock,
-  adoptStateDir, activeContractId, isV3, isV4, isV5, isV6, isV7, isV8, activeCastId, isCastV3 };
+  adoptStateDir, activeContractId, isV3, isV4, isV5, isV6, isV7, isV8, activeCastId, isCastV3,
+  LEDGER_VERSIONS, SUPPORTED_LEDGERS, ledgerVersion, assertSupportedLedger, ledgerCap,
+  hasReconstructibleAccruals, hasAccrualKindInKey, hasPoolStatus, hasPledgeSlot, hasSlotBook,
+  hasCompletionReceipt, hasImmutablePool, hasParedReceipt, ledgerIsExactly };

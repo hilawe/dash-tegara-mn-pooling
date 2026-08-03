@@ -16,7 +16,7 @@ const path = require("path");
 const crypto = require("crypto");
 const Dash = require("dash");
 const { installConsumedFilter } = require("./walletGuard.cjs");
-const { loadEnv, saveEnv, isV5 } = require("./envStore.cjs");
+const { loadEnv, saveEnv, isV5, hasImmutablePool } = require("./envStore.cjs");
 
 
 const MIN_CREDITS = 40000000000;
@@ -70,6 +70,17 @@ const p2pkh = (h20) => Buffer.concat([Buffer.from([0x76, 0xa9, 0x14]), h20, Buff
     funder = await ensureCredits(funder);
 
     // operator creates a pool
+    // same refusal as the credit rail and the cast demo setup, and for the same reason:
+    // this creates a pool that is LIVE AT BIRTH, which v8 expresses by writing proTxHash
+    // (and status on v5+). v9 has neither field, and its equivalent of "live" is a
+    // completion receipt built from a frozen manifest this exerciser has never held.
+    // Minting a receipt-less pool here would produce exactly the permanently ambiguous
+    // document the funder client's admission rule has to fail closed against.
+    if (hasImmutablePool()) {
+      throw new Error("funder.cjs does not create pools on an immutable-pool ledger: a pool that " +
+        "is live at birth needs a completion receipt, which only a formation round can produce. " +
+        "Form the pool with formation.cjs and exercise the funder actions against it.");
+    }
     const proTxHash = crypto.randomBytes(32);
     const poolDoc = await client.platform.documents.create("poolLedger.pool", operator, {
       proTxHash,
