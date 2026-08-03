@@ -472,6 +472,14 @@ if (PARED) {
     c.code !== 0 && /already exists|second completion|contradiction|FORMING/i.test(c.out));
   ok("the anomalous receipt was not laundered into a completion",
     !poolLiveUnderRealHash());
+  // the L1 status reader must not treat the non-verifying receipt as establishing a
+  // node, and must give the STATE-SPECIFIC reason, not a bare label (on v8 the pool is
+  // still forming; on v9 the receipt fails the shared check)
+  clearOpLock();
+  const st = runChild(["status", POOL]);
+  ok("status checks no node over the anomalous receipt, with the state's own reason",
+    /no established node to check/.test(st.out)
+    && (PARED ? /no completion receipt verifies/ : /still forming/).test(st.out));
 }
 
 // ---- independent case C: a corrupt draft is refused, never written blind ----
@@ -721,6 +729,67 @@ const plantForeignShare = () => {
     }
     ok("created pool carries a two-sided slot book",
       (d.slotDuffs !== undefined) === (d.slotCount !== undefined));
+  }
+}
+
+// ---- independent case O: the L1 STATUS READER's node identity routes through
+//      backingNode on both ledgers. A receipt-less immutable pool names WHY no node is
+//      checkable with the state's own reason; a completed pool reaches the
+//      established-node branch, and a STUB RPC pins the EXACT identity requested (a
+//      reader that reached the right branch with the wrong hash would otherwise pass:
+//      the branch tests cannot see which node was asked about). ----
+{
+  writeSeed();
+  if (PARED) {
+    const pre = runChild(["status", POOL]);
+    ok("status on a receipt-less immutable pool names why no node is checkable",
+      pre.code === 0 && /no established node to check/.test(pre.out)
+      && /no completion receipt verifies/.test(pre.out));
+  }
+  runChild(["complete", POOL, REAL_HASH]);
+  clearOpLock();
+  const st = runChild(["status", POOL]);
+  ok("status on a completed pool reads COMPLETED", st.code === 0 && /COMPLETED/.test(st.out));
+  ok("status on a completed pool reaches the ESTABLISHED-node branch",
+    /L1 check skipped \(no FORK_RPC_URL\)/.test(st.out));
+
+  // the stubbed Core RPC: a separate process (this harness execs its children
+  // synchronously, so an in-process server could never answer), logging each request
+  // body and answering a fixed valid protx info. The assertion that matters is on the
+  // LOG, that the reader asked about exactly REAL_HASH.
+  const { spawn, execFileSync: efs } = require("child_process");
+  const RPCLOG = path.join(ROOT, "l1stub.log");
+  const PORT = 30000 + (process.pid % 10000);
+  fs.writeFileSync(RPCLOG, "");
+  const stub = spawn("node", ["-e", `
+    const http = require("http"), fs = require("fs");
+    http.createServer((req, res) => {
+      let b = ""; req.on("data", (c) => b += c);
+      req.on("end", () => {
+        if (b) fs.appendFileSync(${JSON.stringify(RPCLOG)}, b + "\\n");
+        let id = null; try { id = JSON.parse(b).id; } catch {}
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ result: { collateralHash: "cc".repeat(32), collateralIndex: 1, state: {} }, error: null, id }));
+      });
+    }).listen(${PORT}, "127.0.0.1");
+  `], { stdio: "ignore" });
+  try {
+    let up = false;
+    for (let i = 0; i < 50 && !up; i++) {
+      try {
+        efs("node", ["-e", `require("http").get("http://127.0.0.1:${PORT}/", (r) => process.exit(0)).on("error", () => process.exit(1))`]);
+        up = true;
+      } catch { /* not listening yet */ }
+    }
+    ok("the stub Core RPC came up", up);
+    const stRpc = runChild(["status", POOL], undefined, { FORK_RPC_URL: `http://u:p@127.0.0.1:${PORT}` });
+    ok("status with a reachable Core reports the DMN-list confirmation",
+      stRpc.code === 0 && /backing node is in the DMN list/.test(stRpc.out));
+    const asked = fs.readFileSync(RPCLOG, "utf8");
+    ok("the reader asked Core about EXACTLY the established node's hash",
+      new RegExp(`"protx"[\\s\\S]*"info"[\\s\\S]*"${REAL_HASH}"`).test(asked) || asked.includes(`"${REAL_HASH}"`));
+  } finally {
+    stub.kill();
   }
 }
 
