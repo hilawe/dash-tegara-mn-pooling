@@ -11,11 +11,30 @@
  * ENTIRE pool is skipped, never partially deleted (review finding F8, 2026-07-11; the
  * old version hardcoded three funders and could orphan a foreign share).
  *
+ * Two ledger-dependent limits (phase F of docs/V9_MIGRATION_PLAN.md):
+ * - On a completion-receipt ledger, a pool with ANY receipt is never debris, whatever its
+ *   share table says, and is skipped outright: sweeping a completed pool's shares would
+ *   orphan its receipt's record, and a receipt that fails to verify is an anomaly to
+ *   resolve by hand, not to delete around. The receipt is re-queried immediately before
+ *   the first delete, so a completion landing during the checks skips the pool too.
+ * - On an immutable-pool ledger the pool document CANNOT be deleted (canBeDeleted:
+ *   false) and is excluded from the deletion set aloud; its shares and requests are still
+ *   cleaned under the same controlled-identity preflight, and the pool remains on the
+ *   ledger as the permanent receipt-less document the admission rule fails closed against.
+ *
+ * Every skip-or-sweep decision is `debrisPlan.cjs`, a transport-free function covered
+ * offline by cleanupDebrisPlanTest.cjs; this script fetches, holds each pool's
+ * completion-protocol operation lock for the duration of its sweep (a held lock is a
+ * skip, per the done-prune pattern), and executes the plan.
+ *
  * Run like the other scripts. Prints what it deletes; re-run is a no-op.
  */
 const Dash = require("dash");
-const { loadEnv, activeContractId, isV3 } = require("./envStore.cjs");
+const { loadEnv, activeContractId, isV3, hasCompletionReceipt, hasImmutablePool,
+  acquireOpLock, releaseOpLock } = require("./envStore.cjs");
 const { fetchAll } = require("./query.cjs");
+const journal = require("./compoundJournal.cjs");
+const { planPoolSweep } = require("./debrisPlan.cjs");
 
 (async () => {
   const env = loadEnv();
@@ -42,43 +61,101 @@ const { fetchAll } = require("./query.cjs");
   try {
     await client.getWalletAccount();
 
+    const fetchReceipts = (poolId) => fetchAll(client, "poolLedger.completionReceipt", {
+      where: [["poolId", "==", poolId]],
+    });
+
     const pools = await fetchAll(client, "poolLedger.pool");
     let removed = 0;
     for (const pool of pools) {
       const poolId = pool.getId();
-      const shares = await fetchAll(client, "poolLedger.share", {
-        where: [["poolId", "==", poolId]],
-      });
-      const bps = shares.reduce((s, d) => s + Number(d.toObject().shareBps), 0);
-      if (shares.length > 0 && bps === 10000) continue; // a complete pool is not debris
-      const accruals = await fetchAll(client, "poolLedger.rewardAccrual", {
-        where: [["poolId", "==", poolId]],
-      });
-      if (accruals.length > 0) {
-        console.log(`SKIP ${poolId.toString()}: incomplete shares but HAS accruals; not touching it`);
-        continue;
+      // the per-pool COMPLETION-PROTOCOL lock, same lock formation's complete/receipt/
+      // abandon hold: a sweep must not interleave with a completion of the same pool on
+      // this host. A held lock means a protocol run is active, which is itself proof the
+      // pool is not debris right now, so contention is a skip, not an error (the done
+      // prune pattern). A foreign writer on another host stays the documented residual,
+      // narrowed by the receipt re-query below.
+      const lockName = journal.suffixFor(activeContractId(env), poolId.toString());
+      try { acquireOpLock(lockName); } catch (e) {
+        if (e && e.code === "OPLOCK_CONTENDED") {
+          console.log(`SKIP ${poolId.toString()}: a completion-protocol run holds this pool's ` +
+            "operation lock; not debris right now");
+          continue;
+        }
+        throw e;
       }
-      const requests = await fetchAll(client, "poolLedger.membershipRequest", {
-        where: [["poolId", "==", poolId], ["status", "==", "pending"]],
-      });
+      try {
+        const shares = await fetchAll(client, "poolLedger.share", {
+          where: [["poolId", "==", poolId]],
+        });
+        const bps = shares.reduce((s, d) => s + Number(d.toObject().shareBps), 0);
+        const accruals = await fetchAll(client, "poolLedger.rewardAccrual", {
+          where: [["poolId", "==", poolId]],
+        });
+        const receipts = hasCompletionReceipt() ? await fetchReceipts(poolId) : [];
+        const requests = await fetchAll(client, "poolLedger.membershipRequest", {
+          where: [["poolId", "==", poolId], ["status", "==", "pending"]],
+        });
 
-      // preflight: every document must be deletable by an identity this run controls,
-      // or the pool is left completely intact
-      const docs = [...shares, ...requests, pool];
-      const foreign = docs.filter((d) => !mine.has(d.getOwnerId().toString()));
-      if (foreign.length > 0) {
-        console.log(`SKIP ${poolId.toString()}: ${foreign.length} document(s) owned by identities this ` +
-          `run does not control (e.g. ${foreign[0].getOwnerId().toString()}); leaving the pool intact`);
-        continue;
-      }
+        // every skip-or-sweep decision is the PLAN's, one transport-free function covered
+        // offline (cleanupDebrisPlanTest.cjs); this loop only fetches and executes it
+        const docs = [...shares, ...requests, pool];
+        const plan = planPoolSweep({
+          shareBpsSum: bps, shareCount: shares.length, accrualCount: accruals.length,
+          receiptCount: receipts.length, ownerIds: docs.map((d) => d.getOwnerId().toString()),
+          controlled: mine, receiptLedger: hasCompletionReceipt(),
+          immutablePool: hasImmutablePool(),
+        });
+        if (plan.action === "keep") continue; // a complete pool is not debris
+        if (plan.action === "skip-accruals") {
+          console.log(`SKIP ${poolId.toString()}: ${plan.reason}; not touching it`);
+          continue;
+        }
+        if (plan.action === "skip-receipt") {
+          console.log(`SKIP ${poolId.toString()}: ${plan.reason} (${receipts[0].getId().toString()})`);
+          continue;
+        }
+        if (plan.action === "skip-foreign") {
+          console.log(`SKIP ${poolId.toString()}: ${plan.foreign.length} document(s) owned by identities this ` +
+            `run does not control (e.g. ${plan.foreign[0]}); leaving the pool intact`);
+          continue;
+        }
 
-      console.log(`debris pool ${poolId.toString()} (${shares.length} shares, ${bps} bps): removing`);
-      for (const doc of docs) {
-        const owner = await identityFor(doc.getOwnerId().toString());
-        await client.platform.documents.broadcast({ delete: [doc] }, owner);
-        console.log(`  deleted ${doc.getType()} ${doc.getId().toString()} ` +
-          `(owner ${doc.getOwnerId().toString().slice(0, 8)}...)`);
-        removed++;
+        // RE-RUN THE PLAN on a re-queried receipt count immediately before the first
+        // delete (the abandon re-fetch pattern): a completion elsewhere could have
+        // published a receipt during the fetches above, and sweeping past it would delete
+        // a completed pool's share table. The decision is the SAME tested function, on
+        // fresh input, so the ledger gate and the threshold cannot drift from the
+        // offline-covered logic. The residual window between this re-query and consensus
+        // inclusion of the deletes cannot be closed from here: Platform caps a batch at
+        // one transition, so a conditional check-plus-delete is not expressible, which is
+        // the same documented residual every mutation path in this codebase carries.
+        const recheck = hasCompletionReceipt() ? await fetchReceipts(poolId) : [];
+        const planNow = planPoolSweep({
+          shareBpsSum: bps, shareCount: shares.length, accrualCount: accruals.length,
+          receiptCount: recheck.length, ownerIds: docs.map((d) => d.getOwnerId().toString()),
+          controlled: mine, receiptLedger: hasCompletionReceipt(),
+          immutablePool: hasImmutablePool(),
+        });
+        if (planNow.action !== "sweep") {
+          console.log(`SKIP ${poolId.toString()}: the pre-delete re-check changed the answer ` +
+            `(${planNow.reason || planNow.action}); a completion landed during the sweep's checks`);
+          continue;
+        }
+
+        const deletable = planNow.deletePool ? docs : docs.filter((d) => d !== pool);
+        console.log(`debris pool ${poolId.toString()} (${shares.length} shares, ${bps} bps): removing` +
+          (planNow.deletePool ? "" : " its shares and requests (the pool document cannot be deleted on " +
+            "this ledger and remains as the permanent receipt-less record)"));
+        for (const doc of deletable) {
+          const owner = await identityFor(doc.getOwnerId().toString());
+          await client.platform.documents.broadcast({ delete: [doc] }, owner);
+          console.log(`  deleted ${doc.getType()} ${doc.getId().toString()} ` +
+            `(owner ${doc.getOwnerId().toString().slice(0, 8)}...)`);
+          removed++;
+        }
+      } finally {
+        releaseOpLock(lockName);
       }
     }
     console.log(`\n=== DEBRIS CLEANUP DONE: ${removed} documents deleted ===`);

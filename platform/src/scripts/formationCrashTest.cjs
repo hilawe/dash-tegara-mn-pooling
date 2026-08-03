@@ -1,10 +1,12 @@
 /**
- * The failure-injection crash matrix for the v8 formation RECEIPT state machine (round 1's
- * Lens-3 recommendation, and the mechanical base round 4 looks for above). It does for the
- * receipt flow what envStoreCrashTest does for the state store: stop REAL execution at
- * every mutating boundary (each Platform op AND each local durable write), then assert the
- * state either RESUMES to the same receipt or STOPS LOUDLY without clearing recovery
- * evidence, never a silent wrong state.
+ * The failure-injection crash matrix for the formation RECEIPT state machine (round 1's
+ * Lens-3 recommendation, and the mechanical base round 4 looks for above), on BOTH receipt
+ * ledgers: v8 (the default, pool flips live) and v9 via TEGARA_HARNESS_LEDGER=v9
+ * (immutable pool, receipt publication only, no flip). It does for the receipt flow what
+ * envStoreCrashTest does for the state store: stop REAL execution at every mutating
+ * boundary (each Platform op AND each local durable write), then assert the state either
+ * RESUMES to the same receipt or STOPS LOUDLY without clearing recovery evidence, never a
+ * silent wrong state.
  *
  * Mechanism: a child process runs the real formation.cjs with `dash` swapped for an
  * in-memory mock ledger (formationMockDash.cjs) and a fault counter that hard-exits 97
@@ -46,13 +48,29 @@ const F1 = newId(), F2 = newId();
 const POOL = newId();
 const CONTRACT = newId(); // allocationPreimage requires a real base58 32-byte contract id
 
+// THE LEDGER UNDER TEST. Parameterised rather than hardcoded so this harness runs against
+// both receipt ledgers: v8 (the live default, pool flips) and v9 (immutable pool, receipt
+// publication only; see V9_MIGRATION_PLAN.md). Every ledger-dependent fixture and oracle
+// below branches on PARED, and the PARENT's own LEDGER is pinned to the same value so the
+// shared receipt-to-pool check used by the v9 oracle answers for the ledger under test.
+const HARNESS_LEDGER = process.env.TEGARA_HARNESS_LEDGER || "v8";
+const PARED = HARNESS_LEDGER === "v9";
+process.env.LEDGER = HARNESS_LEDGER;
+const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
+
 const seedLedger = () => ({
   contractId: CONTRACT, contractOwner: OP,
   docs: [
-    { id: POOL, type: "pool", ownerId: OP, data: {
-      proTxHash: "00".repeat(16) + crypto.randomBytes(16).toString("hex"), // forming placeholder
-      slotIndex: 0, nodeType: "regular", operatorIdentityId: Buffer.from(Identifier.from(OP).toBuffer()).toString("hex"),
-      operatorFeeBps: 2000, status: "forming", slotDuffs: 50000000000, slotCount: 2, $createdAt: 1 } },
+    // the v9 pool is IMMUTABLE and live-state-free: no proTxHash, no status, no
+    // operatorIdentityId, and the REQUIRED targetDuffs the paring moved onto it. The book
+    // already multiplies to the target (2 x 500 DASH), so the shared check passes without
+    // changing the numbers.
+    { id: POOL, type: "pool", ownerId: OP, data: PARED
+      ? { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+        targetDuffs: 100000000000, slotDuffs: 50000000000, slotCount: 2, $createdAt: 1 }
+      : { proTxHash: "00".repeat(16) + crypto.randomBytes(16).toString("hex"), // forming placeholder
+        slotIndex: 0, nodeType: "regular", operatorIdentityId: Buffer.from(Identifier.from(OP).toBuffer()).toString("hex"),
+        operatorFeeBps: 2000, status: "forming", slotDuffs: 50000000000, slotCount: 2, $createdAt: 1 } },
     { id: newId(), type: "pledgeSlot", ownerId: F1, data: {
       poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"), slotNo: 0, rewardScript: SCRIPT_A, $createdAt: 10 } },
     { id: newId(), type: "pledgeSlot", ownerId: F2, data: {
@@ -66,7 +84,7 @@ const writeSeed = () => {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(ENV_PATH,
     `MNEMONIC=m\nIDENTITY_ID=${OP}\nCONTRACT_ID=${CONTRACT}\nCONTRACT_V8_ID=${CONTRACT}\n` +
-    `FUNDER_ID=${F1}\nFUNDER2_ID=${F2}\n`);
+    `CONTRACT_V9_ID=${CONTRACT}\nFUNDER_ID=${F1}\nFUNDER2_ID=${F2}\n`);
   fs.writeFileSync(LEDGER_PATH, JSON.stringify(seedLedger(), null, 1));
 };
 
@@ -74,7 +92,7 @@ const REAL_HASH = "dd" + "56".repeat(31); // a non-forming 32-byte hash
 
 const runChild = (args, crashAfter, extraEnv = {}) => {
   const env = { ...process.env, TEGARA_ENV_PATH: ENV_PATH, TEGARA_MOCK_LEDGER: LEDGER_PATH,
-    LEDGER: "v8", NETWORK: "regtest", FORMATION_ALLOW_UNVERIFIED: "demo", ...extraEnv };
+    LEDGER: HARNESS_LEDGER, NETWORK: "regtest", FORMATION_ALLOW_UNVERIFIED: "demo", ...extraEnv };
   if (crashAfter !== undefined) env.TEGARA_MOCK_CRASH_AFTER = String(crashAfter);
   try {
     const out = execFileSync("node", [CHILD, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -101,15 +119,21 @@ const EXPECTED = (() => {
     owners.map((o) => [o.owner, o.amountDuffs, o.bps, o.script])];
   const rowsBytes = Buffer.from(JSON.stringify(arr), "utf8");
   return {
-    proTxHash: REAL_HASH, slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
-    formatVersion: 1, participantCount: 2, targetDuffs: 100000000000,
+    proTxHash: REAL_HASH, slotIndex: 0,
+    // the pared receipt DROPS nodeType, operatorFeeBps and targetDuffs (the immutable pool
+    // pins them); everything else is identical. The expectation stays INDEPENDENT either
+    // way, rebuilt from the canonical spec, never derived through production code.
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    formatVersion: 1, participantCount: 2,
     l1Verification: "demo-unverified", verificationMethodVersion: 1,
     allocationRows: rowsBytes.toString("hex"),
     allocationHash: crypto.createHash("sha256").update(rowsBytes).digest("hex"),
   };
 })();
 
-// assert an on-ledger receipt matches the INDEPENDENT expectation field by field
+// assert an on-ledger receipt matches the INDEPENDENT expectation field by field. On the
+// pared ledger the three pool-pinned fields must be ABSENT, not merely unchecked: a receipt
+// still carrying one would have been schema-rejected by the real contract.
 const assertReceiptCorrect = (label, r) => {
   if (!r) { ok(`${label}: a receipt exists`, false); return; }
   const d = r.data;
@@ -117,20 +141,46 @@ const assertReceiptCorrect = (label, r) => {
   ok(`${label}: poolId`, Identifier.from(Buffer.from(d.poolId, "hex")).toString() === POOL);
   ok(`${label}: proTxHash == REAL_HASH`, d.proTxHash === EXPECTED.proTxHash);
   ok(`${label}: slotIndex`, Number(d.slotIndex) === EXPECTED.slotIndex);
-  ok(`${label}: nodeType`, d.nodeType === EXPECTED.nodeType);
-  ok(`${label}: operatorFeeBps`, Number(d.operatorFeeBps) === EXPECTED.operatorFeeBps);
+  if (PARED) {
+    ok(`${label}: nodeType absent (pared)`, d.nodeType === undefined);
+    ok(`${label}: operatorFeeBps absent (pared)`, d.operatorFeeBps === undefined);
+    ok(`${label}: targetDuffs absent (pared)`, d.targetDuffs === undefined);
+  } else {
+    ok(`${label}: nodeType`, d.nodeType === EXPECTED.nodeType);
+    ok(`${label}: operatorFeeBps`, Number(d.operatorFeeBps) === EXPECTED.operatorFeeBps);
+    ok(`${label}: targetDuffs`, Number(d.targetDuffs) === EXPECTED.targetDuffs);
+  }
   ok(`${label}: formatVersion`, Number(d.formatVersion) === EXPECTED.formatVersion);
   ok(`${label}: participantCount`, Number(d.participantCount) === EXPECTED.participantCount);
-  ok(`${label}: targetDuffs`, Number(d.targetDuffs) === EXPECTED.targetDuffs);
   ok(`${label}: l1Verification`, d.l1Verification === EXPECTED.l1Verification);
   ok(`${label}: verificationMethodVersion`, Number(d.verificationMethodVersion) === EXPECTED.verificationMethodVersion);
   ok(`${label}: allocationRows`, d.allocationRows === EXPECTED.allocationRows);
   ok(`${label}: allocationHash`, d.allocationHash === EXPECTED.allocationHash);
 };
-// the pool must be live under exactly REAL_HASH (round-4: poolLive only checked non-forming)
+// the completion record must name exactly REAL_HASH (round-4: poolLive only checked
+// non-forming). On v8 the pool itself answers. On v9 the pool has NO equivalent and this
+// must not weaken to "a receipt exists": the v9 form is that ONE receipt exists, VERIFIES
+// against the pool through the shared four-duty check, and names exactly REAL_HASH
+// (checking merely present is the round-4 mistake one document over).
 const poolLiveUnderRealHash = () => {
   const p = ledger().docs.find((d) => d.id === POOL);
-  return p.data.status === "live" && p.data.proTxHash === REAL_HASH;
+  if (!PARED) return p.data.status === "live" && p.data.proTxHash === REAL_HASH;
+  const rs = receipts();
+  if (rs.length !== 1 || rs[0].data.proTxHash !== REAL_HASH) return false;
+  const d = rs[0].data;
+  const verdict = checkReceiptAgainstPool({
+    contractId: CONTRACT,
+    receipt: {
+      poolId: Buffer.from(d.poolId, "hex"), proTxHash: Buffer.from(d.proTxHash, "hex"),
+      slotIndex: Number(d.slotIndex), formatVersion: Number(d.formatVersion),
+      allocationRows: Buffer.from(d.allocationRows, "hex"),
+      allocationHash: Buffer.from(d.allocationHash, "hex"),
+      participantCount: Number(d.participantCount),
+      l1Verification: d.l1Verification, verificationMethodVersion: Number(d.verificationMethodVersion),
+    },
+    pool: p.data, poolId: POOL,
+  });
+  return verdict.ok === true;
 };
 
 // snapshot / restore the whole local + ledger state, so a receipt-command matrix can
@@ -152,10 +202,6 @@ const restore = () => {
 
 const ledger = () => JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
 const receipts = () => ledger().docs.filter((d) => d.type === "completionReceipt");
-const poolLive = () => {
-  const p = ledger().docs.find((d) => d.id === POOL);
-  return p.data.status === "live" && !/^0{32}/.test(p.data.proTxHash);
-};
 const clearOpLock = () => { // the operator's documented manual cleanup after a verified-dead run
   for (const d of fs.existsSync(STATE_DIR) ? fs.readdirSync(STATE_DIR) : []) {
     if (d.startsWith("oplock-") || d === "env.lock") fs.rmSync(path.join(STATE_DIR, d), { recursive: true, force: true });
@@ -179,19 +225,41 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
 }
 
 // the mock's schema validator actually catches the false-green the round-4 review named
-// (a raw string passed where a byteArray is required)
+// (a raw string passed where a byteArray is required), in the SHAPE of the ledger under
+// test: the pared receipt drops the three pool-pinned fields, and carrying one anyway must
+// be rejected the way additionalProperties:false would reject it
 {
   const mock = require("./formationMockDash.cjs");
   const good = {
-    poolId: Buffer.alloc(32, 1), proTxHash: Buffer.alloc(32, 2), slotIndex: 0, nodeType: "regular",
-    operatorFeeBps: 2000, formatVersion: 1, allocationRows: Buffer.from("[]"), allocationHash: Buffer.alloc(32, 3),
-    participantCount: 2, targetDuffs: 100000000000, l1Verification: "demo-unverified", verificationMethodVersion: 1 };
+    poolId: Buffer.alloc(32, 1), proTxHash: Buffer.alloc(32, 2), slotIndex: 0,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    formatVersion: 1, allocationRows: Buffer.from("[]"), allocationHash: Buffer.alloc(32, 3),
+    participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1 };
   let threw = false;
   try { mock.validateReceiptProps({ ...good, allocationRows: "not-bytes" }); } catch { threw = true; }
   ok("mock schema rejects a raw-string allocationRows (the false-green case)", threw);
   let okPass = true;
   try { mock.validateReceiptProps(good); } catch { okPass = false; }
   ok("mock schema accepts a well-formed receipt", okPass);
+  if (PARED) {
+    let rejectedUnpared = false;
+    try { mock.validateReceiptProps({ ...good, nodeType: "regular" }); } catch { rejectedUnpared = true; }
+    ok("pared mock schema rejects a receipt still carrying nodeType", rejectedUnpared);
+    // and the POOL schema: the v8 shape (placeholder hash) must be refused, a one-sided
+    // slot book must be refused, and the v9 shape must pass
+    const v9pool = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+      targetDuffs: 100000000000, slotDuffs: 50000000000, slotCount: 2 };
+    let poolOk = true;
+    try { mock.validatePoolProps(v9pool); } catch { poolOk = false; }
+    ok("immutable-pool mock schema accepts the v9 pool shape", poolOk);
+    let rejectedHash = false;
+    try { mock.validatePoolProps({ ...v9pool, proTxHash: Buffer.alloc(32, 0) }); } catch { rejectedHash = true; }
+    ok("immutable-pool mock schema rejects a pool carrying proTxHash", rejectedHash);
+    let rejectedOneSided = false;
+    try { mock.validatePoolProps({ slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+      targetDuffs: 100000000000, slotDuffs: 50000000000 }); } catch { rejectedOneSided = true; }
+    ok("immutable-pool mock schema rejects a one-sided slot book", rejectedOneSided);
+  }
 }
 
 // ---- the clean run establishes the target end state and the boundary count ----
@@ -228,6 +296,16 @@ for (let k = 0; k < N; k++) {
   const afterCrash = receipts();
   ok(`k=${k}: at most one receipt after the crash`, afterCrash.length <= 1);
   if (afterCrash.length === 1) ok(`k=${k}: any crash-written receipt is the operator's`, afterCrash[0].ownerId === OP);
+  // INVARIANT 1b, COMPLETION-RECORD LAST (flip invariant list item 1): the completion
+  // record is written only after the participants' shares, so at NO crash boundary does a
+  // receipt exist without both shares on the ledger. On v8 the flip sat between them; on
+  // v9 this ordering is the only thing left carrying "no reader sees a completed pool
+  // without its shares", which is why it is asserted explicitly on both ledgers.
+  if (afterCrash.length === 1) {
+    const sh = ledger().docs.filter((d) => d.type === "share");
+    ok(`k=${k}: a receipt implies both participants' shares (completion-record last)`,
+      [F1, F2].every((f) => sh.some((s) => s.ownerId === f)));
+  }
 
   // RECOVERY as an operator would drive it: clear a possibly-held op lock, then re-run
   // complete (the resume path). A crash BEFORE the flip leaves a forming pool that
@@ -269,9 +347,15 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
 //      state (round-4 harness gap: recovery runs were never themselves interrupted) ----
 {
   writeSeed();
-  // reach live-without-receipt with the draft + active manifest retained
-  const halted = runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "flip" });
-  ok("receipt-matrix setup: halted live with no receipt", halted.code === 0 && poolLiveUnderRealHash() && receipts().length === 0);
+  // reach the recoverable no-receipt intermediate state with the draft + active manifest
+  // retained. On v8 that is live-without-receipt (halt after the FLIP); on v9 no flip
+  // exists (the hook is refused there), so the same state is settled-without-receipt,
+  // reached by halting after SETTLE.
+  const halted = runChild(["complete", POOL, REAL_HASH], undefined,
+    { FORMATION_HALT_AFTER: PARED ? "shares" : "flip" });
+  ok("receipt-matrix setup: halted with no receipt, recovery evidence retained",
+    halted.code === 0 && receipts().length === 0 && hasInFlightEvidence()
+    && (PARED || poolLiveUnderRealHash()));
   snapshot();
   // count receipt-publish boundaries
   let RN = 0;
@@ -325,7 +409,13 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
 
 // ---- independent case: a legitimate POOL FEE CHANGE after completion must NOT make
 //      `receipt` falsely reject the (historical-fee) receipt (round-5 P2) ----
-{
+// SKIPPED on the immutable-pool ledger, where the state this case injects CANNOT EXIST:
+// the pool's fee is pinned at creation, so "the fee changed after completion" is a fixture
+// the real ledger cannot produce, and a fixture that cannot exist proves nothing (the
+// be41757 lesson). The consensus refusal itself is exercised by the mock's replace guard.
+if (PARED) {
+  console.log("fee-change case: skipped on the immutable-pool ledger (fee drift is unrepresentable)");
+} else {
   writeSeed();
   runChild(["complete", POOL, REAL_HASH]);
   ok("fee-change setup: one receipt", receipts().length === 1);
@@ -353,30 +443,43 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   fs.rmSync(lockDir, { recursive: true, force: true });
 }
 
-// ---- independent case B: a receipt whose pool is still forming is refused ----
+// ---- independent case B: an anomalous receipt is refused, never read past ----
+//      On v8 the anomaly is a receipt on a still-FORMING pool (the flip precedes the
+//      receipt). On v9 no forming state exists, so the anomaly class is a receipt that
+//      does NOT VERIFY against its pool through the shared check, and both `receipt` and
+//      a fresh `complete` must refuse over it rather than treat it as absent.
 {
   writeSeed();
-  // hand-inject a schema-valid receipt for a pool that never flipped (a squatter-style anomaly)
+  // hand-inject a schema-valid but non-verifying receipt (a squatter-style anomaly: its
+  // embedded allocation is empty, so it proves nothing about this pool)
   const l = ledger();
   const rows = Buffer.from(JSON.stringify(["tegara-completion-allocation", 1, CONTRACT, POOL, "100000000000", []]), "utf8");
   l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
     poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
-    proTxHash: REAL_HASH, slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000, formatVersion: 1,
+    proTxHash: REAL_HASH, slotIndex: 0, formatVersion: 1,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
     allocationRows: rows.toString("hex"),
     allocationHash: crypto.createHash("sha256").update(rows).digest("hex"),
-    participantCount: 1, targetDuffs: 100000000000, l1Verification: "demo-unverified",
+    participantCount: 1, l1Verification: "demo-unverified",
     verificationMethodVersion: 1, $createdAt: 5 } });
   fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
   const r = runChild(["receipt", POOL]);
-  ok("a receipt on a still-forming pool is refused loudly", r.code !== 0 && /forming/i.test(r.out));
+  ok("an anomalous receipt is refused loudly by `receipt`",
+    r.code !== 0 && (PARED ? /FAILS verification/ : /forming/i).test(r.out));
+  clearOpLock();
+  const c = runChild(["complete", POOL, REAL_HASH]);
+  ok("a fresh `complete` refuses to start over the contradiction",
+    c.code !== 0 && /already exists|second completion|contradiction|FORMING/i.test(c.out));
+  ok("the anomalous receipt was not laundered into a completion",
+    !poolLiveUnderRealHash());
 }
 
 // ---- independent case C: a corrupt draft is refused, never written blind ----
-//      DETERMINISTIC (round-6): reach a state that certainly HAS a draft (halt after the
-//      flip, which freezes the draft and retains it), then corrupt it.
+//      DETERMINISTIC (round-6): reach a state that certainly HAS a draft (halt at the
+//      last pre-receipt boundary, which freezes the draft and retains it), then corrupt it.
 {
   writeSeed();
-  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "flip" });
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: PARED ? "shares" : "flip" });
   const draftFile = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("RECEIPT_DRAFT_") && f.endsWith(".val"));
   ok("corrupt-draft setup: a draft exists to corrupt", !!draftFile);
   fs.writeFileSync(path.join(STATE_DIR, draftFile), "{ not json");
@@ -388,7 +491,11 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
 // ---- independent case D0: a fee change BEFORE the flip must REFUSE (round-6 re-check:
 //      the receipt records the completion-time fee, so a pre-flip drift must never let a
 //      stale draft fee freeze into the immutable receipt) ----
-{
+// SKIPPED on the immutable-pool ledger for the same unrepresentable-fixture reason as the
+// fee-change case above: the pool's fee cannot drift there, before or after anything.
+if (PARED) {
+  console.log("pre-flip fee-drift case: skipped on the immutable-pool ledger (unrepresentable)");
+} else {
   writeSeed();
   const halted = runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "shares" });
   ok("pre-flip-fee setup: halted after settle, before the flip", halted.code === 0 && !poolLiveUnderRealHash());
@@ -404,7 +511,12 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
 // ---- independent case D: a legitimate POOL FEE CHANGE while the pool is live WITHOUT a
 //      receipt (draft present) must NOT brick recovery (round-6: requireDraftMatchesPool
 //      used to reject on fee) ----
-{
+// SKIPPED on the immutable-pool ledger: the fee cannot change there, so the state this
+// case reaches is unrepresentable, and its concern (a live pool whose mutable fee drifted
+// during the recovery window) has no v9 counterpart.
+if (PARED) {
+  console.log("post-flip fee-change case: skipped on the immutable-pool ledger (unrepresentable)");
+} else {
   writeSeed();
   runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "flip" }); // live, no receipt, draft kept
   ok("fee-recovery setup: live, no receipt, draft present", poolLiveUnderRealHash() && receipts().length === 0 && hasInFlightEvidence());
@@ -416,8 +528,25 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   assertReceiptCorrect("fee-recovery receipt", receipts()[0]); // records the HISTORICAL 2000 fee
 }
 
+// inject the VALID expected receipt directly into the ledger, in the shape of the ledger
+// under test, simulating a completion that landed outside this run (a lost race)
+const injectValidReceipt = () => {
+  const l = ledger();
+  l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    proTxHash: EXPECTED.proTxHash, slotIndex: 0, formatVersion: 1,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+    participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1,
+    $createdAt: 5 } });
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+};
+
 // ---- independent case E: abandon ARCHIVES before clearing, and receipt RECOVERS from
-//      the archive if the pool went live during/after the abandon (round-7 P1) ----
+//      the archive when the completion turns out to have landed anyway (round-7 P1).
+//      On v8 the late evidence is the pool live under the abandoned hash; on v9 it is a
+//      RECEIPT matching the archived manifest, and with NO receipt the archive must NOT
+//      publish on its own (the abandon stands; invariant list item 12). ----
 {
   writeSeed();
   const halted = runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
@@ -426,13 +555,25 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   ok("abandon succeeds and reports the archive", ab.code === 0 && /archived to FORMATION_ABANDONED_/.test(ab.out));
   ok("abandon left an archive key", fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_ABANDONED_") && f.endsWith(".val")));
   ok("abandon cleared the active manifest and draft", !hasInFlightEvidence());
-  // the loss scenario: the pool goes live under the abandoned hash after the abandon
-  const l = ledger();
-  const p = l.docs.find((d) => d.id === POOL);
-  p.data.proTxHash = REAL_HASH; p.data.status = "live";
-  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  if (PARED) {
+    // with no receipt, the archive alone must not resurrect the abandoned completion
+    const dry = runChild(["receipt", POOL]);
+    ok("with no receipt the abandon STANDS (archive not publishable on its own)",
+      dry.code === 0 && /abandon stands/.test(dry.out) && receipts().length === 0);
+    injectValidReceipt(); // the lost race: the completion landed after all
+  } else {
+    // the loss scenario: the pool goes live under the abandoned hash after the abandon
+    const l = ledger();
+    const p = l.docs.find((d) => d.id === POOL);
+    p.data.proTxHash = REAL_HASH; p.data.status = "live";
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  }
   const r = runChild(["receipt", POOL]);
-  ok("receipt RECOVERS from the abandon archive", r.code === 0 && receipts().length === 1);
+  // on v9 the receipt is already on the ledger before this run (the injected lost race),
+  // so the count alone would pass vacuously; require the run to say it FINALIZED from the
+  // archive source, which only the reconcile path prints
+  ok("receipt RECOVERS from the abandon archive", r.code === 0 && receipts().length === 1
+    && (!PARED || /finalized/.test(r.out)));
   assertReceiptCorrect("abandon-archive receipt", receipts()[0]);
   ok("finalization CLEARED the abandon archive (round-7 re-check)",
     !fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_ABANDONED_") && f.endsWith(".val")));
@@ -492,21 +633,29 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
     r.code === 0 && /canonical, hash recomputed and matches/.test(r.out) && receipts().length === 1);
 }
 
-// ---- independent case F: abandon REFUSES if the pool went live before the mutation
-//      (re-fetch guard), keeping the manifest for `receipt` ----
+// ---- independent case F: abandon REFUSES when the completion's evidence is already on
+//      the ledger, keeping the manifest for `receipt`. On v8 that evidence is the pool
+//      having gone live; on v9 it is a verifying receipt (the classifier reads COMPLETED,
+//      and abandoning would orphan the completion's local recovery inputs). ----
 {
   writeSeed();
   runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
-  // flip the pool live BEFORE calling abandon (simulating a concurrent flip pre-mutation)
-  const l = ledger();
-  const p = l.docs.find((d) => d.id === POOL);
-  p.data.proTxHash = REAL_HASH; p.data.status = "live";
-  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  if (PARED) {
+    injectValidReceipt(); // the completion landed before the abandon was attempted
+  } else {
+    // flip the pool live BEFORE calling abandon (simulating a concurrent flip pre-mutation)
+    const l = ledger();
+    const p = l.docs.find((d) => d.id === POOL);
+    p.data.proTxHash = REAL_HASH; p.data.status = "live";
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  }
   const ab = runChild(["abandon", POOL]);
-  ok("abandon refuses a live pool", ab.code !== 0 && /LIVE/.test(ab.out));
+  ok("abandon refuses over the completion evidence",
+    ab.code !== 0 && (PARED ? /COMPLETED/ : /LIVE/).test(ab.out));
   ok("abandon kept the manifest (no clear, no archive needed)", hasInFlightEvidence());
   const r = runChild(["receipt", POOL]);
-  ok("receipt then publishes from the kept manifest", r.code === 0 && receipts().length === 1);
+  ok("receipt then publishes or reconciles from the kept manifest", r.code === 0 && receipts().length === 1);
+  ok("case F converged to the completion record", poolLiveUnderRealHash());
 }
 
 // ---- independent case G: done prune KEEPS a DONE whose sibling DRAFT survives (round-7
@@ -547,6 +696,42 @@ const plantForeignShare = () => {
   plantForeignShare(); // a foreign share on a forming pool with only the manifest committed
   const ab = runChild(["abandon", POOL]);
   ok("a foreign share does NOT block abandon (a soundness review)", ab.code === 0 && /CLEARED/.test(ab.out));
+}
+
+// ---- independent case M: `create` emits the shape of the ledger under test (the matrix
+//      seeds its pool directly, so without this no gate ever runs the create path) ----
+{
+  writeSeed();
+  const r = runChild(["create", "regular", "2000"]);
+  ok("create succeeds on the ledger under test", r.code === 0);
+  const created = ledger().docs.find((d) => d.type === "pool" && d.id !== POOL);
+  ok("create wrote a pool document", !!created);
+  if (created) {
+    const d = created.data;
+    if (PARED) {
+      ok("created v9 pool carries no proTxHash", d.proTxHash === undefined);
+      ok("created v9 pool carries no status", d.status === undefined);
+      ok("created v9 pool carries no operatorIdentityId", d.operatorIdentityId === undefined);
+      ok("created v9 pool carries the required targetDuffs", Number(d.targetDuffs) === 100000000000);
+      ok("create advertises the coordinated participate instruction",
+        new RegExp(`TEGARA_PARTICIPATE=${created.id}`).test(r.out));
+    } else {
+      ok("created v8 pool starts in the forming namespace", /^0{32}/.test(d.proTxHash || ""));
+      ok("created v8 pool carries status forming", d.status === "forming");
+    }
+    ok("created pool carries a two-sided slot book",
+      (d.slotDuffs !== undefined) === (d.slotCount !== undefined));
+  }
+}
+
+// ---- independent case N: FORMATION_HALT_AFTER=flip is REFUSED on the no-flip ledger
+//      (a silently ignored hook would let a harness setup pass vacuously) ----
+if (PARED) {
+  writeSeed();
+  const r = runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "flip" });
+  ok("HALT=flip is refused loudly on the immutable-pool ledger",
+    r.code !== 0 && /does not exist on an[\s\S]*immutable-pool ledger/.test(r.out));
+  ok("the refused run wrote nothing", receipts().length === 0 && !hasInFlightEvidence());
 }
 
 fs.rmSync(ROOT, { recursive: true, force: true });

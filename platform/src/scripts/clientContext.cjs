@@ -12,7 +12,8 @@
 const Dash = require("dash");
 const { Identifier } = require("@dashevo/wasm-dpp");
 const { fetchAll } = require("./query.cjs");
-const { loadEnv, updateEnvKey, activeContractId, activeCastId, isV3, isV5, isV6, isV7 } = require("./envStore.cjs");
+const { loadEnv, updateEnvKey, activeContractId, activeCastId, isV3, isV5, isV6, isV7,
+  assertSupportedLedger } = require("./envStore.cjs");
 const journal = require("./compoundJournal.cjs");
 
 const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
@@ -24,10 +25,8 @@ async function buildContext() {
     console.error("run register.cjs first (need MNEMONIC and CONTRACT_ID)");
     process.exit(1);
   }
-  if (process.env.LEDGER && !["v1", "v3", "v4", "v5", "v6", "v7", "v8"].includes(process.env.LEDGER)) {
-    console.error(`unsupported LEDGER value "${process.env.LEDGER}" (use v1, v3, v4, v5, v6, v7, or v8)`);
-    process.exit(1);
-  }
+  // the supported set lives in envStore's version table, never in a second copy here
+  try { assertSupportedLedger(); } catch (e) { console.error(e.message); process.exit(1); }
   const who = /^funder\d+$/.test(process.env.WHO || "") ? process.env.WHO : "funder1";
   const whoNum = parseInt(who.slice(6), 10);
   const whoIdKey = whoNum === 1 ? "FUNDER_ID" : `FUNDER${whoNum}_ID`;

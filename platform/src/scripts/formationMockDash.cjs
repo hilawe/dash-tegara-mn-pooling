@@ -61,16 +61,51 @@ const asIdString = (v) => {
   throw new Error("mock: unsupported where value");
 };
 
-// the published v8 completionReceipt schema, enforced by the mock at create time so a
-// receipt the real contract would reject cannot pass the crash matrix (round-4 harness
-// blocker). Kept in lockstep with registerV8.cjs by hand (a small, rarely-changing set).
+// the published completionReceipt schema, enforced by the mock at create time so a receipt
+// the real contract would reject cannot pass the crash matrix (round-4 harness blocker).
+// Kept in lockstep with registerV8.cjs and contractV9.cjs by hand (a small, rarely-changing
+// set).
+//
+// TWO SHAPES. v8 carries nodeType, operatorFeeBps and targetDuffs at the top level; v9 pares
+// all three away because the immutable pool pins them, and `additionalProperties: false`
+// means a v9 contract REJECTS a receipt still carrying them. The mock has to reproduce both
+// refusals, or the crash matrix would accept a receipt the real ledger would not, in
+// whichever direction the run is pointed.
+// the v9 POOL schema, enforced at create time on immutable-pool ledgers for the same
+// reason as the receipt schema below: contractV9's pool has `additionalProperties: false`
+// and REMOVES proTxHash, status and operatorIdentityId while REQUIRING targetDuffs, so a
+// create still emitting the v8 shape must fail here the way the real contract would fail
+// it, not pass the matrix. The v1-v8 pool create stays unvalidated as before (the harness
+// seeds those pools directly rather than creating them), so this validator only ever
+// tightens.
+const validatePoolProps = (p) => {
+  if (!require("./envStore.cjs").hasImmutablePool()) return;
+  const bad = (why) => { throw new Error(`mock DPP: pool violates the v9 schema (${why})`); };
+  const isInt = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+  const required = ["slotIndex", "nodeType", "operatorFeeBps", "targetDuffs"];
+  const optional = ["slotDuffs", "slotCount"];
+  for (const k of required) if (p[k] === undefined) bad(`missing ${k}`);
+  for (const k of Object.keys(p)) {
+    if (!required.includes(k) && !optional.includes(k)) bad(`unknown property ${k} (additionalProperties:false)`);
+  }
+  if (!isInt(p.slotIndex, 0, 31)) bad("slotIndex out of 0..31");
+  if (!["regular", "evo"].includes(p.nodeType)) bad("nodeType not in the enum");
+  if (!isInt(p.operatorFeeBps, 0, 10000)) bad("operatorFeeBps out of 0..10000");
+  if (!(Number.isInteger(p.targetDuffs) && p.targetDuffs >= 1)) bad("targetDuffs is not an integer >= 1");
+  // the slot book is both-or-neither (dependentRequired in the contract)
+  if ((p.slotDuffs === undefined) !== (p.slotCount === undefined)) bad("one-sided slot book (dependentRequired)");
+};
+
 const validateReceiptProps = (p) => {
-  const bad = (why) => { throw new Error(`mock DPP: completionReceipt violates the v8 schema (${why})`); };
+  const pared = require("./envStore.cjs").hasParedReceipt();
+  const shape = pared ? "v9" : "v8";
+  const bad = (why) => { throw new Error(`mock DPP: completionReceipt violates the ${shape} schema (${why})`); };
   const isBytes = (v, n) => (Buffer.isBuffer(v) || v instanceof Uint8Array) && Buffer.from(v).length === n;
   const isInt = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
-  const required = ["poolId", "proTxHash", "slotIndex", "nodeType", "operatorFeeBps", "formatVersion",
-    "allocationRows", "allocationHash", "participantCount", "targetDuffs",
-    "l1Verification", "verificationMethodVersion"];
+  const required = ["poolId", "proTxHash", "slotIndex", "formatVersion",
+    "allocationRows", "allocationHash", "participantCount",
+    "l1Verification", "verificationMethodVersion",
+    ...(pared ? [] : ["nodeType", "operatorFeeBps", "targetDuffs"])];
   for (const k of required) if (p[k] === undefined) bad(`missing ${k}`);
   for (const k of Object.keys(p)) if (!required.includes(k)) bad(`unknown property ${k} (additionalProperties:false)`);
   if (!isBytes(p.poolId, 32)) bad("poolId is not 32 bytes");
@@ -81,11 +116,13 @@ const validateReceiptProps = (p) => {
     bad("allocationRows is not a 1..2048 byteArray (a raw string would be caught here)");
   }
   if (!isInt(p.slotIndex, 0, 31)) bad("slotIndex out of 0..31");
-  if (!["regular", "evo"].includes(p.nodeType)) bad("nodeType not in the enum");
-  if (!isInt(p.operatorFeeBps, 0, 10000)) bad("operatorFeeBps out of 0..10000");
+  if (!pared) {
+    if (!["regular", "evo"].includes(p.nodeType)) bad("nodeType not in the enum");
+    if (!isInt(p.operatorFeeBps, 0, 10000)) bad("operatorFeeBps out of 0..10000");
+    if (!(Number.isInteger(p.targetDuffs) && p.targetDuffs >= 1)) bad("targetDuffs is not an integer >= 1");
+  }
   if (p.formatVersion !== 1) bad("formatVersion is not const 1");
   if (!isInt(p.participantCount, 1, 8)) bad("participantCount out of 1..8");
-  if (!(Number.isInteger(p.targetDuffs) && p.targetDuffs >= 1)) bad("targetDuffs is not an integer >= 1");
   if (!["amount-reward-verified", "node-existence-only", "demo-unverified"].includes(p.l1Verification)) bad("l1Verification not in the enum");
   if (p.verificationMethodVersion !== 1) bad("verificationMethodVersion is not const 1");
 };
@@ -167,6 +204,7 @@ class Client {
           // Platform would reject it). A create that violates the schema throws here, the
           // same failure surface a real rejection presents.
           if (short === "completionReceipt") validateReceiptProps(props);
+          if (short === "pool") validatePoolProps(props);
           const data = { $createdAt: Date.now() };
           for (const [k, v] of Object.entries(props)) {
             data[k] = (Buffer.isBuffer(v) || v instanceof Uint8Array)
@@ -203,6 +241,15 @@ class Client {
           for (const doc of batch.replace || []) {
             const rec = l.docs.find((r) => r.id === doc.__rec.id);
             if (!rec) { tick(); throw new Error(`mock: replace of unknown doc ${doc.__rec.id}`); }
+            // the immutable pool refuses replacement at consensus (documentsMutable:
+            // false). The mock reproduces the refusal so a regression that reintroduces a
+            // flip fails the matrix the way the real ledger would fail it, instead of
+            // passing against a mock more permissive than Platform.
+            if (rec.type === "pool" && require("./envStore.cjs").hasImmutablePool()) {
+              tick();
+              throw new Error(`Document replace on ${l.contractId}:pool is not allowed because ` +
+                "the document type is not mutable");
+            }
             for (const [k, v] of Object.entries(doc.__pending)) {
               rec.data[k] = (Buffer.isBuffer(v) || v instanceof Uint8Array)
                 ? Buffer.from(v).toString("hex") : v;
@@ -229,6 +276,6 @@ class Client {
   async disconnect() {}
 }
 
-module.exports = { Client, validateReceiptProps, Core: new Proxy({}, { get() {
+module.exports = { Client, validateReceiptProps, validatePoolProps, Core: new Proxy({}, { get() {
   throw new Error("mock: Dash.Core was touched; the harness scenarios must supply member reward scripts");
 } }) };

@@ -44,7 +44,7 @@ const Dash = require("dash");
 const { installConsumedFilter } = require("./walletGuard.cjs");
 const { fetchAll } = require("./query.cjs");
 const match = require("./matchJournal.cjs");
-const { loadEnv, saveEnv, activeContractId, isV3, isV5 } = require("./envStore.cjs");
+const { loadEnv, saveEnv, activeContractId, isV3, isV5, hasImmutablePool } = require("./envStore.cjs");
 
 
 const MIN_CREDITS = 40000000000;
@@ -401,6 +401,19 @@ function matchRequests(pending) {
     const funder2 = await ensureCredits(await client.platform.identities.get(env.FUNDER2_ID));
 
     // a fresh pool with funder1 as the sole incumbent
+    // same refusal as the credit rail and the cast demo setup, and for the same reason:
+    // this path mints a pool that is LIVE AT BIRTH, which v8 expresses by writing
+    // proTxHash (and status on v5+). v9 has neither field, and its equivalent of "live"
+    // is a completion receipt built from a frozen manifest the matcher has never held:
+    // the matcher settles membership, it does not run a formation round. Minting a
+    // receipt-less pool here would produce exactly the permanently ambiguous document
+    // the funder client's admission rule has to fail closed against. The existing-pool
+    // settle path above stays available, since it creates no pool.
+    if (hasImmutablePool()) {
+      throw new Error("the matcher does not create pools on an immutable-pool ledger: a pool that " +
+        "is live at birth needs a completion receipt, which only a formation round can produce. " +
+        "Form the pool with formation.cjs, then point the matcher at it as an existing pool.");
+    }
     const SHARE_BPS = 5000;
     const AMOUNT = 500000000; // the 5 DASH contribution changing hands
     const poolDoc = await client.platform.documents.create("poolLedger.pool", operator, {

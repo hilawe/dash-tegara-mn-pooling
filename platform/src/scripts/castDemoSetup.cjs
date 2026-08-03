@@ -11,7 +11,8 @@ const crypto = require("crypto");
 const Dash = require("dash");
 const { Identifier } = require("@dashevo/wasm-dpp");
 const { installConsumedFilter } = require("./walletGuard.cjs");
-const { loadEnv, activeContractId, isV5 } = require("./envStore.cjs");
+const { loadEnv, activeContractId, isV5, hasImmutablePool } = require("./envStore.cjs");
+const { resolveNodeToPools } = require("./receiptPoolCheck.cjs");
 
 const p2pkh = (h20) => Buffer.concat([Buffer.from([0x76, 0xa9, 0x14]), h20, Buffer.from([0x88, 0xac])]);
 
@@ -36,16 +37,39 @@ const p2pkh = (h20) => Buffer.concat([Buffer.from([0x76, 0xa9, 0x14]), h20, Buff
     installConsumedFilter(await client.getWalletAccount());
     const operator = await client.platform.identities.get(env.IDENTITY_ID);
 
-    let pool = (await client.platform.documents.get("poolLedger.pool", {
-      where: [["proTxHash", "==", Buffer.from(proTxHex, "hex")]],
-    }))[0];
+    // discovery: the pool records the node on v8, and only a VERIFIED completion receipt does
+    // on v9, so the immutable path goes receipt-first through the shared resolver. A receipt
+    // that fails to verify REFUSES rather than resolving to nothing, because nothing here
+    // falls through to creating a second pool over a contradiction.
+    let pool;
+    if (hasImmutablePool()) {
+      const res = await resolveNodeToPools({
+        contractId: activeContractId(env), nodeHash: Buffer.from(proTxHex, "hex"), slotIndex: 0,
+        fetchReceipts: (hash, slot) => client.platform.documents.get("poolLedger.completionReceipt", {
+          where: [["proTxHash", "==", hash], ["slotIndex", "==", slot]],
+        }),
+        fetchPoolById: async (pid) => (await client.platform.documents.get("poolLedger.pool", {
+          where: [["$id", "==", Identifier.from(Buffer.from(pid))]],
+        }))[0] || null,
+      });
+      if (!res.ok) throw new Error(`${res.reason} (node ${proTxHex} slot 0)`);
+      pool = res.pools[0];
+    } else {
+      pool = (await client.platform.documents.get("poolLedger.pool", {
+        where: [["proTxHash", "==", Buffer.from(proTxHex, "hex")]],
+      }))[0];
+    }
     if (pool) {
       // reuse only a pool that matches what this setup would have created; silently
       // accepting a repurposed pool announces a demo state that the governor and the
       // receipt would then contradict (batch-3 review finding)
       const po = pool.toObject();
-      const poOperator = po.operatorIdentityId
-        ? Identifier.from(Buffer.from(po.operatorIdentityId)).toString() : null;
+      // v9 drops the duplicate operatorIdentityId because the operator IS the document owner
+      // under owner-only creation, so $ownerId is the stronger form of the same check
+      const poOperator = hasImmutablePool()
+        ? pool.getOwnerId().toString()
+        : (po.operatorIdentityId
+            ? Identifier.from(Buffer.from(po.operatorIdentityId)).toString() : null);
       if (poOperator !== operator.getId().toString()) {
         throw new Error(`existing pool for this masternode is operated by ${poOperator}, not this ` +
           "identity; refusing to reuse it");
@@ -56,6 +80,16 @@ const p2pkh = (h20) => Buffer.concat([Buffer.from([0x76, 0xa9, 0x14]), h20, Buff
       }
       console.log("pool already exists (operator, fee, and slot verified):", pool.getId().toString());
     } else {
+      // same refusal as the credit rail, and for the same reason: this creator makes a pool
+      // that is LIVE AT BIRTH, which v8 expresses by writing proTxHash and status. v9 has
+      // neither, and its equivalent is a completion receipt built from a frozen manifest a
+      // demo setup has never held. Minting a receipt-less pool here would produce exactly the
+      // permanently ambiguous document the admission rule must fail closed against.
+      if (hasImmutablePool()) {
+        throw new Error("no pool is recorded for this masternode, and castDemoSetup does not create " +
+          "pools on an immutable-pool ledger: a pool that is live at birth needs a completion receipt, " +
+          "which only a formation round can produce. Form the pool with formation.cjs first.");
+      }
       pool = await client.platform.documents.create("poolLedger.pool", operator, {
         proTxHash: Buffer.from(proTxHex, "hex"),
         slotIndex: 0,

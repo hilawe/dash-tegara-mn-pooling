@@ -11,6 +11,14 @@
 > sub-group boundary (the retail split boundary), the trusted L1-to-L2 relay, and public activation of the
 > collateral-sharing rule. The blocked claims are the lifecycle-complete ones, not the v8 core or
 > the L1 covenant prototype, which stand.
+>
+> ADDED 2026-08-01. Two things postdate this document. The product boundary was decided on
+> 2026-07-26 and v1 is the direct two-to-eight co-owner tier only, with mass retail out. And a
+> ledger v10 now exists, a RETAIL-ONLY contract holding the fixed-slot purchase model that supersedes
+> the matching engine described below. Retail is out of v1, so v10 is not the product's path, nothing
+> selects it, and wiring it is not outstanding work. The direct tier's own open item is the v8-to-v9
+> migration (`V9_MIGRATION_PLAN.md`). Per-component build status is in `IMPLEMENTATION_STATUS.md`,
+> which governs where it and this document disagree.
 
 One document for the whole build. It consolidates the design decisions, the shipped
 mechanisms, the live results, the review history, and the honest limits of the Tegara

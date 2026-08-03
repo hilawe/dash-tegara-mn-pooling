@@ -11,7 +11,7 @@
 // pool is forming.
 module.exports = async (ctx) => {
   const { client, args, cmd, who, DASHfmt, short, Identifier, Dash, fetchAll, isV6, isV7,
-    getPool, journal } = ctx;
+    getPool, journal, env, activeContractId } = ctx;
   const myId = ctx.myId;
   if (!isV6()) throw new Error("the on-ledger reservation needs LEDGER=v6 or v7 (run registerV6/V7.cjs)");
 
@@ -21,8 +21,29 @@ module.exports = async (ctx) => {
   const po = pool.toObject();
   const core = require("../formationCore.cjs");
   const target = core.TARGETS[po.nodeType];
-  const forming = po.status !== undefined ? po.status === "forming"
-    : core.isFormingHash(Buffer.from(po.proTxHash));
+  // WHETHER THIS POOL IS OPEN. An immutable pool carries neither `status` nor `proTxHash` and
+  // cannot answer, so the admission rule decides there instead; the expression below would
+  // throw on it (Buffer.from(undefined)).
+  const lifecycle = require("../poolLifecycle.cjs");
+  const { hasImmutablePool } = require("../envStore.cjs");
+  let forming;
+  let admission = { ok: true };
+  if (hasImmutablePool()) {
+    const receiptDoc = (await client.platform.documents.get(
+      "poolLedger.completionReceipt", { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+    const cls = lifecycle.classifyPool({
+      contractId: activeContractId(env), pool: po, poolId: pool.getId(),
+      receipt: receiptDoc ? receiptDoc.toObject() : null,
+      operatorHasInFlight: false, // a member never holds the operator's local state
+    });
+    admission = lifecycle.admissionVerdict({
+      classification: cls, poolIdStr, participateEnv: process.env.TEGARA_PARTICIPATE,
+    });
+    forming = admission.ok;
+  } else {
+    forming = po.status !== undefined ? po.status === "forming"
+      : core.isFormingHash(Buffer.from(po.proTxHash));
+  }
   let slotDuffs, slotCount;
   if (isV7()) {
     // v7: the slot economics are POOL DATA, the single on-ledger source of truth
@@ -61,7 +82,15 @@ module.exports = async (ctx) => {
     return;
   }
 
-  if (!forming) throw new Error("this pool is LIVE; reservations are only for forming pools");
+  if (!forming) {
+    throw new Error(admission.ok
+      ? "this pool is LIVE; reservations are only for forming pools"
+      : admission.reason);
+  }
+  if (admission.viaInstruction) {
+    console.log("proceeding on the operator's advertised participate instruction " +
+      "(the ledger cannot confirm this pool is still open; the instruction is your evidence)");
+  }
   const slotNo = parseInt(slotArg, 10);
   if (!Number.isInteger(slotNo) || slotNo < 0 || slotNo >= slotCount) {
     throw new Error(`slot must be 0..${slotCount - 1}`);

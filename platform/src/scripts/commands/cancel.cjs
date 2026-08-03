@@ -24,10 +24,34 @@ module.exports = async (ctx) => {
           const pool = await getPool(Identifier.from(Buffer.from(co.poolId)).toString());
           const po = pool.toObject();
           const core = require("../formationCore.cjs");
-          const forming = po.status !== undefined ? po.status === "forming"
-            : core.isFormingHash(Buffer.from(po.proTxHash));
-          if (!forming) {
-            throw new Error("this pool is LIVE; a slot claim can only be cancelled while the pool is forming");
+          // CANCEL FAILS OPEN, WHICH IS THE OPPOSITE OF PLEDGE, and deliberately so. Pledging
+          // into a pool whose state the ledger cannot report risks a member's collateral, so
+          // it refuses. Cancelling is the member LEAVING, and a client that refuses to let
+          // someone withdraw because it is unsure of the pool's state has turned uncertainty
+          // into a lock-in. Exit is never gated on receipt state.
+          //
+          // The one refusal that survives is a COMPLETED pool, because there the claim was
+          // already consumed into the formation and cancelling it would be meaningless rather
+          // than merely uncertain.
+          const { hasImmutablePool } = require("../envStore.cjs");
+          if (hasImmutablePool()) {
+            const lifecycle = require("../poolLifecycle.cjs");
+            const receiptDoc = (await client.platform.documents.get(
+              "poolLedger.completionReceipt", { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+            const cls = lifecycle.classifyPool({
+              contractId: activeContractId(env), pool: po, poolId: pool.getId(),
+              receipt: receiptDoc ? receiptDoc.toObject() : null, operatorHasInFlight: false,
+            });
+            if (cls.state === lifecycle.STATES.COMPLETED) {
+              throw new Error("this pool has COMPLETED; the claim became a share and there is " +
+                "nothing left to cancel (use exit)");
+            }
+          } else {
+            const forming = po.status !== undefined ? po.status === "forming"
+              : core.isFormingHash(Buffer.from(po.proTxHash));
+            if (!forming) {
+              throw new Error("this pool is LIVE; a slot claim can only be cancelled while the pool is forming");
+            }
           }
           const identity = await client.platform.identities.get(myId);
           try {

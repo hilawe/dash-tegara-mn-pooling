@@ -25,10 +25,42 @@ This document records the architecture and the honest layering. The clean-room e
    adds ProDisTx, ProUpShareTx (update a participant's reward script), and ProUpSharedRegTx, extending the
    DIP-0026 version-4 ProRegTx payload with a share table. #187 is a strict superset of DIP-0026 and
    deploys with it in the same release (the v24 upgrade).
+
+   TWO SCOPE LIMITS OF THE PROPOSAL AS WRITTEN, both load-bearing for anything built here.
+
+   - REGULAR MASTERNODES ONLY. A shared registration is valid only if `type` is 0, and shared Evolution
+     masternodes are explicitly out of scope (`sources/pr187-spec-snapshot-2026-07-10.md:176`). So the
+     collateral a Tegara pool can target is the 1000 DASH regular amount. Where any document in this
+     corpus names "1000 or 4000 DASH", it is stating a general fact about Dash masternodes and NOT a
+     tier Tegara can build on today. The 4000 DASH bound that appears in the Platform schema
+     (`platform/src/scripts/contractV10.cjs:80`) is a field range guard, not Evolution support.
+   - A DISSOLVING PARTICIPANT MAY OMIT ITS OWN REFUND OUTPUT, and the omitted value becomes transaction
+     fee (`sources/pr187-spec-snapshot-2026-07-10.md:303`). This reaches only the party that signs, so
+     it is not a consensus gap and not a finding against the covenant. It is a WALLET requirement. Any
+     production wallet built on this must check that its own refund output is present and enforce a
+     maximum fee before signing a dissolution. Recorded as a requirement in
+     `docs/IMPLEMENTATION_STATUS.md`, not yet built.
 2. Reward split, Layer 1: DIP-0026's payout array (merged, PR #7340). The masternode owner reward splits
    on chain across the recorded shares. #187 reuses this directly for the participants' owner reward.
 3. Accounting, membership, and retail reward distribution, Layer 2: Dash Platform. This is where Tegara
    adds value, because #187 caps at 8 participants and defers the Platform-side reward distribution.
+
+## The v1 product boundary (decided 2026-07-26)
+
+The two tiers below are both part of the architecture. ONLY THE FIRST IS IN v1.
+
+Tegara v1 is the direct co-owner tier, two to eight participants, each holding their own covenant
+share. That tier is complete as a design against the covenant as proposed and needs nothing upstream.
+Mass retail is out of v1, because a retail tier that is genuinely non-custodial for principal needs the
+refund-payout-array amendment described under the retail split boundary, and that amendment is documented and deliberately
+unpushed.
+
+The boundary has two costs and neither is softened anywhere in this corpus. A participant needs roughly
+125 DASH at the eight-participant limit, which is far above the retail entry CrowdNode offered, and
+there is no on-demand exit, because leaving means a dissolution that ends the masternode.
+
+Everything below about the retail tier is therefore ARCHITECTURE AND PARTIAL BUILD, not a v1
+deliverable. Build status per component is in `docs/IMPLEMENTATION_STATUS.md`.
 
 ## The honest layering, two tiers
 
@@ -71,6 +103,14 @@ carry a named trust point. Full analysis: `docs/RETAIL_PRINCIPAL_SPLIT.md`.
   v24 activates on a public network the answer is "no real principal", never "weaker custody".
 
 ## What Tegara is deliberately NOT doing
+
+> HOW THIS SQUARES WITH the retail split boundary (written 2026-08-01, after an independent review read the two as
+> contradictory). A fully non-custodial retail tier needs the refund-payout-array amendment to #187,
+> and the no-new-consensus-proposals position says Tegara will not produce one. Both statements stand,
+> and they do not conflict, BECAUSE THE v1 BOUNDARY SCOPES RETAIL OUT. Nothing v1 delivers depends on
+> an amendment. The amendment is documented in `docs/RETAIL_PRINCIPAL_SPLIT.md` and deliberately
+> unpushed, so it stays available as an upstream option without Tegara becoming its proposer. If retail
+> ever came into scope, this position would have to be revisited rather than quietly stretched.
 
 - No new consensus DIPs. The two drafts we produced are retired: `dip/dip-governed-collateral.md`
   (quorum-governed custody, an alternative the clean-room surfaced but which trusts the masternode quorum
