@@ -47,7 +47,7 @@ module.exports = async (ctx) => {
       // change (review finding, batch 5). Rows are validated with the SAME validator
       // the verifier uses, so a duplicate or malformed row can never pick a
       // convenient entry.
-      const { validateCanonicalRows } = require("./tally.cjs");
+      const { validateCanonicalRows } = require("../tally.cjs");
       let latestDiverges = false, historicalDiffs = 0;
       for (let i = 0; i < snaps.length; i++) {
         const s = snaps[i];

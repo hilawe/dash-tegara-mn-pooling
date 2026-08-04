@@ -22,11 +22,15 @@
  *   watch [loop <sec>]   diff my ledger view against a local watermark and report changes
  *   pledge <poolId> <duffs> [rewardAddress] | pledges <poolId>   FORMING-pool participation
  *   reserve <poolId> <slotNo> [rewardAddress] | slots <poolId>   the on-ledger slot book
- *                        (LEDGER=v6/v7; under v7 the pool document carries the slot
- *                        economics and claims are sizeless and cancellable)
+ *                        (every ledger with the slot-book capability, v6 onward INCLUDING
+ *                        v8 and v9; from v7 the pool document carries the slot economics
+ *                        and claims are sizeless and cancellable)
  *   join <poolId> <duffs> | exit <poolId> <duffs>   membership requests
  *   requests | cancel <requestId | slotClaimId>      my requests and the self-sovereign undo
- *                        (under LEDGER=v6 cancel also deletes a pledgeSlot claim while forming)
+ *                        (cancel also deletes a pledgeSlot claim while forming, from v7
+ *                        onward; a v6 claim is PERMANENT once made, because v6's
+ *                        pledgeSlot is immutable and this SDK cannot build its delete,
+ *                        which the cancel path reports in those words)
  *   withdraw <duffs> [address]   credits back to L1 at my own address
  *   vote <poolId> <proposalHash> <choice> [delegateTo] | votes | myrow   governance
  *

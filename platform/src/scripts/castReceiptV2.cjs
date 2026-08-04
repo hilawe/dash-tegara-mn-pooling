@@ -73,7 +73,7 @@
  */
 const Dash = require("dash");
 const { Identifier } = require("@dashevo/wasm-dpp");
-const { loadEnv, activeContractId, activeCastId, isCastV3, isV5 } = require("./envStore.cjs");
+const { loadEnv, activeContractId, activeCastId, isCastV3, hasImmutablePool } = require("./envStore.cjs");
 const { fetchAll, fetchUpTo } = require("./query.cjs");
 
 // the observation fetch is PER CURRENT MEMBER (byProposalObserver index), so
@@ -136,9 +136,28 @@ const platformHeight = async (client) => {
       where: [["$id", "==", poolId]],
     }))[0];
     if (!pool) throw new Error(`no pool ${poolIdStr} on the ledger`);
-    const proTxHex = Buffer.from(pool.toObject().proTxHash).toString("hex");
-    const poolOperator = pool.toObject().operatorIdentityId
-      ? Identifier.from(Buffer.from(pool.toObject().operatorIdentityId)).toString() : null;
+    // node identity through backingNode, operator through the pool's owner on the
+    // immutable ledger; same fold and same reasoning as castReceipt.cjs (2026-08-03
+    // round, convergence-2 pass, major H), see the comment there
+    const lifecycle = require("./poolLifecycle.cjs");
+    const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
+    let receiptObj = null, receiptOk = false;
+    if (hasImmutablePool()) {
+      const rd = (await client.platform.documents.get("poolLedger.completionReceipt",
+        { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+      if (rd) {
+        receiptObj = rd.toObject();
+        receiptOk = checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: receiptObj,
+          pool: pool.toObject(), poolId: pool.getId() }).ok === true;
+      }
+    }
+    const proTxHex = lifecycle.requireBackingNode(
+      lifecycle.backingNode({ pool: pool.toObject(), receipt: receiptObj, receiptOk }),
+      "attribute snapshots and cast receipts for this pool");
+    const poolOperator = hasImmutablePool()
+      ? pool.getOwnerId().toString()
+      : (pool.toObject().operatorIdentityId
+          ? Identifier.from(Buffer.from(pool.toObject().operatorIdentityId)).toString() : null);
     if (!poolOperator) {
       throw new Error("the pool records no operatorIdentityId; snapshots and receipts cannot be attributed");
     }

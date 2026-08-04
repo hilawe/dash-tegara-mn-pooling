@@ -61,6 +61,10 @@ byteArray and string bounds are explicit, const integers are pinned with `minimu
       properties: {
         poolId:         { type: "array", byteArray: true, minItems: 32, maxItems: 32, position: 0 },
         proTxHash:      { type: "array", byteArray: true, minItems: 32, maxItems: 32, position: 1 },
+        //  ^ LENGTH is all consensus can bound. The value must ALSO lie outside the reserved
+        //    forming namespace (16 leading zero bytes), which is duty 5 of the shared
+        //    receipt-to-pool check (a soundness review), NOT a schema constraint. An implementation that
+        //    reads only this schema will accept a receipt the reference reader refuses.
         slotIndex:      { type: "integer", minimum: 0, maximum: 31, position: 2 },  // v7 slot book cap
         nodeType:       { type: "string", enum: ["regular","evo"], position: 3 },
         operatorFeeBps: { type: "integer", minimum: 0, maximum: 10000, position: 4 },

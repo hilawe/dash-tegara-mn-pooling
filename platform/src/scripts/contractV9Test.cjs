@@ -1,5 +1,5 @@
 /**
- * Offline schema test for the v9 draft (plain `node`, no network). Three nets, per the
+ * Offline schema test for v9, published canonically 2026-08-03 (plain `node`, no network). Three nets, per the
  * draft review's rounds:
  *   1. buildV8 is pinned against a REVIEWED BASELINE HASH of the canonical SOURCE
  *      construction (which carries two post-publish source-only bound tightenings; the

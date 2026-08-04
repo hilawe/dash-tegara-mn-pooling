@@ -366,6 +366,116 @@ const verifyReceiptAllocation = (contractId, receipt) => {
   }
 };
 
+/**
+ * The admission triangle (closing wave, major): the node-type tier target, the slot-book
+ * product, and, where the pool carries one (v9's immutable field), the pool's own
+ * targetDuffs must ALL agree before a slot is reserved. The first two alone admitted a
+ * schema-valid v9 pool whose slot book multiplied to one tier while its targetDuffs
+ * named the other; completion then refuses that pool forever (requireDraftMatchesPool),
+ * so the admission command had accepted a claim the reference completion path cannot
+ * complete. Pure and offline-tested (formationCoreTest); reserve routes through it.
+ * targetDuffs is BigInt-or-undefined; undefined (pre-v9 pools have no such field) checks
+ * the product alone.
+ */
+const requireCoherentSlotEconomics = ({ nodeType, targetDuffs, slotDuffs, slotCount }) => {
+  const target = TARGETS[nodeType];
+  if (target === undefined) throw new Error(`unknown node type "${nodeType}"`);
+  if (typeof slotDuffs !== "bigint" || !Number.isInteger(slotCount)) {
+    throw new Error("slot economics must be a bigint slotDuffs and an integer slotCount");
+  }
+  // enforced here, not assumed from schema validation: this function also faces
+  // non-contract sources, and a negative pair whose product matches the positive
+  // target must not pass (pre-commit artifact check, 2026-08-03)
+  if (slotDuffs <= 0n || slotCount <= 0) {
+    throw new Error("slot economics must be positive (slotDuffs > 0 and slotCount > 0)");
+  }
+  if (slotDuffs * BigInt(slotCount) !== target) {
+    throw new Error(`the pool's slot economics are inconsistent: ${slotCount} x ${slotDuffs} ` +
+      `duffs does not equal the ${nodeType} target ${target}; do not reserve on this pool`);
+  }
+  if (targetDuffs !== undefined && targetDuffs !== target) {
+    throw new Error(`the pool's own targetDuffs (${targetDuffs}) does not equal the ${nodeType} ` +
+      `target ${target}; this pool cannot complete as a ${nodeType} pool, do not reserve on it`);
+  }
+  return target;
+};
+
+/**
+ * The admission-side distinct-owner bound (final pass, major 2): completion aggregates
+ * claims BY OWNER and refuses more than ALLOC_MAX_OWNERS aggregates, so an admission
+ * that lets a ninth distinct owner into the slot book accepts a claim the completion
+ * path must refuse, stranding every claim behind an over-populated book. The quantity
+ * bounded is DISTINCT OWNERS AFTER THE PROSPECTIVE CLAIM, never slots and never claim
+ * counts (an existing owner taking another free slot changes neither). Pure and
+ * offline-tested (formationCoreTest); reserve routes through it.
+ */
+const requireOwnerCapacity = (distinctOwnersAfterClaim) => {
+  if (!Number.isInteger(distinctOwnersAfterClaim) || distinctOwnersAfterClaim < 1) {
+    throw new Error("owner capacity needs a positive integer distinct-owner count");
+  }
+  if (distinctOwnersAfterClaim > ALLOC_MAX_OWNERS) {
+    throw new Error(`this claim would make ${distinctOwnersAfterClaim} distinct owners, and completion ` +
+      `refuses more than ${ALLOC_MAX_OWNERS} (the covenant's participant bound); do not reserve`);
+  }
+};
+
+/**
+ * The v1 PRODUCT-TIER owner minimum (final pass, major 5). Two limits exist and they
+ * are deliberately different: CONSENSUS admits 1..8 participants (the published
+ * contracts' participantCount and ALLOC_MIN_OWNERS, immutable), while the v1 PRODUCT
+ * is the two-to-eight co-owner tier (the 2026-07-26 product-boundary decision), because
+ * a one-owner pool pools nothing. The tier minimum is enforced HERE, client-side at
+ * completion, never by narrowing the consensus bound; demo mode (the
+ * FORMATION_ALLOW_UNVERIFIED=demo surface the probes and demonstrations run under)
+ * keeps the full consensus width, which is the two-related-limits row of this guard's
+ * predicate table made executable.
+ */
+const requireTierOwnerCount = (distinctOwners, { demo = false } = {}) => {
+  if (!Number.isInteger(distinctOwners) || distinctOwners < ALLOC_MIN_OWNERS) {
+    throw new Error(`owner count ${distinctOwners} is below the consensus minimum ${ALLOC_MIN_OWNERS}`);
+  }
+  if (distinctOwners > ALLOC_MAX_OWNERS) {
+    throw new Error(`owner count ${distinctOwners} is above the covenant bound ${ALLOC_MAX_OWNERS} ` +
+      "(demo mode widens the floor, never the ceiling)");
+  }
+  if (!demo && distinctOwners < 2) {
+    throw new Error("a single-owner completion is outside the product tier (two to eight " +
+      "co-owners); consensus admits it, the v1 product does not, and only the demo surface " +
+      "(FORMATION_ALLOW_UNVERIFIED=demo) may complete it");
+  }
+};
+
+/**
+ * The admission-side PRODUCT-MINIMUM preflight (pass 7, major 2). `requireTierOwnerCount`
+ * refuses a one-owner COMPLETION, so admission must refuse the claim that FILLS a pool
+ * with a single distinct owner: otherwise the book fills, nothing more can be admitted,
+ * and completion refuses forever. The condition is deliberately narrow, and the narrowness
+ * IS the guard: a single-owner claim is perfectly admissible while free capacity remains,
+ * because the second owner can still arrive. Only the claim that closes the book with one
+ * owner is refused. Demo mode keeps the consensus width, exactly as the tier guard does.
+ *
+ * `bookFullAfterClaim` is the caller's notion of full: the last free slot on the slot-book
+ * path, the exact-fill target on the pledge path.
+ *
+ * SCOPE, the same as `requireOwnerCapacity` and stated for the same reason: this is a
+ * SEQUENTIAL PREFLIGHT over a read snapshot, not an atomic bound. Two members reading the
+ * same book can both act on it, so the guard removes the ordinary sequential path into an
+ * uncompletable pool, not the concurrent one; completion's own owner checks remain the
+ * enforcement.
+ */
+const requireCompletableOwnerCount = ({ distinctOwnersAfterClaim, bookFullAfterClaim, demo = false }) => {
+  if (!Number.isInteger(distinctOwnersAfterClaim) || distinctOwnersAfterClaim < 1) {
+    throw new Error("a claim always adds an owner, so the count must be a positive integer");
+  }
+  if (!demo && bookFullAfterClaim && distinctOwnersAfterClaim < 2) {
+    throw new Error("this claim would fill the pool with a single owner, and a one-owner pool " +
+      "cannot complete outside demo mode (the product tier is two to eight co-owners); " +
+      "leave room for a second member or form a smaller pool");
+  }
+};
+
 module.exports = { TARGETS, isFormingHash, aggregateByOwner, allocateBps, verifyRegistration,
+  requireCoherentSlotEconomics, requireOwnerCapacity, requireTierOwnerCount,
+  requireCompletableOwnerCount,
   decodeId32, toId32, buildAllocationArray, allocationPreimage, allocationHash, verifyReceiptAllocation,
   ALLOC_DOMAIN, ALLOC_FORMAT_VERSION, ALLOC_MIN_OWNERS, ALLOC_MAX_OWNERS };
