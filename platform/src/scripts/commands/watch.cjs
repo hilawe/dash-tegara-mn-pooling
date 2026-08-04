@@ -153,7 +153,7 @@ module.exports = async (ctx) => {
               const o = standing.toObject();
               alerts.push(`new tally snapshot on pool ${short(pid)} proposal ${ph.slice(0, 16)}...`);
               try {
-                const { validateCanonicalRows } = require("./tally.cjs");
+                const { validateCanonicalRows } = require("../tally.cjs");
                 const rows = validateCanonicalRows(JSON.parse(Buffer.from(o.tallyRows).toString("utf8")), Number(o.formatVersion) || 1);
                 const mineRow = rows.find((r) => r.owner === myId);
                 const myPref = (await client.platform.documents.get("poolLedger.votePreference", {

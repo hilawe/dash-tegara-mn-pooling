@@ -1,11 +1,12 @@
 /**
- * Pure builder for the pool-ledger v9 schema, a source-only DRAFT that is deliberately
- * UNPUBLISHED (registerV9.cjs holds the publish flow behind an explicit confirm; nothing
- * selects LEDGER=v9). v8 is the live ledger and is immutable, so the root causes it
- * closes with client-side guards can only land at consensus in a fresh version. This
- * builder derives from buildV8, so everything not listed below is carried by
- * construction; contractV9Test.cjs pins the exact intended diff against a reviewed
- * baseline hash of the v8 construction.
+ * Pure builder for the pool-ledger v9 schema. PUBLISHED CANONICALLY 2026-08-03
+ * (docs/V9_CANONICAL_PUBLISH_2026-08-03.md, all ten post-publish probes passed), and
+ * `LEDGER=v9` selects it through the version table; registerV9.cjs keeps its explicit
+ * confirm, now guarding accidental REpublication. v8 remains immutable as published, so
+ * the root causes v9 closes with client-side guards could only land at consensus in this
+ * fresh version. This builder derives from buildV8, so everything not listed below is
+ * carried by construction; contractV9Test.cjs pins the exact intended diff against a
+ * reviewed baseline hash of the v8 construction.
  *
  * The v9 shape settled across FOUR rounds of the draft's independent review, and the
  * rounds converged on a limit worth stating first: Platform data contracts cannot
@@ -32,13 +33,15 @@
  *     empty the cross-document surface: the allocationRows PREIMAGE BYTES themselves
  *     embed the manifest's poolId and target (formationCore.allocationPreimage), so a
  *     receipt can still carry an embedded target that contradicts its pool. The ONE
- *     SHARED receipt-to-pool check every consumer routes through therefore owes FOUR
+ *     SHARED receipt-to-pool check every consumer routes through therefore owes FIVE
  *     duties (round four of the review demonstrated an internally-valid receipt
  *     embedding a wrong target passing the allocation verifier alone): (1) verify the
  *     allocation with top-level poolId and participantCount correspondence, (2)
  *     compare the preimage's embedded target against pool.targetDuffs, (3) check
  *     pool.targetDuffs against the nodeType's target and the slot-book product, (4)
- *     check receipt.slotIndex against pool.slotIndex. Raw receipt presence, and the
+ *     check receipt.slotIndex against pool.slotIndex, (5) check receipt.proTxHash is
+ *     outside the RESERVED FORMING NAMESPACE (a soundness review).
+ *     Raw receipt presence, and the
  *     allocation verifier alone, are never predicates by themselves.
  *   - THE TEMPORAL CLAIMS, stated honestly. Completed, currently-active, and
  *     in-flight are ORTHOGONAL determinations with different sources, not one status
@@ -73,7 +76,7 @@
  * contract owner; pool constants immutable; at most one receipt per pool; no two
  * receipts per (node, covenant share); the slot bounds. Everything else is stated
  * protocol, owed by clients and verifiers:
- *   - the shared receipt-to-pool check with its FOUR duties above
+ *   - the shared receipt-to-pool check with its FIVE duties above
  *   - slotDuffs * slotCount == targetDuffs; targetDuffs matches the nodeType's target
  *   - the orthogonal completed / currently-active / in-flight determinations above,
  *     including the named anomalous outcome and the fail-closed admission rule
@@ -99,14 +102,15 @@
  *     contract rather than sharing this one. That is the design, not a limitation to
  *     work around, and operator tooling should say so before a second operator appears.
  *
- * ADOPTION CHECKLIST for whenever v9 publishes (none of this runs today; the sites are
- * the review-verified real ones, not examples):
+ * ADOPTION CHECKLIST, now the HISTORICAL record of the migration plan (every item below
+ * LANDED across phases A to G, 2026-08-02/03; docs/V9_MIGRATION_PLAN.md carries the
+ * per-phase records; the sites are the review-verified real ones, not examples):
  *   - envStore.cjs owns ledger selection and the version predicates: map LEDGER=v9 to
  *     CONTRACT_V9_ID and replace the exact-match isV7()/isV8() family with capability
  *     predicates (hasSlotBook, hasCompletionReceipt, hasImmutablePool) driven by one
  *     version table. clientContext.cjs and the funder client must accept v9 (both
  *     reject unknown ledgers today).
- *   - ONE SHARED receipt-to-pool verifier module carrying the FOUR duties above;
+ *   - ONE SHARED receipt-to-pool verifier module carrying the FIVE duties above;
  *     every liveness/node consumer routes through it, never through raw receipt
  *     presence, and the standalone allocation verifier is subsumed by (or explicitly
  *     defers to) it. When resolving many receipts to their pools, batch the pool
@@ -147,6 +151,14 @@
  *     non-owner pool creation refused, pool replace refused, pool delete refused,
  *     one-sided slot-field variants refused (dependentRequired), receipt bySlot
  *     uniqueness enforced (second receipt claiming the same node+slot refused).
+ *
+ * CHECKLIST STATUS, 2026-08-03: every reader and creator named above has landed its
+ * migration. The last two holdouts, the cast-receipt readers (castReceipt.cjs and
+ * castReceiptV2.cjs, still reading pool.proTxHash / operatorIdentityId), were found by
+ * the vetting round's convergence-2 pass and now route the node through
+ * poolLifecycle.backingNode and take the operator from the pool's $ownerId on this
+ * ledger. The "today"/"need redesign" phrasings above describe the pre-migration state
+ * this checklist was written against, kept verbatim as the reviewed design rationale.
  */
 const { buildV8 } = require("./contractV8.cjs");
 
@@ -194,7 +206,7 @@ function buildV9(poolLedgerContract) {
   // ---- the pared completion record: the receipt-plus-its-pool pair is the evidence ----
   // The fields the immutable pool already pins are REMOVED (their duplication was the
   // round-three contradiction surface); slotIndex stays because the unique bySlot index
-  // needs it, and its pool-match is one of the shared check's FOUR duties (see header).
+  // needs it, and its pool-match is one of the shared check's FIVE duties (see header).
   const r = v9.completionReceipt;
   delete r.properties.nodeType;
   delete r.properties.operatorFeeBps;

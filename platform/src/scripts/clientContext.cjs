@@ -13,7 +13,7 @@ const Dash = require("dash");
 const { Identifier } = require("@dashevo/wasm-dpp");
 const { fetchAll } = require("./query.cjs");
 const { loadEnv, updateEnvKey, activeContractId, activeCastId, isV3, isV5, isV6, isV7,
-  assertSupportedLedger } = require("./envStore.cjs");
+  hasDelegateTarget, hasJoinProvenance, hasMemberRewardScript, assertSupportedLedger } = require("./envStore.cjs");
 const journal = require("./compoundJournal.cjs");
 
 const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
@@ -149,7 +149,8 @@ async function buildContext() {
 
   return {
     Dash, Identifier, fetchAll, journal, env, cmd, args, who, whoNum, whoIdKey,
-    loadEnv, updateEnvKey, activeContractId, activeCastId, isV3, isV5, isV6, isV7, DASHfmt, short,
+    loadEnv, updateEnvKey, activeContractId, activeCastId, isV3, isV5, isV6, isV7,
+    hasDelegateTarget, hasJoinProvenance, hasMemberRewardScript, DASHfmt, short,
     client, getPool, myShares, myRequests, isMyAccrual, myAccruals, journalContract,
     requestExists, earnedRewardsBig, autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep,
     get myId() { return state.myId; },

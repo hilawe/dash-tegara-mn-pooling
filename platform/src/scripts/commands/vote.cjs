@@ -1,6 +1,6 @@
 module.exports = async (ctx) => {
   const { client, env, args, cmd, who, whoIdKey, DASHfmt, short, Identifier, Dash, fetchAll,
-    updateEnvKey, activeContractId, activeCastId, isV3, isV5, journal, journalContract,
+    updateEnvKey, activeContractId, activeCastId, isV3, hasDelegateTarget, journal, journalContract,
     getPool, myShares, myRequests, isMyAccrual, myAccruals, requestExists, earnedRewardsBig,
     autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep } = ctx;
   const myId = ctx.myId;
@@ -9,10 +9,13 @@ module.exports = async (ctx) => {
       if (!poolIdStr || !/^[0-9a-f]{64}$/i.test(proposalHex || "") || !CHOICES.includes(choice)) {
         throw new Error(`usage: vote <poolId> <proposalHash 64-hex> <${CHOICES.join("|")}> [delegateToIdentity]`);
       }
-      // v5's targeted delegation: an optional identity whose DIRECT choice this
-      // member's weight follows (one hop; resolution rules in tally.cjs)
+      // targeted delegation (schema field since v5, carried by every later version
+      // INCLUDING v9): an optional identity whose DIRECT choice this member's weight
+      // follows (one hop; resolution rules in tally.cjs). Gated on its OWN capability,
+      // not isV5: isV5 is the pool-status capability, which v9 subtracts while keeping
+      // this field (2026-08-03 round, convergence-2 pass, major B).
       if (delegateTarget !== undefined) {
-        if (!isV5()) throw new Error("a delegate target needs LEDGER=v5");
+        if (!hasDelegateTarget()) throw new Error("a delegate target needs a ledger with targeted delegation (v5 or later)");
         if (choice !== "delegate") throw new Error("a delegate target only makes sense with the delegate choice");
         if (delegateTarget === myId) throw new Error("delegating to yourself withholds your weight; pick a member");
         Identifier.from(delegateTarget); // parse or throw
@@ -39,7 +42,7 @@ module.exports = async (ctx) => {
         const o = mine.toObject();
         mine.setData({
           poolId: Buffer.from(o.poolId), proposalHash: Buffer.from(o.proposalHash), choice,
-          ...(isV5() && delegateTarget ? { delegateTo: Identifier.from(delegateTarget).toBuffer() } : {}),
+          ...(hasDelegateTarget() && delegateTarget ? { delegateTo: Identifier.from(delegateTarget).toBuffer() } : {}),
         });
         await client.platform.documents.broadcast({ replace: [mine] }, identity);
         console.log(`${who}'s preference on ${proposalHex.slice(0, 16)}... changed ${prev} -> ${choice}${suffix}`);

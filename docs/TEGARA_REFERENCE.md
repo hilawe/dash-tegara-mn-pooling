@@ -6,8 +6,12 @@
 > value between members, and it cannot settle members holding unrelated keys, so the "complete
 > self-sovereign member lifecycle" framing is withdrawn (a real member-signed value settlement is
 > planned as a future design round). Second, the version list and forward-work section below predate the
-> current ledger: v8 is LIVE and reviewed (the working default), and a v9 source draft exists,
-> unpublished. What remains genuinely open: the member-signed value settlement, the retail
+> current ledger: v9, the immutable-pool ledger, is PUBLISHED CANONICALLY as of 2026-08-03
+> with all migration phases landed and two live formation rounds run on it, and it is the
+> direct tier's ledger (v8 stays reviewed and supported as the flip-ledger baseline the
+> two-ledger harness exercises) (V9_CANONICAL_PUBLISH_2026-08-03.md,
+> V9_LIVE_FORMATION_2026-08-03.md, V9_CORE_VERIFIED_ROUND_2026-08-03.md). What remains
+> genuinely open: the member-signed value settlement, the retail
 > sub-group boundary (the retail split boundary), the trusted L1-to-L2 relay, and public activation of the
 > collateral-sharing rule. The blocked claims are the lifecycle-complete ones, not the v8 core or
 > the L1 covenant prototype, which stand.
@@ -16,9 +20,10 @@
 > 2026-07-26 and v1 is the direct two-to-eight co-owner tier only, with mass retail out. And a
 > ledger v10 now exists, a RETAIL-ONLY contract holding the fixed-slot purchase model that supersedes
 > the matching engine described below. Retail is out of v1, so v10 is not the product's path, nothing
-> selects it, and wiring it is not outstanding work. The direct tier's own open item is the v8-to-v9
-> migration (`V9_MIGRATION_PLAN.md`). Per-component build status is in `IMPLEMENTATION_STATUS.md`,
-> which governs where it and this document disagree.
+> selects it, and wiring it is not outstanding work. The v8-to-v9 migration, the direct tier's open
+> item when this note was added, LANDED IN FULL on 2026-08-03 (`V9_MIGRATION_PLAN.md` records the
+> phases). Per-component build status is in `IMPLEMENTATION_STATUS.md`, which governs where it and
+> this document disagree.
 
 One document for the whole build. It consolidates the design decisions, the shipped
 mechanisms, the live results, the review history, and the honest limits of the Tegara
@@ -166,8 +171,13 @@ own identity.
 Pool formation is operator-coordinated and its code path is designed to be non-custodial
 (members reserve slots on the ledger, funds move only inside the atomic L1 registration, and
 completion drives from a committed manifest with field-by-field preflight of every claim
-before any mutation, flipping the pool live only after every share exists and the weights
-read back at exactly 10000 basis points). Two qualifications stay visible here. The formation
+before any mutation). How completion is RECORDED is ledger-dependent, and the flip
+described next is the HISTORICAL v8-and-earlier form: there the pool document itself was
+flipped live only after every share existed and the weights read back at exactly 10000
+basis points. On the current v9 ledger the pool document is immutable and THERE IS NO
+FLIP; the completion record is the receipt, published last after the same settle and
+readback discipline, and verified against its immutable pool through the shared
+receipt-to-pool check. Two qualifications stay visible here. The formation
 demo runs one shared wallet for every identity and uses an explicit unverified-L1 override,
 and the fully verified Platform-to-fork atomic registration was not demonstrated as one
 integrated transaction (it is the shape that was built and driven, with the L1 verification
@@ -336,8 +346,11 @@ The narrower limits:
 ## 9. Recorded forward work
 
 - The v8 bundle, waiting on SDK document-transfer support: the operator-created slot inventory
-  members take over (a shared conflict point for reservation and completion), the on-ledger
-  completion receipt, and the beneficiary-transfer discussion.
+  members take over (a shared conflict point for reservation and completion), and the
+  beneficiary-transfer discussion. THE ON-LEDGER COMPLETION RECEIPT IS NO LONGER FORWARD
+  WORK and was removed from this item on 2026-08-04 (closing pass, minor 3): it shipped in
+  v8, was pared and made the sole completion record in v9, and is published, probed and
+  demonstrated live (`IMPLEMENTATION_STATUS.md`, `V9_CANONICAL_PUBLISH_2026-08-03.md`).
 - A trustless L1-to-L2 relay to replace the trusted observation bridge (the standing bridge
   design question).
 - The intra-group principal-split resolution for retail groups (the retail split boundary), sound direction a #187

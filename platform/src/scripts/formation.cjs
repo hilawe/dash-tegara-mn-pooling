@@ -398,8 +398,13 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // the self-check before persisting) and must never drive a resume (load path).
     // This is the L1 covenant-share limit, not a general Platform-allocation limit.
     if (isV8() && (m.owners.length < 1 || m.owners.length > 8)) {
-      fail(`v8 allows 1..8 direct covenant participants, the manifest has ${m.owners.length} owners`);
+      fail(`the receipt ledgers allow 1..8 direct covenant participants, the manifest has ${m.owners.length} owners`);
     }
+    // the v1 PRODUCT-TIER minimum (final pass, major 5): consensus admits 1..8, the
+    // product tier is 2..8, and only the demo surface keeps the consensus width; the
+    // same guard sits on the build path, and this load-path copy holds resumed
+    // manifests to it too
+    core.requireTierOwnerCount(m.owners.length, { demo: process.env.FORMATION_ALLOW_UNVERIFIED === "demo" });
   };
 
   // the per-pool OPERATION lock (review blocker): one completion-protocol command
@@ -582,13 +587,21 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (!hasParedReceipt() && o.nodeType !== draft.nodeType) {
         bad.push(`nodeType ${o.nodeType} != ${draft.nodeType}`);
       }
-      // NOTE (F-I): operatorFeeBps is NOT compared here. The fee is pinned to the pool
-      // pre-flip (requireDraftMatchesPool with requireFee while forming) and written into
-      // the receipt from that draft, so a freshly-created receipt trivially matches. This
-      // function is only ever reached with an EXISTING receipt (pool already live), where
-      // the pool fee is legitimately mutable and historical, and a draft REBUILT on resume
-      // sources the current (drifted) fee; comparing it would falsely reject a valid
-      // immutable receipt. The `receipt` command's reconcile already excludes fee likewise.
+      // operatorFeeBps (F-I, re-scoped by a soundness-review finding): the fee is compared WHEN THE DRAFT IS
+      // THE ORIGINAL FREEZE, and only then. An original draft records the completion-time
+      // fee, so a receipt naming a different fee contradicts the frozen truth and the
+      // every-field claim of spec C-A must hold for it. A draft REBUILT from the manifest
+      // on resume sources the CURRENT pool fee instead, which on a flipped v8 pool may
+      // legitimately have drifted since completion, so comparing that one would falsely
+      // reject a valid immutable receipt. The origin is carried as a non-enumerable
+      // marker, so it can never leak into the persisted draft JSON.
+      // ...and only on the ledgers whose RECEIPT carries a fee at all: the pared v9
+      // receipt drops operatorFeeBps entirely (the immutable pool pins it), where the
+      // draft-to-pool comparison with requireFee is the check instead.
+      if (!hasParedReceipt() && draft.__origin === "frozen"
+          && Number(o.operatorFeeBps) !== Number(draft.operatorFeeBps)) {
+        bad.push(`operatorFeeBps ${Number(o.operatorFeeBps)} != frozen draft ${Number(draft.operatorFeeBps)}`);
+      }
       if (Number(o.formatVersion) !== 1) bad.push("formatVersion is not 1");
       if (Number(o.participantCount) !== draft.participantCount) bad.push("participantCount differs");
       if (!hasParedReceipt() && Number(o.targetDuffs) !== draft.targetDuffs) bad.push("targetDuffs differs");
@@ -786,7 +799,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // credentialed external pool mutation during an await cannot slip a contradicting
     // receipt past. On v8, hash + status + pool constants; fee excluded (historical, as
     // above). On an immutable pool the hash and status have no pool side (invariant list
-    // item 9), so the binding routes through the SHARED four-duty check instead, which is
+    // item 9), so the binding routes through the SHARED five-duty check instead, which is
     // stronger on the fields that do exist: it also pins the receipt's embedded target to
     // the pool, which the v8 binding never did.
     const requireReceiptBindsPool = (receiptObj, poolObj, poolIdStr) => {
@@ -983,6 +996,57 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // WHY rather than a blank, because a check that quietly stops running is worse
       // than one that says it cannot (a receipt-less v9 pool asserts no node at all,
       // and a non-verifying receipt establishes nothing).
+      // THE LIVE SHARE CROSS-CHECK (pass-7 wave, codexapp minor 5): this command was
+      // DOCUMENTED as the place where a receipt's allocation is compared with the
+      // current mutable shares, and it never queried shares at all, so the pointer led
+      // operators to a command that could not do what it was pointed to for. When a
+      // receipt VERIFIES, its embedded allocation rows are decoded here and held against
+      // the live share set, per owner, with every divergence printed and the exit code
+      // raised; a receipt-less pool states that there is nothing to cross-check against.
+      if (cls.receiptOk && cls.receiptDoc) {
+        try {
+          const rowsArr = JSON.parse(Buffer.from(cls.receiptDoc.toObject().allocationRows).toString("utf8"));
+          const allocRows = rowsArr[5]; // [owner, amountDuffs, bps, scriptHex] tuples
+          const liveShares = await fetchAll(client, "poolLedger.share", {
+            where: [["poolId", "==", pool.getId()]],
+          });
+          // one entry per owner is a CONSENSUS guarantee (the share type's unique
+          // byPoolOwner index), so the Map cannot silently collapse duplicates
+          const byOwner = new Map(liveShares.map((d) => [d.getOwnerId().toString(), d.toObject()]));
+          const diverged = [];
+          for (const [owner, amountDuffs, bps, scriptHex] of allocRows) {
+            const sh = byOwner.get(owner);
+            if (!sh) { diverged.push(`share MISSING for ${owner} (receipt allocates ${bps} bps)`); continue; }
+            if (Number(sh.shareBps) !== bps) diverged.push(`${owner}: share ${Number(sh.shareBps)} bps != receipt ${bps} bps`);
+            if (String(sh.contributionDuffs) !== amountDuffs) {
+              diverged.push(`${owner}: contribution ${sh.contributionDuffs} != receipt ${amountDuffs}`);
+            }
+            // the reward script is the fourth tuple field and the one a diversion would
+            // touch; comparing three of four fields would print "match" over it
+            const liveScript = sh.l1RewardScript ? Buffer.from(sh.l1RewardScript).toString("hex") : null;
+            if (liveScript !== scriptHex) {
+              diverged.push(`${owner}: reward script ${liveScript || "(absent)"} != receipt ${scriptHex}`);
+            }
+            byOwner.delete(owner);
+          }
+          for (const extra of byOwner.keys()) diverged.push(`EXTRA share by ${extra}, not in the receipt allocation`);
+          if (diverged.length === 0) {
+            console.log(`share cross-check: ${allocRows.length} live share(s) match the receipt allocation exactly`);
+          } else {
+            for (const d of diverged) console.log(`SHARE DIVERGENCE: ${d}`);
+            console.log("the receipt records the completion-time allocation and the live shares no " +
+              "longer match it; which side is wrong is not decidable from here (a post-completion " +
+              "share change, an incomplete read, and a bad original snapshot all print exactly " +
+              "this), so investigate before relying on either");
+            process.exitCode = 1;
+          }
+        } catch (e) {
+          console.log(`share cross-check COULD NOT RUN (${(e && e.message) || e})`);
+          process.exitCode = 1;
+        }
+      } else if (!forming) {
+        console.log("share cross-check: no verifying receipt, so there is no completion-time allocation to hold the shares against");
+      }
       if (!forming) {
         const node = lifecycle.backingNode({ pool: po,
           receipt: cls.receiptDoc ? cls.receiptDoc.toObject() : null, receiptOk: cls.receiptOk });
@@ -1080,9 +1144,14 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         // so an over-bound pool refuses without any local mutation at all.
         // validateManifest re-checks it as defense for resumed manifests.
         if (isV8() && (owners.length < 1 || owners.length > 8)) {
-          throw new Error(`v8 allows 1..8 direct covenant participants; this pool aggregates to ` +
+          throw new Error(`the receipt ledgers allow 1..8 direct covenant participants; this pool aggregates to ` +
             `${owners.length} owners. Cancel or consolidate pledges, or form on a non-receipt ledger.`);
         }
+        // the v1 PRODUCT-TIER minimum (final pass, major 5), enforced before any local
+        // mutation: consensus admits a single owner, the two-to-eight product tier does
+        // not, and only the demo surface (FORMATION_ALLOW_UNVERIFIED=demo) completes a
+        // single-owner pool
+        core.requireTierOwnerCount(owners.length, { demo: process.env.FORMATION_ALLOW_UNVERIFIED === "demo" });
         const alloc = core.allocateBps(owners, target);
         // reward scripts: a MEMBER-SUPPLIED script from the pledge (v5's rewardScript
         // field) wins; the newest pledge that carries one speaks for the owner. The
@@ -1280,6 +1349,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           // parseable-but-damaged draft drives an immutable write, so every field is
           // validated and cross-checked against the frozen manifest before use
           validateReceiptDraft(receiptDraft, poolIdStr, manifest);
+          // a soundness-review finding: this draft came off the frozen key, so it IS the completion-time truth
+          // and its fee is comparable. Non-enumerable so JSON.stringify never carries it.
+          Object.defineProperty(receiptDraft, "__origin", { value: "frozen" });
           // the fee context (invariant list item 5): pre-flip exact on v8, historical once
           // flipped; always exact on an immutable pool, where the fee cannot have drifted
           requireDraftMatchesPool(receiptDraft, po, {
@@ -1300,8 +1372,33 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             l1Verification: l1Level, verificationMethodVersion: 1,
           };
           validateReceiptDraft(receiptDraft, poolIdStr, manifest); // self-check before persisting
+          // a soundness-review finding: REBUILT from the manifest plus the CURRENT pool, so its fee is a
+          // present-day reading, not the completion-time one, and must not be compared
+          Object.defineProperty(receiptDraft, "__origin", { value: "rebuilt" });
           updateEnvKey(draftKey, JSON.stringify(receiptDraft));
           console.log(`receipt draft FROZEN (${rowsBuf.length} preimage bytes, level ${l1Level})`);
+        }
+      }
+
+      // a soundness-review finding (vetting round): an existing receipt is compared with the FROZEN DRAFT
+      // BEFORE any settlement mutation, on resume as well as first run. The no-manifest
+      // classifier preflight covers only first runs, so without this a resumed completion
+      // could create participant shares and discover the contradiction only at the
+      // receipt write. A receipt that MATCHES the draft is the ordinary post-crash resume
+      // and proceeds idempotently; any mismatch stops here, with nothing yet mutated by
+      // this run. The final idempotent query still covers a receipt racing in later.
+      if (isV8() && receiptDraft) {
+        const preSettle = await fetchReceiptFor(pool);
+        if (preSettle) {
+          verifyReceiptAgainstDraft(preSettle, receiptDraft);
+          // the draft comparison alone does not COMPOSE with a soundness-review finding (closing pass,
+          // must-fix): a draft-MATCHING receipt over a still-forming v8 pool passed here
+          // and settlement mutated before the flip guard refused. The receipt must also
+          // bind to the CURRENT pool, through the same helper both writers use, so the
+          // still-forming and wrong-hash contradictions stop the resume pre-settlement.
+          requireReceiptBindsPool(preSettle.toObject(), (await getPool(poolIdStr)).toObject(), poolIdStr);
+          console.log("an existing completion receipt matches the frozen draft and binds to the " +
+            "current pool; resuming idempotently past it");
         }
       }
 
@@ -1386,8 +1483,12 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const participantShareCount = manifest.owners.length;
       if (HALT === "shares") { console.log("[test hook] halting after SETTLE, before the flip"); return; }
 
-      // phase 3, COMPLETION-RECORD LAST: no reader ever sees a completed pool without its
-      // shares (invariant list item 1). On the flip ledgers the record is the pool's own
+      // phase 3, COMPLETION-RECORD LAST (invariant list item 1, scoped per the a soundness-review finding
+      // fold): on a NORMAL run the completion record is published only after a
+      // successful participant-share readback, so the ordering guarantee holds at that
+      // instant. It is publication ORDERING, not an implication a reader can rely on
+      // later: shares are mutable and the recovery path deliberately publishes from the
+      // frozen draft with detection only. On the flip ledgers the record is the pool's own
       // flip; on an immutable-pool ledger it is the receipt alone, and THERE IS NO FLIP:
       // the entire flip block below is v8-and-earlier, and the v9 path drops straight
       // through to the receipt publication, which the review named "the flip step becomes
@@ -1572,6 +1673,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const doneKey = "FORMATION_DONE_" + journal.suffixFor(activeContractId(env), poolIdStr);
       const envNow = loadEnv();
       let draft = null;
+      let draftFromArchive = false;
       if (envNow[draftKey] !== undefined) {
         try { draft = JSON.parse(envNow[draftKey]); } catch {
           throw new Error("the frozen receipt draft is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated against the manifest and pool before use)");
@@ -1598,9 +1700,12 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // an abandoned completion on no evidence.
       const abandonedKey = "FORMATION_ABANDONED_" + journal.suffixFor(activeContractId(env), poolIdStr);
       let abandonedManifest;
+      let abandonedDraft;
+      let archiveHadDraft = false;
       if (envNow[abandonedKey] !== undefined) {
         try {
-          const m = JSON.parse(envNow[abandonedKey]).manifest;
+          const archive = JSON.parse(envNow[abandonedKey]);
+          const m = archive.manifest;
           const parsed = m ? JSON.parse(m) : null;
           if (parsed) {
             if (!hasImmutablePool()) {
@@ -1611,7 +1716,27 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
               abandonedManifest = m;
             }
           }
-        } catch { abandonedManifest = undefined; }
+          // a soundness-review finding: abandon archives the FROZEN DRAFT beside the manifest, and recovery
+          // restored only the manifest, so the reconcile fell back to the
+          // derivable-fields-only comparison and printed that l1Verification "has no
+          // independent local source" while that source sat unread in the same archive.
+          // A late receipt attesting a WEAKER verification level than the abandoned run
+          // had frozen would have been accepted and finalized, and the archive holding
+          // the contradiction cleared. The draft is restored here whenever the archive's
+          // manifest was accepted above, so the exact comparison runs instead.
+          // presence is tested EXPLICITLY, never by truthiness (closing-pass
+          // confirmation): an empty-string draft is damage, and a falsy test
+          // would read it as no draft at all and take the fallback
+          if (abandonedManifest && archive.draft !== undefined && archive.draft !== null) {
+            archiveHadDraft = true;
+            // an UNPARSEABLE draft is damage too (closing-pass confirmation): swallowing
+            // the parse error to `undefined` would slip past the refusal below and land
+            // in manifest-only recovery, which is the very fallback that refusal exists
+            // to prevent. archiveHadDraft records that a draft WAS archived, whether or
+            // not its bytes survived.
+            try { abandonedDraft = JSON.parse(archive.draft); } catch { abandonedDraft = undefined; }
+          }
+        } catch { abandonedManifest = undefined; abandonedDraft = undefined; }
       }
       const rawManifest = envNow[activeKey] !== undefined ? envNow[activeKey]
         : (envNow[doneKey] !== undefined ? envNow[doneKey] : abandonedManifest);
@@ -1627,7 +1752,44 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         }
         validateManifest(manifest, poolIdStr, manifest.realHash, po);
       }
+      // a soundness-review finding: with no live draft key, the ARCHIVED draft is the exact source, and it is
+      // adopted only after passing the same full validation a live draft does.
+      // A DAMAGED archived draft REFUSES (closing pass, major 2). The earlier fold
+      // dropped it and fell back to the manifest-derivable comparison, reasoning that a
+      // corrupt archive should not make recovery worse than it was. That reasoning was
+      // WRONG, and the distinction is the whole point of a soundness-review finding: the archive's EXISTENCE
+      // is itself evidence that exact evidence was meant to be here, so a damaged draft
+      // is NOT the same state as never having had one. Falling back re-opens exactly the
+      // l1Verification hole a soundness-review finding closed, and finalizing would then CLEAR the archive
+      // holding the damaged bytes. Refusing preserves both the archive and its .val.prev
+      // generation for hands.
+      if (!draft && archiveHadDraft && !abandonedDraft) {
+        throw new Error("the ARCHIVED receipt draft is present but its bytes do not parse. " +
+          "This pool's abandon archive says an exact draft existed, so the weaker " +
+          "manifest-only comparison must NOT be used in its place (it cannot check " +
+          "l1Verification). Refusing and keeping the archive; restore its .val.prev " +
+          "generation in .env.local.state/ and re-run, or resolve by hand.");
+      }
+      if (!draft && abandonedDraft) {
+        try {
+          validateReceiptDraft(abandonedDraft, poolIdStr, manifest);
+          draft = abandonedDraft;
+          draftFromArchive = true;
+        } catch (e) {
+          throw new Error("the ARCHIVED receipt draft is damaged and cannot be validated " +
+            `(${(e && e.message) || e}). This pool's abandon archive says an exact draft ` +
+            "existed, so the weaker manifest-only comparison must NOT be used in its place " +
+            "(it cannot check l1Verification). Refusing and keeping the archive; restore " +
+            "its .val.prev generation in .env.local.state/ and re-run, or resolve by hand.");
+        }
+      }
       if (draft) validateReceiptDraft(draft, poolIdStr, manifest);
+      // the archived draft IS an original freeze (abandon persisted it after a successful
+      // preflight), so its fee is the completion-time fee and a soundness-review finding comparison applies
+      if (draft) {
+        Object.defineProperty(draft, "__origin",
+          { value: draftFromArchive || envNow[draftKey] !== undefined ? "frozen" : "rebuilt" });
+      }
 
       if (existing) {
         const o = existing.toObject();
@@ -1688,7 +1850,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         }
         // the verification is ledger-dependent in who carries the target. The unpared
         // receipt carries its own copy, so the standalone allocation verifier suffices; the
-        // pared receipt carries none, so the SHARED four-duty check against the pool is the
+        // pared receipt carries none, so the SHARED five-duty check against the pool is the
         // only thing pinning the embedded target to anything (phase B, round-4 finding).
         const check = hasParedReceipt()
           ? checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: o,
@@ -1725,7 +1887,16 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         // never merely printed as self-consistent
         if (draft) {
           verifyReceiptAgainstDraft(existing, draft);
-          console.log("  matches the local FROZEN draft field-by-field");
+          // invariant 5 at its full width on the immutable ledger (vetting round,
+          // finding 6): verifyReceiptAgainstDraft deliberately omits the fee (historical
+          // on a flipped v8 pool), but on v9 the fee CANNOT drift, so the frozen draft
+          // is also held to the pool here, fee included, and a mismatch means a damaged
+          // draft rather than a legitimate change
+          if (hasImmutablePool()) requireDraftMatchesPool(draft, poolNow, { requireFee: true });
+          console.log(draftFromArchive
+            ? "  matches the ARCHIVED frozen draft field-by-field (restored from the abandon " +
+              "archive, so l1Verification IS independently sourced here)"
+            : "  matches the local FROZEN draft field-by-field");
         } else if (manifest) {
           const rows = core.allocationPreimage(activeContractId(env), manifest);
           const bad = [];
@@ -1840,6 +2011,48 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         updateEnvKey(draftKey, JSON.stringify(draft));
         console.log("receipt draft REBUILT from the retained manifest (allocation from the frozen " +
           `commitment, level ${level} re-decided by the same registration verification check)`);
+      }
+      // a soundness-review finding (vetting round): the participant-scoped readback is REPEATED immediately
+      // before a recovery publication, as DETECTION rather than a gate. The receipt
+      // records the frozen completion-time allocation, shares are mutable afterwards,
+      // and refusing here would strand a completed pool outside its receipt (the strand
+      // the fee precedent already avoids), so a divergence is said loudly and the frozen
+      // truth still publishes, the castReceipt discipline.
+      {
+        // the detection compares the SAME fields the normal readback verifies (weight,
+        // contribution, reward script), not a presence-and-weight subset (fold
+        // confirmation, 2026-08-03): a narrower recovery check would let exactly the
+        // divergences the normal path refuses on pass this one silently
+        const expected = manifest
+          ? manifest.owners.map((o) => ({ owner: o.owner, bps: o.bps,
+            amountDuffs: o.amountDuffs, rewardScriptHex: o.rewardScriptHex }))
+          : JSON.parse(Buffer.from(draft.allocationRowsHex, "hex").toString("utf8"))[5]
+            .map((r) => ({ owner: r[0], amountDuffs: r[1], bps: r[2], rewardScriptHex: r[3] }));
+        for (const e of expected) {
+          const found = await client.platform.documents.get("poolLedger.share", {
+            where: [["poolId", "==", pool.getId()], ["$ownerId", "==", Identifier.from(e.owner)]],
+          });
+          const so = found[0] ? found[0].toObject() : null;
+          if (!so) {
+            console.log(`WARNING: participant ${e.owner} has NO share on the ledger at recovery time; ` +
+              "the receipt records the frozen completion-time allocation and publishes anyway, and " +
+              "the divergence is live state to reconcile, not a receipt defect");
+            continue;
+          }
+          const drift = [];
+          if (Number(so.shareBps) !== e.bps) drift.push(`${Number(so.shareBps)} bps vs frozen ${e.bps}`);
+          if (e.amountDuffs !== undefined && BigInt(so.contributionDuffs).toString() !== String(e.amountDuffs)) {
+            drift.push(`${so.contributionDuffs} duffs vs frozen ${e.amountDuffs}`);
+          }
+          if (e.rewardScriptHex && Buffer.from(so.l1RewardScript).toString("hex") !== e.rewardScriptHex) {
+            drift.push("reward script differs from the frozen allocation");
+          }
+          if (drift.length > 0) {
+            console.log(`WARNING: participant ${e.owner}'s live share diverges from the frozen ` +
+              `allocation (${drift.join("; ")}); publishing the frozen truth anyway (shares are ` +
+              "mutable, the receipt is the completion-time record)");
+          }
+        }
       }
       await writeReceiptIdempotent(pool, poolIdStr, draft);
       // full finalization, not just the draft clear (review major): retain the
@@ -1967,7 +2180,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // persist the manifest and draft under FORMATION_ABANDONED_ (an owned FORMATION_
       // key) FIRST. `receipt` consults this archive if the pool is later found live under
       // the archived hash, so even a lost race stays recoverable rather than stranded.
-      // v8 ONLY (F-J): the archive exists solely for the v8 `receipt` recovery path, which
+      // RECEIPT LEDGERS ONLY (F-J, label widened by the vetting round: isV8 is the
+      // completion-receipt capability, so v9 correctly takes this path too): the archive
+      // exists solely for the `receipt` recovery path, which
       // is the only reader and the only cleaner. On v1-v7 it would be written but never read
       // or cleared, a permanent state leak, so skip it there.
       const abandonedKey = "FORMATION_ABANDONED_" + journal.suffixFor(activeContractId(env), poolIdStr);
