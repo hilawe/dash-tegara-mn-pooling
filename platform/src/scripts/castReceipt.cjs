@@ -88,12 +88,40 @@ const { fetchL1Vote } = require("./l1gov.cjs");
       where: [["$id", "==", poolId]],
     }))[0];
     if (!pool) throw new Error(`no pool ${poolIdStr} on the ledger`);
-    const proTxHex = Buffer.from(pool.toObject().proTxHash).toString("hex");
+    // THE NODE THIS CAST IS ABOUT, routed through the design's one producer,
+    // backingNode (2026-08-03 round, convergence-2 pass, major H: this reader still
+    // read pool.proTxHash, a field the immutable-pool ledger removes, so every v9 run
+    // crashed here). On v8 the pool names the node; on v9 only a VERIFIED completion
+    // receipt establishes it, and a cast receipt for an unestablished node would
+    // attribute a governance vote to a masternode the ledger does not tie to this
+    // pool, so requireBackingNode makes that a refusal rather than a record. A forming
+    // v8 pool is refused for the same reason (previously its placeholder hash was
+    // accepted here unchecked).
+    const lifecycle = require("./poolLifecycle.cjs");
+    const { hasImmutablePool } = require("./envStore.cjs");
+    const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
+    let receiptObj = null, receiptOk = false;
+    if (hasImmutablePool()) {
+      const rd = (await client.platform.documents.get("poolLedger.completionReceipt",
+        { where: [["poolId", "==", pool.getId()]] }))[0] || null;
+      if (rd) {
+        receiptObj = rd.toObject();
+        receiptOk = checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: receiptObj,
+          pool: pool.toObject(), poolId: pool.getId() }).ok === true;
+      }
+    }
+    const proTxHex = lifecycle.requireBackingNode(
+      lifecycle.backingNode({ pool: pool.toObject(), receipt: receiptObj, receiptOk }),
+      "attribute a cast receipt for this pool");
     // the pool's recorded operator is the ONLY identity whose receipt means anything;
     // without this binding any identity could occupy the unique receipt slot and be
-    // read as the operator's attestation (batch-3 review finding, major)
-    const poolOperator = pool.toObject().operatorIdentityId
-      ? Identifier.from(Buffer.from(pool.toObject().operatorIdentityId)).toString() : null;
+    // read as the operator's attestation (batch-3 review finding, major). On the
+    // immutable ledger the operator IS the pool document's owner ($ownerId, owner-only
+    // creation at consensus); earlier versions record operatorIdentityId explicitly.
+    const poolOperator = hasImmutablePool()
+      ? pool.getOwnerId().toString()
+      : (pool.toObject().operatorIdentityId
+          ? Identifier.from(Buffer.from(pool.toObject().operatorIdentityId)).toString() : null);
     if (!poolOperator) {
       throw new Error("the pool records no operatorIdentityId; a cast receipt cannot be attributed " +
         "for it (fix the pool document first)");

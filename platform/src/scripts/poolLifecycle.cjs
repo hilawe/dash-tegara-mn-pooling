@@ -66,6 +66,22 @@ const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInF
       receiptOk = res.ok === true;
       if (!receiptOk) receiptReason = res.reason;
     }
+    // ON THE FLIP LEDGERS THE POOL'S OWN ASSERTION MUST AGREE (a soundness review): the
+    // shared check binds the receipt to the pool's CONSTANTS, but on v8 the pool also
+    // asserts the node and the lifecycle itself, and a structurally verifying receipt
+    // over a still-forming pool, or over a pool live under a DIFFERENT hash, is a
+    // contradiction to resolve, never a completion. The v9 pool asserts nothing here,
+    // which is exactly why the five-duty check is its whole binding.
+    if (receiptOk && !hasImmutablePool()) {
+      const disagree = (why) => { receiptOk = false; receiptReason = why; };
+      const poolHash = pool.proTxHash == null ? null : Buffer.from(pool.proTxHash);
+      const receiptHash = receipt.proTxHash == null ? null : Buffer.from(receipt.proTxHash);
+      if (!poolHash || poolHash.length !== 32) disagree("the pool's proTxHash is missing or malformed");
+      else if (!receiptHash || receiptHash.length !== 32) disagree("the receipt's proTxHash is missing or malformed");
+      else if (core.isFormingHash(poolHash)) disagree("the pool is still forming while a receipt exists");
+      else if (!poolHash.equals(receiptHash)) disagree("the receipt names a different node than the live pool");
+      else if (pool.status !== undefined && pool.status !== "live") disagree(`pool status is "${String(pool.status)}", not live`);
+    }
     if (receiptOk) {
       return { state: STATES.COMPLETED, reason: "a completion receipt verifies against this pool", receiptOk: true };
     }
@@ -222,6 +238,15 @@ const backingNode = ({ pool, receipt = null, receiptOk = false }) => {
     if (h == null) return { known: false, why: "the completion receipt carries no proTxHash" };
     const buf = Buffer.from(h);
     if (buf.length !== 32) return { known: false, why: "the receipt's proTxHash is not 32 bytes" };
+    // DEFENSIVE, and deliberately redundant with the shared check (a soundness review): `receiptOk`
+    // arrives from the caller, so a caller that verified nothing, or verified with an
+    // older check, must still not be able to turn a reserved forming-namespace value
+    // into an established node here. This is the one producer of node identities, so it
+    // is where the domain rule has to hold unconditionally.
+    if (core.isFormingHash(buf)) {
+      return { known: false, why: "the receipt's proTxHash is in the reserved forming " +
+        "namespace, which names no real node" };
+    }
     return { known: true, hex: buf.toString("hex") };
   } catch {
     return { known: false, why: "the backing node could not be read from malformed input" };

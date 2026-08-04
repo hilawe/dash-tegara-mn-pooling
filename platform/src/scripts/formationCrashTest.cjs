@@ -160,7 +160,7 @@ const assertReceiptCorrect = (label, r) => {
 // the completion record must name exactly REAL_HASH (round-4: poolLive only checked
 // non-forming). On v8 the pool itself answers. On v9 the pool has NO equivalent and this
 // must not weaken to "a receipt exists": the v9 form is that ONE receipt exists, VERIFIES
-// against the pool through the shared four-duty check, and names exactly REAL_HASH
+// against the pool through the shared five-duty check, and names exactly REAL_HASH
 // (checking merely present is the round-4 mistake one document over).
 const poolLiveUnderRealHash = () => {
   const p = ledger().docs.find((d) => d.id === POOL);
@@ -259,7 +259,259 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     try { mock.validatePoolProps({ slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
       targetDuffs: 100000000000, slotDuffs: 50000000000 }); } catch { rejectedOneSided = true; }
     ok("immutable-pool mock schema rejects a one-sided slot book", rejectedOneSided);
+    // the numeric bounds must mirror the published schema exactly (vetting round,
+    // finding 4): over-max target, zero slot size, over-max slot count all refused
+    let overTarget = false, zeroSlot = false, overCount = false;
+    try { mock.validatePoolProps({ ...v9pool, targetDuffs: 400000000001 }); } catch { overTarget = true; }
+    try { mock.validatePoolProps({ ...v9pool, slotDuffs: 0 }); } catch { zeroSlot = true; }
+    try { mock.validatePoolProps({ ...v9pool, slotCount: 513 }); } catch { overCount = true; }
+    ok("mock pool schema rejects targetDuffs above the contract maximum", overTarget);
+    ok("mock pool schema rejects a zero slotDuffs", zeroSlot);
+    ok("mock pool schema rejects slotCount above 512", overCount);
+
+    // the two TRANSITION-level v9 constraints (convergence-2 pass, major E), enforced by
+    // the mock's broadcast through the same exported check tested here (the async client
+    // surface cannot be driven from this sync orchestrator, the props-validator pattern
+    // one block up): the published pool is owner-only at creation
+    // (creationRestrictionMode 1), and the pared receipt is unique by
+    // (proTxHash, slotIndex) (bySlot), not only by pool (byPool)
+    writeSeed();
+    const seededLedger = ledger();
+    const poolData = { slotIndex: 1, nodeType: "regular", operatorFeeBps: 2000,
+      targetDuffs: 100000000000, slotDuffs: 50000000000, slotCount: 2 };
+    const threwWith = (rec) => {
+      try { mock.assertCreateAllowed(seededLedger, rec); return null; } catch (e) { return e.message; }
+    };
+    ok("mock refuses pool creation by a non-owner identity (creation restriction mode Owner Only)",
+      /creation restriction mode Owner Only/.test(threwWith({ type: "pool", ownerId: F1, data: poolData }) || ""));
+    ok("mock accepts pool creation by the contract owner",
+      threwWith({ type: "pool", ownerId: OP, data: poolData }) === null);
+    const receiptData = { poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+      proTxHash: REAL_HASH, slotIndex: 0 };
+    ok("mock accepts the first receipt for a (proTxHash, slotIndex) pair",
+      threwWith({ type: "completionReceipt", ownerId: OP, data: receiptData }) === null);
+    const OTHER_POOL = Identifier.from(crypto.createHash("sha256").update("other-pool").digest()).toString();
+    const withReceipt = { ...seededLedger, docs: [...seededLedger.docs,
+      { id: "seeded-receipt", type: "completionReceipt", ownerId: OP, data: receiptData }] };
+    const dupSlot = { type: "completionReceipt", ownerId: OP, data: { ...receiptData,
+      poolId: Buffer.from(Identifier.from(OTHER_POOL).toBuffer()).toString("hex") } };
+    ok("mock refuses a second receipt claiming the same (proTxHash, slotIndex) from another pool (bySlot)",
+      /duplicate unique index bySlot/.test((() => {
+        try { mock.assertCreateAllowed(withReceipt, dupSlot); return ""; } catch (e) { return e.message; }
+      })()));
+    const otherSlot = { type: "completionReceipt", ownerId: OP, data: { ...receiptData, slotIndex: 1,
+      poolId: Buffer.from(Identifier.from(OTHER_POOL).toBuffer()).toString("hex") } };
+    ok("mock accepts the same node hash at a DIFFERENT slot index (bySlot is the pair, not the hash)",
+      (() => { try { mock.assertCreateAllowed(withReceipt, otherSlot); return true; } catch { return false; } })());
+    ok("mock still refuses a second receipt for the same pool (byPool, carried into the shared check)",
+      /duplicate unique index byPool/.test((() => {
+        try { mock.assertCreateAllowed(withReceipt, { type: "completionReceipt", ownerId: OP,
+          data: { ...receiptData, proTxHash: "ee" + "56".repeat(31), slotIndex: 2 } }); return ""; } catch (e) { return e.message; }
+      })()));
+    // bySlot must compare by VALUE across representations (pre-commit artifact check): a
+    // Buffer carrying the same bytes as a seeded hex string is the same node hash
+    const dupSlotBuf = { type: "completionReceipt", ownerId: OP, data: { ...receiptData,
+      proTxHash: Buffer.from(REAL_HASH, "hex"),
+      poolId: Buffer.from(Identifier.from(OTHER_POOL).toBuffer()).toString("hex") } };
+    ok("mock refuses a bySlot duplicate presented as a Buffer against a seeded hex string (value comparison)",
+      /duplicate unique index bySlot/.test((() => {
+        try { mock.assertCreateAllowed(withReceipt, dupSlotBuf); return ""; } catch (e) { return e.message; }
+      })()));
   }
+}
+
+// the REPLACE and DELETE transition rows (final pass, major 4): completion receipts are
+// immutable AND non-deletable at consensus on every ledger that has them, and the
+// immutable pool is non-deletable too; the mock previously accepted a receipt replace
+// and silently ignored deletes, both more permissive than Platform. Parity-tested here
+// on BOTH harness ledgers through the same exported check broadcast enforces.
+{
+  const mock = require("./formationMockDash.cjs");
+  const t = (kind, type) => {
+    try { mock.assertMutationAllowed(kind, { type }); return null; } catch (e) { return e.message; }
+  };
+  ok("mock refuses a completionReceipt replace (immutable on every receipt ledger)",
+    /not mutable/.test(t("replace", "completionReceipt") || ""));
+  ok("mock refuses a completionReceipt delete (non-deletable)",
+    /cannot be deleted/.test(t("delete", "completionReceipt") || ""));
+  ok("mock allows a share replace", t("replace", "share") === null);
+  ok("mock allows a share delete", t("delete", "share") === null);
+  if (PARED) {
+    ok("mock refuses a pool replace on the immutable ledger",
+      /not allowed|not mutable/.test(t("replace", "pool") || ""));
+    ok("mock refuses a pool delete on the immutable ledger",
+      /cannot be deleted|not allowed/.test(t("delete", "pool") || ""));
+  } else {
+    ok("mock allows a pool replace on the flip ledger", t("replace", "pool") === null);
+  }
+}
+
+// SHARE schema parity, create and replace (pass 7, major 3): the mock validated only
+// pool and completionReceipt creates and applied replaces blind, so a writer emitting
+// an unknown or out-of-range share field passed the matrix while the contract refuses
+// it. The unknown-property case is the one that bit, because a readback reading only
+// known fields cannot see it.
+{
+  const mock = require("./formationMockDash.cjs");
+  const goodShare = { poolId: Buffer.alloc(32, 1), shareBps: 5000,
+    contributionDuffs: 50000000000, l1RewardScript: Buffer.alloc(25, 2) };
+  const tc = (p) => { try { mock.validateShareProps(p); return null; } catch (e) { return e.message; } };
+  ok("mock accepts a well-formed share", tc(goodShare) === null);
+  ok("mock rejects a share carrying an unknown property (additionalProperties:false)",
+    /unknown property unexpected/.test(tc({ ...goodShare, unexpected: 1 }) || ""));
+  ok("mock rejects shareBps above 10000", tc({ ...goodShare, shareBps: 10001 }) !== null);
+  ok("mock rejects shareBps of zero (minimum 1)", tc({ ...goodShare, shareBps: 0 }) !== null);
+  ok("mock rejects a share missing contributionDuffs",
+    /missing required contributionDuffs/.test(tc({ poolId: goodShare.poolId, shareBps: 5000 }) || ""));
+  ok("mock rejects an over-long l1RewardScript",
+    tc({ ...goodShare, l1RewardScript: Buffer.alloc(35, 2) }) !== null);
+  // the remaining implemented constraints, each with its own case (artifact check: a
+  // mutation removing any of these left the suite green)
+  ok("mock rejects a share whose poolId is not 32 bytes",
+    tc({ ...goodShare, poolId: Buffer.alloc(31, 1) }) !== null);
+  ok("mock rejects a negative contributionDuffs",
+    tc({ ...goodShare, contributionDuffs: -1 }) !== null);
+  ok("mock rejects a non-integer contributionDuffs",
+    tc({ ...goodShare, contributionDuffs: 1.5 }) !== null);
+  ok("mock rejects an empty l1RewardScript (minItems 1)",
+    tc({ ...goodShare, l1RewardScript: Buffer.alloc(0) }) !== null);
+  const rec = { type: "share", data: { poolId: Buffer.alloc(32, 1).toString("hex"),
+    shareBps: 5000, contributionDuffs: 50000000000 } };
+  const tr = (pending) => {
+    try { mock.assertReplaceAllowed(rec, pending); return null; } catch (e) { return e.message; }
+  };
+  ok("mock accepts a legitimate share replace", tr({ shareBps: 6000 }) === null);
+  ok("mock rejects a share replace introducing an unknown property",
+    /unknown property/.test(tr({ sneaky: 1 }) || ""));
+  ok("mock rejects a share replace walking shareBps out of range",
+    tr({ shareBps: 20000 }) !== null);
+  // the key check ISOLATED. On `share` the value validator also refuses an unknown key,
+  // so the share cases above pass even with the key check severed (watched: the
+  // severing mutation failed nothing). A type with no value validator is where the key
+  // check is the only protection, so that is where it must be observed.
+  const reqRec = { type: "membershipRequest", data: { status: "pending" } };
+  const trq = (pending) => {
+    try { mock.assertReplaceAllowed(reqRec, pending); return null; } catch (e) { return e.message; }
+  };
+  ok("mock accepts a legitimate membershipRequest replace", trq({ status: "matched" }) === null);
+  ok("mock rejects a membershipRequest replace introducing an unknown property (key check alone)",
+    /unknown property sneaky/.test(trq({ sneaky: 1 }) || ""));
+  // THE MAP'S MEMBERSHIP IS PINNED FIRST (artifact re-check: a loop over the map cannot
+  // notice a deleted row, because the row's test disappears with it), then every listed
+  // type is exercised.
+  ok("the replace whitelist covers exactly the expected types",
+    Object.keys(mock.REPLACE_KEYS).sort().join(",")
+      === "membershipRequest,pledgeSlot,pool,share,votePreference");
+  for (const [type, keys] of Object.entries(mock.REPLACE_KEYS)) {
+    const r = { type, data: { poolId: Buffer.alloc(32, 1).toString("hex"),
+      shareBps: 5000, contributionDuffs: 1 } };
+    const attempt = (pending) => {
+      try { mock.assertReplaceAllowed(r, pending); return null; } catch (e) { return e.message; }
+    };
+    ok(`replace whitelist covers ${type}: an unknown key is refused`,
+      /unknown property/.test(attempt({ definitelyNotAField: 1 }) || ""));
+    ok(`replace whitelist covers ${type}: its own first key is accepted`,
+      attempt({ [keys[0]]: type === "share" ? 5000 : "x" }) === null
+      || type === "share"); // share also value-validates, covered by its own cases
+  }
+}
+
+// SIGNER-TO-OWNER AUTHORIZATION parity (pass-7 wave, review major 4): real Platform
+// refuses a transition whose signer is not the document's owner, and the mock accepted
+// any identity for any transition, so a future wrong-signer regression would pass the
+// crash matrix while the real ledger refuses it. Table-driven over all three kinds.
+{
+  const mock = require("./formationMockDash.cjs");
+  const t = (kind, ownerId, signerId) => {
+    try { mock.assertAuthorized(kind, { ownerId }, signerId); return null; }
+    catch (e) { return e.message; }
+  };
+  for (const kind of ["create", "replace", "delete"]) {
+    ok(`authorization: a ${kind} signed by the document owner is allowed`,
+      t(kind, F1, F1) === null);
+    ok(`authorization: a ${kind} signed by a DIFFERENT identity is refused`,
+      /identity|owner/i.test(t(kind, F1, F2) || ""));
+  }
+  ok("authorization: a missing signer is refused, never treated as anonymous-allowed",
+    t("delete", F1, undefined) !== null);
+}
+
+// broadcast-LEVEL delete coverage (artifact check on the transition-rule fold): the
+// pure check is parity-tested above, and these CHILD runs prove broadcast actually
+// routes deletes through it, that an allowed delete removes the document, and that a
+// refused delete leaves the ledger unchanged (the refusal throws before the save, so
+// atomicity of the refusal is observed, not assumed)
+{
+  writeSeed();
+  const childEnv = { ...process.env, TEGARA_ENV_PATH: ENV_PATH,
+    TEGARA_MOCK_LEDGER: LEDGER_PATH, LEDGER: HARNESS_LEDGER, NETWORK: "regtest" };
+  const drive = (script) => {
+    try { return { code: 0, out: execFileSync("node", ["-e", script],
+      { env: childEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+    catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; }
+  };
+  const l0 = ledger();
+  // the seeded fixtures are SCHEMA-PRODUCIBLE documents (pass 7, minor 4): the earlier
+  // stubs carried only the fields the delete path consults, which is exactly the
+  // fixture shortcut the producibility rule forbids, so each is now a complete document
+  // and is asserted to pass the mock's own create validators before being seeded
+  const mock = require("./formationMockDash.cjs");
+  const probeShare = { poolId: Buffer.from(Identifier.from(POOL).toBuffer()),
+    shareBps: 5000, contributionDuffs: 50000000000, l1RewardScript: Buffer.from(SCRIPT_A, "hex") };
+  // NOTE the validation below runs on what is ACTUALLY SEEDED, read back out of the
+  // record after hex encoding (artifact check: validating a separate object and then
+  // seeding a transformed copy leaves the two free to drift, so the assertion has to
+  // observe the seeded bytes)
+  const BYTES = new Set(["poolId", "proTxHash", "allocationRows", "allocationHash", "l1RewardScript"]);
+  const propsOfSeeded = (data) => Object.fromEntries(Object.entries(data)
+    .filter(([k]) => k !== "$createdAt")
+    .map(([k, v]) => [k, BYTES.has(k) ? Buffer.from(v, "hex") : v]));
+  const probeReceipt = {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()), proTxHash: Buffer.from(REAL_HASH, "hex"),
+    slotIndex: 0,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    formatVersion: 1, allocationRows: Buffer.from("[]"), allocationHash: Buffer.alloc(32, 3),
+    participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1 };
+  const hexed = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) =>
+    [k, (Buffer.isBuffer(v) || v instanceof Uint8Array) ? Buffer.from(v).toString("hex") : v]));
+  const shareRec = { id: "share-delete-probe", type: "share", ownerId: OP,
+    data: { ...hexed(probeShare), $createdAt: 1 } };
+  const receiptRec = { id: "receipt-delete-probe", type: "completionReceipt", ownerId: OP,
+    data: { ...hexed(probeReceipt), $createdAt: 1 } };
+  l0.docs.push(shareRec, receiptRec);
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l0, null, 1));
+  // read the seeded documents back OFF THE LEDGER FILE and validate those
+  const seeded = (id) => JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"))
+    .docs.find((d) => d.id === id).data;
+  let shareProducible = true;
+  try { mock.validateShareProps(propsOfSeeded(seeded("share-delete-probe"))); } catch { shareProducible = false; }
+  ok("the SEEDED share delete fixture is schema-producible", shareProducible);
+  let receiptProducible = true;
+  try { mock.validateReceiptProps(propsOfSeeded(seeded("receipt-delete-probe"))); } catch { receiptProducible = false; }
+  ok("the SEEDED receipt delete fixture is schema-producible in this ledger's shape", receiptProducible);
+  const script = (id, signer = OP) => `
+    const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+    const c = new mock.Client({});
+    c.platform.documents.broadcast({ delete: [{ __rec: { id: ${JSON.stringify(id)} } }] },
+      { getId: () => ({ toString: () => ${JSON.stringify(signer)} }) })
+      .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(3); });`;
+  // authorization at the BROADCAST level: a delete signed by a non-owner is refused
+  // and the document survives (proves broadcast routes assertAuthorized, not only that
+  // the pure function refuses)
+  const rBad = drive(script("share-delete-probe", F1));
+  ok("broadcast refuses a delete signed by a non-owner identity",
+    rBad.code === 3 && /signer must be the document owner/.test(rBad.out));
+  ok("the wrongly-signed delete left the document in place",
+    ledger().docs.some((d) => d.id === "share-delete-probe"));
+  const r1 = drive(script("share-delete-probe"));
+  ok("broadcast delete of a share succeeds (child exit 0)", r1.code === 0);
+  ok("the deleted share is gone from the persisted ledger",
+    !ledger().docs.some((d) => d.id === "share-delete-probe"));
+  const r2 = drive(script("receipt-delete-probe"));
+  ok("broadcast delete of a completionReceipt is refused through the transition check",
+    r2.code === 3 && /cannot be deleted/.test(r2.out));
+  ok("the refused receipt remains on the persisted ledger (refusal is atomic)",
+    ledger().docs.some((d) => d.id === "receipt-delete-probe"));
 }
 
 // ---- the clean run establishes the target end state and the boundary count ----
@@ -296,11 +548,13 @@ for (let k = 0; k < N; k++) {
   const afterCrash = receipts();
   ok(`k=${k}: at most one receipt after the crash`, afterCrash.length <= 1);
   if (afterCrash.length === 1) ok(`k=${k}: any crash-written receipt is the operator's`, afterCrash[0].ownerId === OP);
-  // INVARIANT 1b, COMPLETION-RECORD LAST (flip invariant list item 1): the completion
-  // record is written only after the participants' shares, so at NO crash boundary does a
-  // receipt exist without both shares on the ledger. On v8 the flip sat between them; on
-  // v9 this ordering is the only thing left carrying "no reader sees a completed pool
-  // without its shares", which is why it is asserted explicitly on both ledgers.
+  // INVARIANT 1b, COMPLETION-RECORD LAST (flip invariant list item 1, scoped per the
+  // a soundness-review finding fold): on a NORMAL run the completion record is written only after the
+  // participants' shares, so at no crash boundary OF THIS MATRIX does a receipt exist
+  // without both shares on the ledger. That is publication ORDERING on the normal path,
+  // asserted here on both ledgers; it is NOT a standing implication, because shares are
+  // mutable afterwards and the recovery path publishes from the frozen draft with
+  // detection only (its divergence warnings, not this matrix, cover that window).
   if (afterCrash.length === 1) {
     const sh = ledger().docs.filter((d) => d.type === "share");
     ok(`k=${k}: a receipt implies both participants' shares (completion-record last)`,
@@ -320,9 +574,14 @@ for (let k = 0; k < N; k++) {
     const rec = runChild(["receipt", POOL]);
     if (rec.code === 0) { how = "receipt"; recoveredByReceipt++; }
     else {
-      // acceptable ONLY if it stopped loudly AND left no receipt to contradict (nothing to recover)
-      ok(`k=${k}: a non-recovering stop is loud and receiptless`,
-        (rec.code === 1 || rec.code === 2) && receipts().length === 0);
+      // acceptable ONLY if it stopped loudly, left no receipt to contradict, AND
+      // RETAINED the recovery evidence (vetting round, finding 5: "stops loudly" was
+      // never the whole guarantee; "without clearing recovery evidence" is the other
+      // half, and a branch not checking it enforces less than the header claims). This
+      // branch fires on NO boundary of either current ledger, which the recovery-path
+      // count line makes visible; it guards future boundary shapes.
+      ok(`k=${k}: a non-recovering stop is loud, receiptless, and keeps its evidence`,
+        (rec.code === 1 || rec.code === 2) && receipts().length === 0 && hasInFlightEvidence());
       stoppedClean++;
     }
   }
@@ -550,6 +809,118 @@ const injectValidReceipt = () => {
   fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
 };
 
+// ---- independent case FEE-VS-FROZEN-DRAFT: an existing receipt whose fee CONTRADICTS the original
+//      frozen draft must stop loudly. The fee was excluded from the exact comparison
+//      because a REBUILT draft sources the current (possibly drifted) pool fee; an
+//      ORIGINAL freeze records the completion-time fee, so for it the every-field claim
+//      holds. Unpared ledgers only: the pared receipt carries no fee at all. ----
+if (!PARED) {
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "flip" });
+  ok("fee-vs-draft setup: live, no receipt, ORIGINAL frozen draft present",
+    receipts().length === 0 && hasInFlightEvidence());
+  const l = ledger();
+  l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    proTxHash: EXPECTED.proTxHash, slotIndex: 0, formatVersion: 1,
+    nodeType: "regular", operatorFeeBps: 3500, targetDuffs: 100000000000, // <- the only difference
+    allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+    participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1,
+    $createdAt: 5 } });
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  const r = runChild(["receipt", POOL]);
+  ok("a receipt whose fee contradicts the ORIGINAL frozen draft is refused",
+    r.code !== 0 && /operatorFeeBps/.test(r.out));
+  ok("the fee refusal keeps the local evidence", hasInFlightEvidence());
+}
+
+// ---- independent case ARCHIVED-DRAFT RECOVERY: abandon archives the frozen DRAFT beside the manifest,
+//      and recovery must COMPARE AGAINST IT. Restoring only the manifest left
+//      l1Verification unchecked (no derivable source), so a late receipt attesting a
+//      DIFFERENT verification level than the abandoned run had frozen was accepted and
+//      finalized, clearing the archive that held the contradiction. ----
+{
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
+  const ab = runChild(["abandon", POOL]);
+  ok("archived-draft setup: abandon archived manifest AND draft", ab.code === 0 && !hasInFlightEvidence());
+  // the late receipt: identical to the frozen truth EXCEPT its attested level
+  const l = ledger();
+  l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    proTxHash: EXPECTED.proTxHash, slotIndex: 0, formatVersion: 1,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+    participantCount: 2, l1Verification: "amount-reward-verified", // <- the frozen draft says demo-unverified
+    verificationMethodVersion: 1, $createdAt: 5 } });
+  if (!PARED) {
+    const p2 = l.docs.find((d) => d.id === POOL);
+    p2.data.proTxHash = REAL_HASH; p2.data.status = "live";
+  }
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  const r = runChild(["receipt", POOL]);
+  ok("a receipt contradicting the ARCHIVED frozen draft is refused",
+    r.code !== 0 && /l1Verification/.test(r.out));
+  ok("that refusal leaves the archive intact for hands",
+    fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_ABANDONED_") && f.endsWith(".val")));
+}
+
+// ---- independent case DAMAGED ARCHIVED DRAFT: a DAMAGED archived draft must
+//      REFUSE, never silently fall back to the weaker manifest-only comparison. The
+//      archive's EXISTENCE is itself evidence that exact evidence was meant to be there,
+//      so treating a damaged one as absent is not the same as never having had it: it
+//      re-opens exactly the l1Verification hole the archived-draft recovery closed. ----
+{
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
+  runChild(["abandon", POOL]);
+  const archiveFile = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("FORMATION_ABANDONED_") && f.endsWith(".val"));
+  ok("damaged-draft setup: an archive exists", archiveFile !== undefined);
+  // damage ONE nibble of the archived draft's allocation hash, leaving l1Verification
+  // intact and perfectly readable
+  const ap = path.join(STATE_DIR, archiveFile);
+  const arch = JSON.parse(fs.readFileSync(ap, "utf8"));
+  const d = JSON.parse(arch.draft);
+  d.allocationHashHex = (d.allocationHashHex[0] === "a" ? "b" : "a") + d.allocationHashHex.slice(1);
+  arch.draft = JSON.stringify(d);
+  fs.writeFileSync(ap, JSON.stringify(arch));
+  const l = ledger();
+  l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    proTxHash: EXPECTED.proTxHash, slotIndex: 0, formatVersion: 1,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+    participantCount: 2, l1Verification: "amount-reward-verified", // contradicts the archived draft
+    verificationMethodVersion: 1, $createdAt: 5 } });
+  if (!PARED) {
+    const p2 = l.docs.find((x) => x.id === POOL);
+    p2.data.proTxHash = REAL_HASH; p2.data.status = "live";
+  }
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  const r = runChild(["receipt", POOL]);
+  ok("a DAMAGED archived draft refuses rather than falling back",
+    r.code !== 0 && /damaged|corrupt|unusable/i.test(r.out));
+  ok("that refusal PRESERVES the archive for hands",
+    fs.existsSync(ap));
+  // and UNPARSEABLE damage takes the same path (closing-pass confirmation: swallowing
+  // the parse error to `undefined` would slip past the refusal into manifest-only
+  // recovery, the exact fallback the refusal exists to prevent)
+  const arch2 = JSON.parse(fs.readFileSync(ap, "utf8"));
+  arch2.draft = "{not valid json";
+  fs.writeFileSync(ap, JSON.stringify(arch2));
+  const r2 = runChild(["receipt", POOL]);
+  ok("an UNPARSEABLE archived draft refuses too, never falls back",
+    r2.code !== 0 && /do not parse/.test(r2.out));
+  ok("the unparseable refusal also preserves the archive", fs.existsSync(ap));
+  // an EMPTY-STRING draft is damage too, and a truthiness test would read it as absent
+  const arch3 = JSON.parse(fs.readFileSync(ap, "utf8"));
+  arch3.draft = "";
+  fs.writeFileSync(ap, JSON.stringify(arch3));
+  const r3 = runChild(["receipt", POOL]);
+  ok("an EMPTY archived draft refuses too (presence tested explicitly)",
+    r3.code !== 0 && /do not parse/.test(r3.out));
+}
+
 // ---- independent case E: abandon ARCHIVES before clearing, and receipt RECOVERS from
 //      the archive when the completion turns out to have landed anyway (round-7 P1).
 //      On v8 the late evidence is the pool live under the abandoned hash; on v9 it is a
@@ -752,12 +1123,54 @@ const plantForeignShare = () => {
   ok("status on a completed pool reads COMPLETED", st.code === 0 && /COMPLETED/.test(st.out));
   ok("status on a completed pool reaches the ESTABLISHED-node branch",
     /L1 check skipped \(no FORK_RPC_URL\)/.test(st.out));
+  // the SHARE CROSS-CHECK (pass-7 wave, review minor 5): status is the documented
+  // place the receipt allocation meets the live shares, and it now actually compares
+  ok("status cross-checks the live shares against the receipt allocation",
+    /share\(s\) match the receipt allocation exactly/.test(st.out));
+  {
+    const l = ledger();
+    const sh = l.docs.find((d) => d.type === "share" && d.ownerId === F1);
+    sh.data.shareBps = 4999; // a post-completion mutation
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+    // F2's share is also DELETED, and the case requires status to NAME the missing
+    // owner (artifact check: an implementation comparing live values against anything
+    // hard-coded passes a bps-only case; naming which owner is absent requires reading
+    // the receipt's own allocation rows)
+    const f2Share = l.docs.find((d) => d.type === "share" && d.ownerId === F2);
+    l.docs = l.docs.filter((d) => d !== f2Share);
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+    const st2 = runChild(["status", POOL]);
+    ok("status reports a mutated share as DIVERGENCE and exits nonzero",
+      st2.code !== 0 && /SHARE DIVERGENCE/.test(st2.out) && /4999/.test(st2.out));
+    ok("status NAMES the missing owner from the receipt allocation",
+      new RegExp(`share MISSING for ${F2}`).test(st2.out));
+    sh.data.shareBps = 5000; l.docs.push(f2Share);
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  }
 
   // the stubbed Core RPC: a separate process (this harness execs its children
   // synchronously, so an in-process server could never answer), logging each request
   // body and answering a fixed valid protx info. The assertion that matters is on the
   // LOG, that the reader asked about exactly REAL_HASH.
+  //
+  // SANDBOX GATE first (vetting round, environment note): a review sandbox can forbid
+  // loopback listeners outright (EPERM on listen), and there the stub can never come
+  // up, so the three RPC checks would fail on the environment rather than the code.
+  // That exact condition, and ONLY it, is a loud skip; any other stub failure still
+  // fails the run.
   const { spawn, execFileSync: efs } = require("child_process");
+  let canListen = true;
+  try {
+    efs("node", ["-e", `
+      const s = require("http").createServer(() => {});
+      s.on("error", (e) => { console.error(e.code); process.exit(e.code === "EPERM" ? 42 : 1); });
+      s.listen(0, "127.0.0.1", () => { s.close(() => process.exit(0)); });
+    `]);
+  } catch (e) { if (e.status === 42) canListen = false; }
+  if (!canListen) {
+    console.log("case O stub-RPC checks: SKIPPED, this environment forbids loopback listeners " +
+      "(EPERM on listen); the identity-pinning assertions did not run here");
+  } else {
   const RPCLOG = path.join(ROOT, "l1stub.log");
   const PORT = 30000 + (process.pid % 10000);
   fs.writeFileSync(RPCLOG, "");
@@ -791,6 +1204,57 @@ const plantForeignShare = () => {
   } finally {
     stub.kill();
   }
+  }
+}
+
+// ---- independent case P (a soundness review): a RESUMED completion compares an
+//      existing receipt with the frozen draft BEFORE settlement, so a contradicting
+//      receipt stops the run with ZERO participant shares created, not after them ----
+{
+  writeSeed();
+  const halted = runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
+  ok("a soundness-review finding setup: manifest and draft committed, nothing settled", halted.code === 0
+    && ledger().docs.filter((d) => d.type === "share").length === 0);
+  // a schema-valid receipt whose node hash contradicts the frozen draft's
+  const l = ledger();
+  l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    proTxHash: "ee" + "57".repeat(31), slotIndex: 0, formatVersion: 1,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+    participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1,
+    $createdAt: 5 } });
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  clearOpLock();
+  const c = runChild(["complete", POOL, REAL_HASH]);
+  ok("a soundness-review finding: the resume refuses over the contradicting receipt",
+    c.code !== 0 && /CONTRADICTS the frozen draft/.test(c.out));
+  ok("a soundness-review finding: and it refused BEFORE settlement (zero shares created)",
+    ledger().docs.filter((d) => d.type === "share").length === 0);
+}
+
+// ---- independent case P2 (closing pass, must-fix): a DRAFT-MATCHING receipt attached
+//      to a still-forming v8 pool must ALSO stop the resume pre-settlement. The draft
+//      comparison alone let it through (the receipt matches!), and only the pool binding
+//      catches that the pool itself contradicts any receipt existing at all. ----
+if (!PARED) {
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
+  const l = ledger();
+  l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    proTxHash: EXPECTED.proTxHash, slotIndex: 0, formatVersion: 1,
+    nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000,
+    allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+    participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1,
+    $createdAt: 5 } });
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  clearOpLock();
+  const c = runChild(["complete", POOL, REAL_HASH]);
+  ok("closing-pass fix: a draft-matching receipt on a FORMING pool refuses the resume",
+    c.code !== 0 && /still forming/i.test(c.out));
+  ok("closing-pass fix: and it refused BEFORE settlement (zero shares created)",
+    ledger().docs.filter((d) => d.type === "share").length === 0);
 }
 
 // ---- independent case N: FORMATION_HALT_AFTER=flip is REFUSED on the no-flip ledger

@@ -126,6 +126,19 @@ const loadObservations = () => {
       // "principal") inside the unique key, so a reward and a principal return at the
       // same fork height are two events (B12); kind-less accruals (v1/v3) group by
       // height alone, as before.
+      // A DISTRIBUTING RECEIPT-LESS POOL IS AN INCONSISTENCY on the immutable ledger
+      // (convergence pass, major): the rail resolves pools THROUGH a verifying receipt
+      // before paying, so accruals on a pool with no established node cannot be a
+      // legitimate background state, and the split legs below (reconstructible bps,
+      // matching membership) must not read as OK over an unestablished binding. Without
+      // this, the unknown node merely failed to MATCH an observation, and the other
+      // acceptance legs masked it. An open receipt-less pool with NO accruals stays a
+      // reported non-failure, which is its honest state.
+      if (hasImmutablePool() && !node.known && accruals.length > 0) {
+        fail(`pool ${poolId.toString()} carries ${accruals.length} reward accrual(s) while no ` +
+          `completion receipt verifies against it (${node.why}); the rail pays only ` +
+          "receipt-verified pools, so a distributing receipt-less pool is never background state");
+      }
       const byEpoch = new Map();
       for (const a of accruals) {
         const h = Number(a.obj.epochHeight);
@@ -213,7 +226,7 @@ const loadObservations = () => {
         // ledger alone, which is worth failing loudly.
         // a kind-carrying (v4) group must match an observation of the SAME kind, so the
         // reward and the principal return of one height each bind to their own inflow
-        const match = observations.find(({ obs }) => obs.proTxHash === proTxHex && obs.height === height
+        const match = observations.find(({ obs }) => node.known && obs.proTxHash === node.hex && obs.height === height
           && (kind === null || (kind === "principal") === (obs.kind === "dissolution")));
         if (!bpsReconstructed && !sameMembership && !match) {
           // an operator can ACKNOWLEDGE a known-unverifiable epoch (for example a churned

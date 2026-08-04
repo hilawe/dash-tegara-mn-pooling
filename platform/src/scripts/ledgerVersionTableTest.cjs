@@ -98,6 +98,38 @@ for (const v of ["v1", "v3", "v4", "v5", "v6", "v7", "v8"]) {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. targeted delegation is its OWN capability, not an isV5 rider
+// ---------------------------------------------------------------------------
+// votePreference.delegateTo enters the schema at v5 (registerV5.cjs) and is carried by
+// every later version INCLUDING v9 (contractV9Test pins votePreference unchanged from
+// v8). isV5 aliases hasPoolStatus, which v9 subtracts, so gating delegateTo on isV5
+// refused a field the published v9 contract accepts (2026-08-03 round, convergence-2
+// pass, major B). The capability row makes the two axes independent in the table.
+for (const [v, want] of Object.entries({ v1: false, v3: false, v4: false, v5: true, v6: true, v7: true, v8: true, v9: true })) {
+  withLedger(v === "v1" ? undefined : v, () =>
+    ok(`${v}: hasDelegateTarget is ${want}`, S.hasDelegateTarget() === want));
+}
+// the divergence the fold exists for: on v9 the two answers differ
+withLedger("v9", () =>
+  ok("v9: hasDelegateTarget true while isV5 false (the axes are independent)",
+    S.hasDelegateTarget() === true && S.isV5() === false));
+
+// the OTHER two v5 member-join fields are their own capabilities too (final pass,
+// major 1): membershipRequest.provenance and .rewardScript enter at v5 and are carried
+// unchanged through v9, so gating either on isV5 refused fields the published v9
+// contract accepts (provenance was the reviewer's finding; rewardScript is the same
+// class one line down in pledge.cjs)
+for (const [v, want] of Object.entries({ v1: false, v3: false, v4: false, v5: true, v6: true, v7: true, v8: true, v9: true })) {
+  withLedger(v === "v1" ? undefined : v, () => {
+    ok(`${v}: hasJoinProvenance is ${want}`, S.hasJoinProvenance() === want);
+    ok(`${v}: hasMemberRewardScript is ${want}`, S.hasMemberRewardScript() === want);
+  });
+}
+withLedger("v9", () =>
+  ok("v9: both join-field capabilities true while isV5 false",
+    S.hasJoinProvenance() === true && S.hasMemberRewardScript() === true && S.isV5() === false));
+
+// ---------------------------------------------------------------------------
 // 3. selection, and failing closed
 // ---------------------------------------------------------------------------
 throws("an unsupported selector is refused, never a silent v1 fallback",

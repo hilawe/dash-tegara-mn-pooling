@@ -268,8 +268,8 @@ const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIP
 // were written; a plain key could be clobbered back out, re-opening the silent-republish
 // window. Reads still resolve either way, because loadEnv overlays owned files ON TOP of
 // the env file (a value seeded plainly is surfaced until an owner write migrates it).
-// The v9 pair is owned for the same reason even though v9 is an unpublished draft: the
-// draft's publish flow already writes them, and an unprotected pending marker re-opens
+// The v9 pair is owned for the same reason (and since 2026-08-03 v9 is published
+// canonically): its publish flow writes them, and an unprotected pending marker re-opens
 // the exact silent-republish window the v8 pair closes (v9 draft review, finding 3).
 const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE", "CONTRACT_V8_PENDING", "CONTRACT_V8_ID",
   "CONTRACT_V9_PENDING", "CONTRACT_V9_ID"];
@@ -505,21 +505,22 @@ const reserveAddrIndex = (n) => {
  * a special case, and a special case is what gets forgotten. Spelling each version out
  * makes the subtraction visible in the table itself.
  *
- * TWO FURTHER v9 REMOVALS are NOT capabilities here, because nothing gates on them today:
- * the v9 pool also drops `proTxHash` and `operatorIdentityId`, and the v9 completion
- * receipt drops top-level `nodeType`, `operatorFeeBps` and `targetDuffs`. Readers consult
- * those fields unconditionally right now. Migrating them is phase E of
- * `docs/V9_MIGRATION_PLAN.md`, and the predicates belong here when they have call sites,
- * not before.
+ * TWO FURTHER v9 REMOVALS are NOT capabilities here: the v9 pool also drops `proTxHash`
+ * and `operatorIdentityId`, and the v9 completion receipt drops top-level `nodeType`,
+ * `operatorFeeBps` and `targetDuffs`. Readers of the node identity route through
+ * `poolLifecycle.backingNode` (which branches on `hasImmutablePool` internally), and
+ * readers of the operator use the pool's `$ownerId` on the immutable ledger, so no
+ * per-field predicate has a call site here. The last unconditional consumers (the two
+ * cast-receipt readers) were migrated after the 2026-08-03 convergence-2 pass (major H).
  */
 const LEDGER_VERSIONS = {
   v1: { idKey: "CONTRACT_ID", register: null, caps: {} },
   v3: { idKey: "CONTRACT_V3_ID", register: "registerV3.cjs", caps: { reconstructibleAccruals: true } },
   v4: { idKey: "CONTRACT_V4_ID", register: "registerV4.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true } },
-  v5: { idKey: "CONTRACT_V5_ID", register: "registerV5.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true } },
-  v6: { idKey: "CONTRACT_V6_ID", register: "registerV6.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, pledgeSlot: true } },
-  v7: { idKey: "CONTRACT_V7_ID", register: "registerV7.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, pledgeSlot: true, slotBook: true } },
-  v8: { idKey: "CONTRACT_V8_ID", register: "registerV8.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, pledgeSlot: true, slotBook: true, completionReceipt: true } },
+  v5: { idKey: "CONTRACT_V5_ID", register: "registerV5.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, delegateTarget: true, joinProvenance: true, memberRewardScript: true } },
+  v6: { idKey: "CONTRACT_V6_ID", register: "registerV6.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, delegateTarget: true, joinProvenance: true, memberRewardScript: true, pledgeSlot: true } },
+  v7: { idKey: "CONTRACT_V7_ID", register: "registerV7.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, delegateTarget: true, joinProvenance: true, memberRewardScript: true, pledgeSlot: true, slotBook: true } },
+  v8: { idKey: "CONTRACT_V8_ID", register: "registerV8.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, poolStatus: true, delegateTarget: true, joinProvenance: true, memberRewardScript: true, pledgeSlot: true, slotBook: true, completionReceipt: true } },
   // v9 keeps everything v8 had EXCEPT poolStatus, and adds the immutable pool. The
   // missing `poolStatus` on this row is the whole reason the table is written out.
   // `paredReceipt` is the receipt-side consequence of the immutable pool and is named
@@ -528,7 +529,11 @@ const LEDGER_VERSIONS = {
   // v8 it is a receipt field and the pool has none; on v9 it is a pool field and the receipt
   // has none. That is why the draft-to-pool target comparison is a v9 addition rather than a
   // check that was simply missing before.
-  v9: { idKey: "CONTRACT_V9_ID", register: "registerV9.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, pledgeSlot: true, slotBook: true, completionReceipt: true, immutablePool: true, paredReceipt: true } },
+  // `delegateTarget` stays TRUE on v9: votePreference is carried unchanged from v8
+  // (contractV9Test pins it), so targeted delegation and pool status are INDEPENDENT
+  // axes that isV5 conflated. Gating delegateTo on isV5 refused a field the published
+  // v9 contract accepts (2026-08-03 round, convergence-2 pass, major B).
+  v9: { idKey: "CONTRACT_V9_ID", register: "registerV9.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, delegateTarget: true, joinProvenance: true, memberRewardScript: true, pledgeSlot: true, slotBook: true, completionReceipt: true, immutablePool: true, paredReceipt: true } },
 };
 
 const SUPPORTED_LEDGERS = Object.keys(LEDGER_VERSIONS);
@@ -574,6 +579,9 @@ const hasSlotBook = () => ledgerCap("slotBook");
 const hasCompletionReceipt = () => ledgerCap("completionReceipt");
 const hasImmutablePool = () => ledgerCap("immutablePool");
 const hasParedReceipt = () => ledgerCap("paredReceipt");
+const hasDelegateTarget = () => ledgerCap("delegateTarget");
+const hasJoinProvenance = () => ledgerCap("joinProvenance");
+const hasMemberRewardScript = () => ledgerCap("memberRewardScript");
 
 // THE OLD VERSION-NUMBERED NAMES, kept as aliases over the capabilities they always
 // meant, so the existing call sites keep working unchanged and pick up the correct v9
@@ -606,4 +614,5 @@ module.exports = { ENV_PATH, STATE_DIR, loadEnv, saveEnv, updateEnvKey, reserveA
   adoptStateDir, activeContractId, isV3, isV4, isV5, isV6, isV7, isV8, activeCastId, isCastV3,
   LEDGER_VERSIONS, SUPPORTED_LEDGERS, ledgerVersion, assertSupportedLedger, ledgerCap,
   hasReconstructibleAccruals, hasAccrualKindInKey, hasPoolStatus, hasPledgeSlot, hasSlotBook,
-  hasCompletionReceipt, hasImmutablePool, hasParedReceipt, ledgerIsExactly };
+  hasCompletionReceipt, hasImmutablePool, hasParedReceipt, hasDelegateTarget,
+  hasJoinProvenance, hasMemberRewardScript, ledgerIsExactly };

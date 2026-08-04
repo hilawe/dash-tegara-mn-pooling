@@ -10,7 +10,7 @@
  * valid receipt embedding a wrong target passing the allocation verifier alone.
  *
  * So the evidence for "this pool completed" is the RECEIPT-PLUS-ITS-POOL PAIR, both
- * immutable, and this module is the one place that check lives. It owes FOUR DUTIES, and a
+ * immutable, and this module is the one place that check lives. It owes FIVE DUTIES, and a
  * caller that performs any subset has not performed the check:
  *
  *   1. THE ALLOCATION IS VALID AND CANONICAL, with top-level poolId and participantCount
@@ -26,6 +26,12 @@
  *   4. THE RECEIPT'S slotIndex MATCHES THE POOL'S. slotIndex necessarily stays on the v9
  *      receipt because the unique bySlot index needs it, so it is the one duplicated field
  *      left and therefore the one that can still contradict.
+ *   5. THE NODE HASH IS OUTSIDE THE RESERVED FORMING NAMESPACE (a soundness review). The published
+ *      schema can bound only the LENGTH of proTxHash, and the completion writer refuses a
+ *      reserved-prefix value, so without this duty a schema-valid receipt naming a
+ *      placeholder node passes every other duty and classifies as COMPLETED. The rule is
+ *      part of the stated verifier contract, not of the schema, so an implementation that
+ *      reads the schema alone will not derive it.
  *
  * PLUS AN IDENTITY PRECONDITION that is not numbered in the review's list because it is
  * assumed rather than checked there: the pool passed in must BE the pool the receipt names.
@@ -97,6 +103,24 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId }) => {
     const carrier = pared ? "pool" : "receipt";
     const carriedTarget = toDuffs(pared ? pool.targetDuffs : receipt.targetDuffs);
     if (carriedTarget === null) return bad(`${carrier} targetDuffs is not a duff amount`);
+
+    // ---- the NODE-DOMAIN duty (a soundness review): the receipt's proTxHash must be a real node
+    // identifier, meaning 32 bytes OUTSIDE the reserved forming namespace (16 leading
+    // zero bytes, formationCore's application convention). The writer refuses this value
+    // and validateReceiptDraft repeats the refusal, but the published schema bounds only
+    // the LENGTH, so for a receipt already on the ledger this check is the only place the
+    // refusal can live. Without it the classifier answers COMPLETED for a pool whose
+    // "node" is a placeholder, and backingNode hands that placeholder to every reader
+    // that attributes L1 activity. Applies on EVERY receipt ledger: on the flip ledgers
+    // the classifier's pool-hash comparison caught it transitively, which is not the same
+    // as checking it. ----
+    const receiptHash = receipt.proTxHash == null ? null : Buffer.from(receipt.proTxHash);
+    if (!receiptHash || receiptHash.length !== 32) {
+      return bad("receipt proTxHash is missing or not 32 bytes");
+    }
+    if (core.isFormingHash(receiptHash)) {
+      return bad("receipt proTxHash is in the reserved forming namespace, which names no real node");
+    }
 
     // ---- duty 3 first, because duty 2 is meaningless against an incoherent pool ----
     const wantTarget = targetForNodeType(pool.nodeType);

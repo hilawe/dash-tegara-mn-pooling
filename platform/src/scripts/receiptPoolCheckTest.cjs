@@ -60,10 +60,21 @@ const manifest = (target = REGULAR, poolId = GP) => {
 };
 
 /** a v9-shaped receipt: no top-level nodeType, operatorFeeBps or targetDuffs */
-const receiptFor = (m, { slotIndex = 0 } = {}) => {
+// poolId crosses this seam as a BUFFER, the type the SDK hands readers and the type
+// formation.cjs writes (pass-7 wave, note): the fixture used a base58 string, which
+// toId32 happens to coerce, so the suite was exercising a friendlier shape than any
+// call site does. That is the exact toId32 lesson this project already paid for once,
+// so the default is now the real type and `asString` opts into the other one where a
+// case deliberately covers it.
+const receiptFor = (m, { slotIndex = 0, asString = false } = {}) => {
   const rows = core.allocationPreimage(GC, m);
   return {
-    poolId: m.poolId, slotIndex, formatVersion: 1,
+    poolId: asString ? m.poolId : Buffer.from(core.decodeId32(m.poolId)),
+    // proTxHash is REQUIRED by the published schema and the fixture omitted it entirely
+    // (a soundness review): every case here was verifying a receipt the contract could
+    // not accept. The default is a real node hash outside the reserved namespace.
+    proTxHash: Buffer.from(m.realHash, "hex"),
+    slotIndex, formatVersion: 1,
     allocationRows: rows, allocationHash: core.allocationHash(rows),
     participantCount: m.owners.length, l1Verification: "demo-unverified", verificationMethodVersion: 1,
   };
@@ -298,6 +309,52 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   try { await resolveNodeToPools({ contractId: GC, nodeHash: NODE, slotIndex: 0 }); } catch { threw = true; }
   ok("resolve: missing fetchers is a programming error and throws", threw);
 
-  console.log(`receiptPoolCheckTest: ${pass} passed, ${fail} failed`);
+  // BOTH representations of poolId reach the check in the wild (the SDK's Buffer, and a
+// base58 string from a hand-built or packet fixture), and toId32 is the one coercion
+// point; pin that both are accepted so a change there fails here rather than in a live
+// run (pass-7 wave, note)
+{
+  const m = manifest();
+  const bufReceipt = receiptFor(m);
+  const strReceipt = receiptFor(m, { asString: true });
+  // the pair proves nothing unless the two fixtures ACTUALLY differ in representation
+  // (artifact check: a builder ignoring `asString` would pass both verification
+  // assertions), so the difference itself is asserted first
+  ok("the fixture produces two genuinely different poolId representations",
+    Buffer.isBuffer(bufReceipt.poolId) && typeof strReceipt.poolId === "string");
+  const asBuffer = checkReceiptAgainstPool({ contractId: GC, receipt: bufReceipt, pool: poolFor(), poolId: GP });
+  const asString = checkReceiptAgainstPool({ contractId: GC, receipt: strReceipt,
+    pool: poolFor(), poolId: GP });
+  ok("a Buffer poolId verifies (the type the SDK and the writer use)", asBuffer.ok === true);
+  ok("a base58-string poolId verifies identically (toId32 is the coercion point)",
+    asString.ok === true);
+}
+
+// ---- a soundness-review finding: the RESERVED FORMING NAMESPACE is not a node ----
+// The writer refuses a proTxHash whose first sixteen bytes are zero; the published
+// schema bounds only the length, so the shared check is the only place that refusal can
+// live for a receipt already on the ledger. Without it the classifier reports COMPLETED
+// and backingNode hands the placeholder out as an established node.
+{
+  const m = manifest();
+  const forming = Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 7)]);
+  const real = Buffer.alloc(32, 0xab);
+  const withHash = (h) => ({ ...receiptFor(m), proTxHash: h });
+  const r = checkReceiptAgainstPool({ contractId: GC, receipt: withHash(forming),
+    pool: poolFor(), poolId: GP });
+  ok("a soundness-review finding: a receipt naming the reserved forming namespace is REFUSED by the shared check",
+    r.ok === false && /forming/i.test(r.reason || ""));
+  const good = checkReceiptAgainstPool({ contractId: GC, receipt: withHash(real),
+    pool: poolFor(), poolId: GP });
+  ok("a soundness-review finding: a real node hash still verifies", good.ok === true);
+  const missing = checkReceiptAgainstPool({ contractId: GC,
+    receipt: { ...receiptFor(m), proTxHash: undefined }, pool: poolFor(), poolId: GP });
+  ok("a soundness-review finding: a receipt with no proTxHash is refused", missing.ok === false);
+  const short = checkReceiptAgainstPool({ contractId: GC, receipt: withHash(Buffer.alloc(31, 1)),
+    pool: poolFor(), poolId: GP });
+  ok("a soundness-review finding: a proTxHash of the wrong length is refused", short.ok === false);
+}
+
+console.log(`receiptPoolCheckTest: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

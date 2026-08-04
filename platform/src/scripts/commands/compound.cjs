@@ -1,6 +1,6 @@
 module.exports = async (ctx) => {
   const { client, env, args, cmd, who, whoIdKey, DASHfmt, short, Identifier, Dash, fetchAll,
-    updateEnvKey, activeContractId, activeCastId, isV3, isV5, journal, journalContract,
+    updateEnvKey, activeContractId, activeCastId, isV3, hasJoinProvenance, journal, journalContract,
     getPool, myShares, myRequests, isMyAccrual, myAccruals, requestExists, earnedRewardsBig,
     autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep } = ctx;
   const myId = ctx.myId;
@@ -63,7 +63,7 @@ module.exports = async (ctx) => {
 
       // the ceiling: rewards earned (never returned principal) minus rewards already
       // compounded, all in BigInt (independent-review finding: Number summation can
-      // round past MAX_SAFE_INTEGER, and "all" must not bypass the bounds)
+      // round past MAX_SAFE_INTEGER, and "all" must not skip the bounds)
       const earned = await earnedRewardsBig();
       const { consumedDuffs } = journal.summary(journalContract, myId);
       const ceiling = earned - consumedDuffs;
@@ -101,9 +101,13 @@ module.exports = async (ctx) => {
       const identity = await client.platform.identities.get(myId);
       const doc = await client.platform.documents.create("poolLedger.membershipRequest", identity, {
         poolId: pool.getId().toBuffer(), kind: "join", amountDuffs, status: "pending",
-        // v5: the compound is distinguishable ON the ledger, not only in the local
-        // journal (the join-provenance gap, closed)
-        ...(isV5() ? { provenance: "compound" } : {}),
+        // the compound is distinguishable ON the ledger, not only in the local
+        // journal (the join-provenance gap, closed). Gated on the field's OWN
+        // capability, not isV5: provenance enters at v5 and is CARRIED by v9, while
+        // isV5 is the pool-status capability v9 subtracts, so the alias silently
+        // dropped provenance from every v9 compound record and its public-record
+        // meaning became fresh capital (final pass, major 1).
+        ...(hasJoinProvenance() ? { provenance: "compound" } : {}),
       });
       // reserve BEFORE the broadcast (the review's core finding): the ceiling debit is
       // durable before the slow network operation, so a crash after broadcast cannot

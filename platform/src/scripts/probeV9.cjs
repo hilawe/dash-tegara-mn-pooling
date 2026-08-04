@@ -148,7 +148,20 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
 
     // ---- P6..P8: receipts ----
     const proTx = crypto.randomBytes(32);
-    const rows = Buffer.from(JSON.stringify(["tegara-completion-allocation", 1, "probe", "v9", "1", []]), "utf8");
+    // the P6 receipt's embedded allocation is CANONICAL (vetting round 2026-08-03,
+    // finding 3): an earlier probe used a hollow placeholder that was schema-valid but
+    // failed the shared verifier, so the acceptance evidence it left reads permanently
+    // as a contradiction (recorded in the canonical publish run doc). Acceptance
+    // evidence must VERIFY, so the rows are the real preimage for the probe pool, one
+    // participant holding the whole target.
+    const core = require("./formationCore.cjs");
+    const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
+    const probeManifest = {
+      poolId: pool.getId().toString(), target: String(basePool.targetDuffs),
+      owners: [{ owner: owner.getId().toString(), amountDuffs: String(basePool.targetDuffs),
+        bps: 10000, rewardScriptHex: "76a914" + "42".repeat(20) + "88ac" }],
+    };
+    const rows = core.allocationPreimage(env.CONTRACT_V9_ID, probeManifest);
     const receiptProps = (poolIdBuf, proTxBuf, slotIdx) => ({
       poolId: poolIdBuf, proTxHash: proTxBuf, slotIndex: slotIdx,
       formatVersion: 1, allocationRows: rows,
@@ -160,6 +173,13 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
         receiptProps(pool.getId().toBuffer(), proTx, 0));
       await client.platform.documents.broadcast({ create: [doc] }, owner);
       result("P6 valid receipt accepted", true, doc.getId().toString());
+      // and the acceptance evidence VERIFIES under the reader contract, so the pair this
+      // probe leaves behind reads as a completion, never as a contradiction
+      const verdict = checkReceiptAgainstPool({ contractId: env.CONTRACT_V9_ID,
+        receipt: receiptProps(pool.getId().toBuffer(), proTx, 0),
+        pool: basePool, poolId: pool.getId().toString() });
+      result("P6 receipt VERIFIES through the shared receipt-to-pool check",
+        verdict.ok === true, verdict.ok ? "five duties pass" : verdict.reason);
     }
     try {
       const doc = await client.platform.documents.create("poolLedger.completionReceipt", owner,

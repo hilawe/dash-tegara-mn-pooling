@@ -58,13 +58,39 @@ ok("a foreign-owned POOL document skips the pool (the pool stays in the prefligh
     immutable.action === "sweep" && immutable.deletePool === false);
 }
 
-// the pre-delete re-check is THIS SAME FUNCTION on fresh input, so the pair below is the
+// the per-delete re-check is THIS SAME FUNCTION on fresh input, so the pair below is the
 // re-check's whole contract: unchanged input keeps the answer, a receipt appearing flips it
 ok("identical input gives an identical answer (the re-check adds no state)",
   JSON.stringify(planPoolSweep({ ...base })) === JSON.stringify(planPoolSweep({ ...base })));
 ok("a receipt appearing between plan and re-check flips sweep to skip",
   planPoolSweep({ ...base }).action === "sweep"
   && planPoolSweep({ ...base, receiptCount: 1 }).action === "skip-receipt");
+
+// the operation-lock contention decision is the plan's too (vetting round, finding 2),
+// checked FIRST so a locked pool is never swept whatever its counts say
+ok("a held lock skips, whatever the counts",
+  planPoolSweep({ ...base, lockHeld: true }).action === "skip-locked");
+ok("the lock skip outranks even the complete-table keep",
+  planPoolSweep({ ...base, shareBpsSum: 10000, shareCount: 2, lockHeld: true }).action === "skip-locked");
+ok("the lock skip carries its reason",
+  /operation lock/.test(planPoolSweep({ ...base, lockHeld: true }).reason || ""));
+ok("an unlocked pool is unaffected by the new input",
+  planPoolSweep({ ...base, lockHeld: false }).action === "sweep");
+
+// mid-sweep arrivals stop the sweep (closing wave, must-fix): a document that was not in
+// the enumerated set when the sweep was planned means the pool is no longer the pool the
+// plan covered, whoever owns the newcomer, so the per-delete re-check must stop rather
+// than keep executing a stale plan
+ok("a newcomer document stops the sweep, whatever the counts say",
+  planPoolSweep({ ...base, newcomerCount: 1 }).action === "skip-changed");
+ok("a self-owned newcomer stops the sweep too (concurrency, not ownership, is the signal)",
+  planPoolSweep({ ...base, newcomerCount: 2, ownerIds: [F1, OP] }).action === "skip-changed");
+ok("the newcomer skip carries its reason",
+  /arrived since the sweep was planned/.test(planPoolSweep({ ...base, newcomerCount: 1 }).reason || ""));
+ok("regression pin: the lock skip still outranks the newcomer skip (checked first)",
+  planPoolSweep({ ...base, newcomerCount: 1, lockHeld: true }).action === "skip-locked");
+ok("regression pin: zero newcomers changes nothing",
+  planPoolSweep({ ...base, newcomerCount: 0 }).action === "sweep");
 
 console.log(`cleanupDebrisPlanTest: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

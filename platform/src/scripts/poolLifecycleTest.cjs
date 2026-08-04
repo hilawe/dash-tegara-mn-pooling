@@ -53,7 +53,10 @@ const manifest = (target = REGULAR) => {
 // unpared path rather than a pool that cannot exist.
 const paredReceiptFor = (m) => {
   const rows = core.allocationPreimage(GC, m);
-  return { poolId: GP, slotIndex: 0, formatVersion: 1, allocationRows: rows,
+  // every real receipt carries proTxHash (required on both shapes); its earlier absence
+  // here was itself a fixture-producibility gap the a soundness-review finding binding exposed
+  return { poolId: GP, proTxHash: Buffer.from(m.realHash, "hex"), slotIndex: 0,
+    formatVersion: 1, allocationRows: rows,
     allocationHash: core.allocationHash(rows), participantCount: 3,
     l1Verification: "demo-unverified", verificationMethodVersion: 1 };
 };
@@ -114,6 +117,32 @@ withLedger("v8", () => {
 
   const done = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: unparedReceiptFor(manifest()) });
   ok("v8: a verifying receipt still wins", done.state === STATES.COMPLETED);
+
+  // a soundness-review finding: on the flip ledgers a structurally verifying receipt counts ONLY when the
+  // pool's own assertion agrees; each disagreement below is a contradiction to resolve,
+  // never COMPLETED and never absence
+  {
+    const formingWithReceipt = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH),
+      poolId: GP, receipt: unparedReceiptFor(manifest()) });
+    ok("a soundness-review finding: a verifying receipt over a still-forming v8 pool is a contradiction",
+      formingWithReceipt.state === STATES.UNDETERMINED
+      && /does NOT verify/.test(formingWithReceipt.reason)
+      && /still forming/.test(formingWithReceipt.reason));
+    ok("a soundness-review finding: and abandon refuses over it", mayAbandon(formingWithReceipt).ok === false);
+    const otherHash = classifyPool({ contractId: GC, pool: v8Pool(Buffer.alloc(32, 0xbb)),
+      poolId: GP, receipt: unparedReceiptFor(manifest()) });
+    ok("a soundness-review finding: a receipt naming a different node than the live pool is a contradiction",
+      otherHash.state === STATES.UNDETERMINED && /different node/.test(otherHash.reason));
+    const noReceiptHash = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP,
+      receipt: { ...unparedReceiptFor(manifest()), proTxHash: undefined } });
+    // the refusal MOVED UPSTREAM with a soundness-review finding: the shared check now rejects a missing or
+    // wrong-length proTxHash on every receipt ledger, so this case is caught before the
+    // classifier's own v8 comparison ever runs. Same fail-closed outcome, earlier and on
+    // both ledgers, so the assertion accepts either wording.
+    ok("a soundness-review finding: a receipt missing its proTxHash fails closed on v8",
+      noReceiptHash.state === STATES.UNDETERMINED
+      && /(missing or malformed|missing or not 32 bytes)/.test(noReceiptHash.reason));
+  }
 
   ok("v8: a missing proTxHash is UNDETERMINED rather than assumed forming",
     classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null }).state === STATES.UNDETERMINED);
@@ -253,6 +282,24 @@ for (const [name, args] of [
   ok(`${name}: classified without throwing`, !threw && res && res.state === STATES.UNDETERMINED);
 }
 ok("mayAbandon refuses a missing classification", mayAbandon(null).ok === false);
+
+// ---- a soundness-review finding at the CLASSIFIER and the node producer, on the immutable ledger ----
+// The v9 path skips the classifier's own hash comparison (the pool asserts nothing), so
+// the reserved namespace has to be refused by the shared check and, defensively, by the
+// one producer of node identities.
+{
+  const forming = Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 7)]);
+  withLedger("v9", () => {
+    const r = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP,
+      receipt: { ...paredReceiptFor(manifest()), proTxHash: forming } });
+    ok("a soundness-review finding: a reserved-namespace receipt is NOT completion on the immutable ledger",
+      r.state !== STATES.COMPLETED);
+    const node = backingNode({ pool: v9Pool(),
+      receipt: { ...paredReceiptFor(manifest()), proTxHash: forming }, receiptOk: true });
+    ok("a soundness-review finding: backingNode refuses the reserved namespace even when told the receipt verified",
+      node.known === false && /forming/i.test(node.why || ""));
+  });
+}
 
 console.log(`poolLifecycleTest: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

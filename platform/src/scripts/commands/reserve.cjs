@@ -1,4 +1,6 @@
-// reserve (LEDGER=v6 or v7): claim a fixed-size collateral slot of a forming pool on
+// reserve (every ledger carrying the slot-book capability, v6 onward, which INCLUDES v8
+// and v9 through the isV6/isV7 capability aliases; the header used to say "v6 or v7",
+// narrower than the code, pass 7 minor 5): claim a fixed-size collateral slot of a forming pool on
 // the ledger. The unique (poolId, slotNo) index means Platform REJECTS a duplicate
 // claim on the same slot, so two honest clients racing for the last free slot cannot
 // both win (the v5 pledge-time check could only warn). Scope (Option A, refactors
@@ -13,7 +15,7 @@ module.exports = async (ctx) => {
   const { client, args, cmd, who, DASHfmt, short, Identifier, Dash, fetchAll, isV6, isV7,
     getPool, journal, env, activeContractId } = ctx;
   const myId = ctx.myId;
-  if (!isV6()) throw new Error("the on-ledger reservation needs LEDGER=v6 or v7 (run registerV6/V7.cjs)");
+  if (!isV6()) throw new Error("the on-ledger reservation needs a ledger with the slot book (v6 or later; run the matching register script)");
 
   const [poolIdStr, slotArg, rewardAddressArg] = args;
   if (!poolIdStr) throw new Error(`usage: ${cmd} <poolId>${cmd === "reserve" ? " <slotNo> [rewardAddress]" : ""}`);
@@ -28,6 +30,12 @@ module.exports = async (ctx) => {
   const { hasImmutablePool } = require("../envStore.cjs");
   let forming;
   let admission = { ok: true };
+  // the DISPLAY label for `slots`: on v8 the pool's own state; on an immutable ledger
+  // the CLASSIFIER's word, never a live/forming guess, because an admission refusal
+  // does not make a pool LIVE, it makes it undetermined, and printing "LIVE" for an
+  // undetermined pool is exactly the claim the classifier refuses to make (vetting
+  // round, finding 7)
+  let stateLabel;
   if (hasImmutablePool()) {
     const receiptDoc = (await client.platform.documents.get(
       "poolLedger.completionReceipt", { where: [["poolId", "==", pool.getId()]] }))[0] || null;
@@ -40,9 +48,11 @@ module.exports = async (ctx) => {
       classification: cls, poolIdStr, participateEnv: process.env.TEGARA_PARTICIPATE,
     });
     forming = admission.ok;
+    stateLabel = cls.state.toUpperCase();
   } else {
     forming = po.status !== undefined ? po.status === "forming"
       : core.isFormingHash(Buffer.from(po.proTxHash));
+    stateLabel = forming ? "FORMING" : "LIVE";
   }
   let slotDuffs, slotCount;
   if (isV7()) {
@@ -54,10 +64,15 @@ module.exports = async (ctx) => {
     }
     slotDuffs = journal.toBig(po.slotDuffs, "pool slot size");
     slotCount = Number(po.slotCount);
-    if (slotDuffs * BigInt(slotCount) !== target) {
-      throw new Error(`the pool's slot economics are inconsistent: ${slotCount} x ${slotDuffs} ` +
-        `duffs does not equal the ${DASHfmt(target)} DASH target; do not reserve on this pool`);
-    }
+    // the admission triangle, ONE tested function (closing wave, major): the tier
+    // target, the slot-book product, AND the pool's own immutable targetDuffs (v9)
+    // must all agree, or the claim strands at completion against
+    // requireDraftMatchesPool; pre-v9 pools carry no targetDuffs and check the
+    // product alone
+    core.requireCoherentSlotEconomics({ nodeType: po.nodeType,
+      targetDuffs: po.targetDuffs !== undefined
+        ? journal.toBig(po.targetDuffs, "pool target") : undefined,
+      slotDuffs, slotCount });
   } else {
     // v6: slot size is a client convention (env override or the 100 DASH default),
     // which is exactly the A1 finding; kept only for the v6 ledger's compatibility
@@ -72,7 +87,7 @@ module.exports = async (ctx) => {
   const claimed = new Map(claims.map((d) => [Number(d.toObject().slotNo), d.getOwnerId().toString()]));
 
   if (cmd === "slots") {
-    console.log(`pool ${poolIdStr}: ${forming ? "FORMING" : "LIVE"} (${po.nodeType}), ` +
+    console.log(`pool ${poolIdStr}: ${stateLabel} (${po.nodeType}), ` +
       `${slotCount} slots of ${DASHfmt(slotDuffs)} DASH`);
     console.log(`claimed: ${claimed.size} / ${slotCount}` + (claimed.size === slotCount ? "  <- FULL" : ""));
     for (let n = 0; n < slotCount; n++) {
@@ -99,6 +114,28 @@ module.exports = async (ctx) => {
     throw new Error(`slot ${slotNo} is already claimed by ${claimed.get(slotNo)} (the ledger enforces one ` +
       "claim per slot; pick a free slot from `slots`)");
   }
+  // the distinct-owner bound (final pass, major 2): completion aggregates BY OWNER and
+  // refuses more than eight aggregates, so admission refuses the claim that would
+  // create a ninth distinct owner rather than strand it behind an uncompletable book.
+  // An existing owner taking another free slot changes nothing and stays admissible.
+  // SCOPE, stated precisely (the artifact check's point): this is a SEQUENTIAL
+  // PREFLIGHT over a read snapshot, not an atomic bound. Two racing reservers can each
+  // read seven owners and both land (the unique slot index makes them take different
+  // slots), and completion's own 1..8 aggregate check remains the enforcement that
+  // refuses the result. What this guard removes is the COMMON sequential path to a
+  // stranded book, not the concurrent one.
+  const ownersAfter = new Set([...claimed.values(), myId]).size;
+  core.requireOwnerCapacity(ownersAfter);
+  // the PRODUCT-MINIMUM preflight (pass 7, major 2): the claim that fills the book with
+  // a single owner produces a pool completion must refuse forever, so it is refused
+  // here instead. A single-owner claim with free slots left stays admissible, since the
+  // second member can still arrive; only the book-closing one is refused. Sequential
+  // preflight over a read snapshot, not atomic, exactly like the capacity check above.
+  core.requireCompletableOwnerCount({
+    distinctOwnersAfterClaim: ownersAfter,
+    bookFullAfterClaim: claimed.size + 1 === slotCount,
+    demo: process.env.FORMATION_ALLOW_UNVERIFIED === "demo",
+  });
   // the member's own reward script (v6 carries it on the claim)
   const rewardScript = rewardAddressArg
     ? Dash.Core.Script.buildPublicKeyHashOut(rewardAddressArg).toBuffer()

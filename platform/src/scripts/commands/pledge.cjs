@@ -1,6 +1,7 @@
 module.exports = async (ctx) => {
   const { client, env, args, cmd, who, whoIdKey, DASHfmt, short, Identifier, Dash, fetchAll,
-    updateEnvKey, activeContractId, activeCastId, isV3, isV5, isV6, journal, journalContract,
+    updateEnvKey, activeContractId, activeCastId, isV3, isV5, isV6,
+    hasJoinProvenance, hasMemberRewardScript, journal, journalContract,
     getPool, myShares, myRequests, isMyAccrual, myAccruals, requestExists, earnedRewardsBig,
     autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep } = ctx;
   const myId = ctx.myId;
@@ -24,7 +25,7 @@ module.exports = async (ctx) => {
       if (!poolIdStr) throw new Error(`usage: ${cmd} <poolId>${cmd === "pledge" ? " <amountDuffs> [rewardAddress]" : ""}`);
       const pool = await getPool(poolIdStr);
       const po = pool.toObject();
-      const core = require("./formationCore.cjs");
+      const core = require("../formationCore.cjs");
       // v5's lifecycle field is authoritative; the placeholder-hash convention decides
       // on the earlier ledgers
       // WHETHER THIS POOL IS OPEN. v5's lifecycle field is authoritative where it exists, and
@@ -94,11 +95,29 @@ module.exports = async (ctx) => {
         throw new Error(`pledge overfills the pool: ${DASHfmt(pledged)} of ${DASHfmt(target)} DASH already ` +
           `pledged, ${DASHfmt(target - pledged)} DASH remains`);
       }
-      // v5: the member may supply their OWN reward address, so formation never derives
-      // a script for them (the review's member-supplied-script note, closed)
+      // BOTH owner-bound preflights, the exact-fill path's form of what the slot book
+      // gets in reserve.cjs. Sequential preflights over a read snapshot, not atomic
+      // (see each helper's own scope note).
+      //   the MAXIMUM (closing wave, major; extended to this path by the pass-7 packet
+      //   wave, which found pledge had the minimum but not the maximum): a ninth
+      //   distinct owner strands the pool at completion's 1..8 aggregate check.
+      //   the MINIMUM (pass 7, major 2): the pledge that completes the fill with a
+      //   single distinct owner makes a pool completion must refuse. Partial fills by
+      //   one owner stay admissible.
+      const ownersAfterPledge = new Set([...joins.map((d) => d.getOwnerId().toString()), myId]).size;
+      core.requireOwnerCapacity(ownersAfterPledge);
+      core.requireCompletableOwnerCount({
+        distinctOwnersAfterClaim: ownersAfterPledge,
+        bookFullAfterClaim: pledged + amountBig === target,
+        demo: process.env.FORMATION_ALLOW_UNVERIFIED === "demo",
+      });
+      // the member may supply their OWN reward address, so formation never derives
+      // a script for them (the review's member-supplied-script note, closed). Gated on
+      // the field's own capability, not isV5, the same class as major 1 of the final
+      // pass one line down: rewardScript enters at v5 and is carried by v9.
       let rewardScriptField = {};
       if (rewardAddressArg) {
-        if (!isV5()) throw new Error("a member-supplied reward address needs LEDGER=v5");
+        if (!hasMemberRewardScript()) throw new Error("a member-supplied reward address needs a ledger with member reward scripts (v5 or later)");
         rewardScriptField = { rewardScript:
           Dash.Core.Script.buildPublicKeyHashOut(rewardAddressArg).toBuffer() };
       }
@@ -106,7 +125,9 @@ module.exports = async (ctx) => {
       const doc = await client.platform.documents.create("poolLedger.membershipRequest", identity, {
         poolId: pool.getId().toBuffer(), kind: "join",
         amountDuffs: journal.toSafeNumber(amountBig, "pledge amount"), status: "pending",
-        ...(isV5() ? { provenance: "pledge", ...rewardScriptField } : {}),
+        // provenance and rewardScript ride their own capabilities (final pass, major 1)
+        ...(hasJoinProvenance() ? { provenance: "pledge" } : {}),
+        ...(hasMemberRewardScript() ? rewardScriptField : {}),
       });
       await client.platform.documents.broadcast({ create: [doc] }, identity);
       const after = pledged + amountBig;

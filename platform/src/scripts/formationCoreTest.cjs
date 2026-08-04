@@ -389,5 +389,102 @@ for (const [name, thrown] of [
   ok(`verify: a throwing accessor (${name}) fails closed, not a throw`, !threw && res && !res.ok && /stopped/.test(res.reason));
 }
 
+// ---- requireCoherentSlotEconomics: the admission triangle (closing wave, major) ----
+// A schema-valid v9 pool can carry a slot book whose product matches the NODE-TYPE
+// target while its own immutable targetDuffs names the OTHER tier; admission on such a
+// pool strands the claim at completion (requireDraftMatchesPool refuses it forever), so
+// all three values must agree at admission time.
+{
+  const coherent = { nodeType: "regular", targetDuffs: 100000000000n,
+    slotDuffs: 50000000000n, slotCount: 2 };
+  let okPass = true;
+  try { core.requireCoherentSlotEconomics(coherent); } catch { okPass = false; }
+  ok("coherent v9 economics pass (product and targetDuffs both match the tier)", okPass);
+  let okNoTarget = true;
+  try { core.requireCoherentSlotEconomics({ nodeType: "regular", targetDuffs: undefined,
+    slotDuffs: 50000000000n, slotCount: 2 }); } catch { okNoTarget = false; }
+  ok("a pre-v9 pool without targetDuffs passes on the product alone", okNoTarget);
+  const threwMsg = (input) => {
+    try { core.requireCoherentSlotEconomics(input); return null; } catch (e) { return e.message; }
+  };
+  ok("a slot-book product off the tier target is refused",
+    /slot economics are inconsistent/.test(threwMsg({ ...coherent, slotCount: 3 }) || ""));
+  ok("the closing-wave shape: regular-product slot book over an evo targetDuffs is refused",
+    /targetDuffs/.test(threwMsg({ ...coherent, targetDuffs: 400000000000n }) || ""));
+  ok("an unknown node type is refused, not defaulted",
+    /unknown node type/.test(threwMsg({ ...coherent, nodeType: "mega" }) || ""));
+  ok("negative slot economics are refused even when the product matches the target",
+    /positive/.test(threwMsg({ ...coherent, slotDuffs: -50000000000n, slotCount: -2 }) || ""));
+}
+
+// ---- requireOwnerCapacity: the admission-side distinct-owner bound (final pass,
+// major 2). Predicate-table rows (playbook, predicate table for any new guard):
+// smallest valid, largest valid, valid-with-irrelevant-excess-capacity (the row the
+// table exists for: FREE SLOTS are the excess, and an EXISTING owner claiming another
+// slot must stay valid, which a guard counting CLAIMS instead of distinct owners gets
+// wrong), first invalid, two-related-limits-differ (slots vs owners), guard disabled
+// is not a row here because the bound applies wherever claims exist.
+{
+  const t = (n) => { try { core.requireOwnerCapacity(n); return null; } catch (e) { return e.message; } };
+  ok("owner capacity: the first reserver (1 distinct owner) is valid", t(1) === null);
+  ok("owner capacity: the eighth distinct owner is valid (largest valid)", t(8) === null);
+  ok("owner capacity: a ninth distinct owner is refused (first invalid)",
+    /distinct owners/.test(t(9) || ""));
+  ok("owner capacity: slots and owners are different limits (10 slots never widens 8 owners)",
+    t(10) !== null);
+  ok("owner capacity: a non-integer count is refused, not coerced", t(2.5) !== null);
+}
+
+// ---- requireTierOwnerCount: the v1 product-tier minimum (final pass, major 5).
+// Predicate-table rows: smallest valid (2, non-demo), largest valid (8), valid with
+// irrelevant excess capacity (2 owners over many slots is a caller concern, not this
+// function's), first invalid (1 non-demo), TWO-RELATED-LIMITS-DIFFER (consensus admits
+// 1..8 while the product tier is 2..8, and demo mode keeps the consensus width for
+// probes and demonstrations), guard disabled (demo mode, 1 accepted).
+{
+  const t = (n, demo) => { try { core.requireTierOwnerCount(n, { demo }); return null; } catch (e) { return e.message; } };
+  ok("tier: two distinct owners is the smallest valid non-demo completion", t(2, false) === null);
+  ok("tier: eight is valid", t(8, false) === null);
+  ok("tier: nine is refused (the guard enforces the whole 2..8 range, not only the floor)",
+    t(9, false) !== null);
+  ok("tier: nine is refused in demo mode too (demo widens the floor, never the ceiling)",
+    t(9, true) !== null);
+  ok("tier: a single-owner completion is refused outside demo mode (first invalid)",
+    /product tier|two to eight|2..8|at least 2/.test(t(1, false) || ""));
+  ok("tier: demo mode keeps the consensus width (1 accepted, the differing-limits row)",
+    t(1, true) === null);
+  ok("tier: zero owners is refused even in demo mode", t(0, true) !== null);
+}
+
+// ---- requireCompletableOwnerCount: the admission-side PRODUCT-MINIMUM preflight
+// (pass 7, major 2). The tier guard refuses a one-owner completion, so admission must
+// refuse the claim that FILLS the book with one owner, or the pool fills and then
+// cannot complete. Predicate-table rows written before the guard:
+//   smallest valid            2 owners, book full
+//   largest valid             8 owners, book full
+//   EXCESS CAPACITY (row 3)   1 owner and the book NOT full -> VALID, because more
+//                             members can still join; a guard that refuses every
+//                             single-owner claim breaks the first reservation of
+//                             every pool, which is the accepting row an author skips
+//   first invalid             1 owner, book full, non-demo
+//   two limits differ         demo mode accepts 1 owner with a full book
+//   guard disabled            demo
+{
+  const t = (owners, full, demo) => {
+    try { core.requireCompletableOwnerCount({ distinctOwnersAfterClaim: owners,
+      bookFullAfterClaim: full, demo }); return null; } catch (e) { return e.message; }
+  };
+  ok("completable: two owners filling the book is valid", t(2, true, false) === null);
+  ok("completable: eight owners filling the book is valid", t(8, true, false) === null);
+  ok("completable: ONE owner with free slots left is valid (more members may still join)",
+    t(1, false, false) === null);
+  ok("completable: one owner FILLING the book is refused outside demo (first invalid)",
+    /cannot complete|product tier|two/.test(t(1, true, false) || ""));
+  ok("completable: demo mode accepts one owner filling the book",
+    t(1, true, true) === null);
+  ok("completable: zero owners is refused (a claim always adds one)",
+    t(0, false, false) !== null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

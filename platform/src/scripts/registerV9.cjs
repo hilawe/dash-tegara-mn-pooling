@@ -1,10 +1,11 @@
 /**
- * Publish flow for the pool-ledger contract v9, a source-only DRAFT that is
- * deliberately UNPUBLISHED. The schema, the design rationale, and the adoption
- * checklist live in contractV9.cjs (the pure builder this file consumes);
- * contractV9Test.cjs pins the intended v8-to-v9 diff offline. v8 remains the live
- * ledger, nothing selects v9, and this script refuses to run without an explicit
- * confirm. The flow itself is the registerV8.cjs shape: the registration-wide op
+ * Publish flow for the pool-ledger contract v9. PUBLISHED CANONICALLY 2026-08-03
+ * (docs/V9_CANONICAL_PUBLISH_2026-08-03.md); the explicit confirm below STAYS, now
+ * guarding accidental REpublication of a version that already has a canonical id (the
+ * already-published check under the lock makes a confirmed re-run a no-op). The schema,
+ * the design rationale, and the landed adoption checklist live in contractV9.cjs (the
+ * pure builder this file consumes); contractV9Test.cjs pins the intended v8-to-v9 diff
+ * offline. The flow itself is the registerV8.cjs shape: the registration-wide op
  * lock, the durable publish-intent marker before the irreversible broadcast, and the
  * locked single-key env writes (CONTRACT_V9_PENDING / CONTRACT_V9_ID are protected
  * owned keys in envStore, same as the v8 pair, so a concurrent stale save cannot
@@ -18,13 +19,15 @@ const { loadEnv, updateEnvKey, acquireOpLock, releaseOpLock } = require("./envSt
 const { buildV9 } = require("./contractV9.cjs");
 
 (async () => {
-  // DRAFT GATE: v8 is the working ledger; publishing v9 costs a nonce and a fee and
-  // opens a namespace nothing selects. Refuse by default so the draft cannot publish
-  // by accident.
+  // PUBLISH GATE: v9 was published canonically on 2026-08-03, so on an env that carries
+  // CONTRACT_V9_ID a confirmed run is a no-op (the already-published check below). The
+  // gate stays because publishing costs a nonce and a fee and opens a NEW namespace on
+  // any env that lacks the id, and that must never happen by accident.
   if (process.env.REGISTER_V9_CONFIRM !== "1") {
-    console.error("registerV9 is a source-only DRAFT: v8 is the live ledger and no v9 publish " +
-      "occasion exists yet. Re-run with REGISTER_V9_CONFIRM=1 only when a new contract version " +
-      "is actually warranted (see contractV9.cjs for the adoption checklist).");
+    console.error("registerV9 publishes the v9 contract into THIS env's namespace, which costs a " +
+      "nonce and a fee and is not undoable. The canonical publication already exists " +
+      "(docs/V9_CANONICAL_PUBLISH_2026-08-03.md); re-run with REGISTER_V9_CONFIRM=1 only when " +
+      "this env genuinely needs its own v9 instance.");
     process.exit(1);
   }
 
