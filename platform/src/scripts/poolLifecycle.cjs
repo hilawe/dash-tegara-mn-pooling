@@ -51,7 +51,8 @@ const STATES = {
  * with the reason attached, because a classifier that throws turns a readable state into an
  * outage at the call site.
  */
-const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInFlight = false }) => {
+const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInFlight = false,
+  receiptOwnerId, poolOwnerId }) => {
   try {
     if (!pool || typeof pool !== "object") {
       return { state: STATES.UNDETERMINED, reason: "pool missing", receiptOk: false };
@@ -62,7 +63,14 @@ const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInF
     // the embedded target to the pool at all.
     let receiptOk = false, receiptReason = null;
     if (receipt) {
-      const res = checkReceiptAgainstPool({ contractId, receipt, pool, poolId });
+      // duty 6 is the CALLER'S to satisfy: this function takes plain data and cannot
+      // fetch owners, so it passes through whatever its caller supplied and declares the
+      // gap otherwise. classifyPool's own callers hold the documents (pass 10, F5).
+      const res = checkReceiptAgainstPool({ contractId, receipt, pool, poolId,
+        receiptOwnerId, poolOwnerId,
+        ...(receiptOwnerId === undefined && poolOwnerId === undefined
+          ? { ownerBindingUnavailable: "classifyPool was called with document data only; " +
+              "its caller did not supply the receipt and pool owners" } : {}) });
       receiptOk = res.ok === true;
       if (!receiptOk) receiptReason = res.reason;
     }

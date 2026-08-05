@@ -101,7 +101,8 @@ const poolFor = ({ target = REGULAR, nodeType = "regular", slotIndex = 0, book =
 
   // half two: the shared check refuses it, which is the whole point of duty 2
   refuses("round four: the shared check REFUSES it on the embedded target",
-    checkReceiptAgainstPool({ contractId: GC, receipt: rogue, pool: realPool, poolId: GP }),
+    checkReceiptAgainstPool({ contractId: GC, receipt: rogue, pool: realPool, poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
     /embedded target 400000000000 contradicts pool targetDuffs 100000000000/);
 }
 
@@ -111,7 +112,8 @@ const poolFor = ({ target = REGULAR, nodeType = "regular", slotIndex = 0, book =
 {
   const m = manifest();
   const r = checkReceiptAgainstPool({
-    contractId: GC, receipt: receiptFor(m), pool: poolFor(), poolId: GP });
+    contractId: GC, receipt: receiptFor(m), pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a matching receipt and pool pass", r.ok === true);
   ok("and the embedded allocation comes back for the caller", r.ok && r.embedded.participantCount === 3);
 }
@@ -119,14 +121,16 @@ const poolFor = ({ target = REGULAR, nodeType = "regular", slotIndex = 0, book =
   // with a slot book whose product equals the target
   const r = checkReceiptAgainstPool({
     contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
-    pool: poolFor({ book: [25000000000, 4] }) });
+    pool: poolFor({ book: [25000000000, 4] }),
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a consistent slot book passes", r.ok === true);
 }
 {
   // an evo pool, to prove the nodeType target is read rather than assumed
   const r = checkReceiptAgainstPool({
     contractId: GC, receipt: receiptFor(manifest(EVO)), poolId: GP,
-    pool: poolFor({ target: EVO, nodeType: "evo" }) });
+    pool: poolFor({ target: EVO, nodeType: "evo" }),
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("an evo pool passes at its own target", r.ok === true);
 }
 {
@@ -137,13 +141,15 @@ const poolFor = ({ target = REGULAR, nodeType = "regular", slotIndex = 0, book =
   // caught the classifier reading every completed pool as non-verifying.
   const idObject = { toBuffer: () => core.toId32(GP), toString: () => GP };
   const r = checkReceiptAgainstPool({
-    contractId: GC, receipt: receiptFor(manifest()), pool: poolFor(), poolId: idObject });
+    contractId: GC, receipt: receiptFor(manifest()), pool: poolFor(), poolId: idObject,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a matching pair passes when poolId is an SDK-style id object", r.ok === true);
   // and the identity precondition still refuses a WRONG pool given in the same shape
   const wrongIdObject = { toBuffer: () => core.toId32(OTHER_POOL), toString: () => OTHER_POOL };
   refuses("an id object naming a different pool is still refused",
     checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), pool: poolFor(),
-      poolId: wrongIdObject }),
+      poolId: wrongIdObject,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
     /not the pool this receipt names/);
 }
 
@@ -152,19 +158,23 @@ const poolFor = ({ target = REGULAR, nodeType = "regular", slotIndex = 0, book =
 // ---------------------------------------------------------------------------
 refuses("a pool whose target is not its nodeType's target is refused",
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest(EVO)), poolId: GP,
-    pool: poolFor({ target: EVO, nodeType: "regular" }) }),
+    pool: poolFor({ target: EVO, nodeType: "regular" }),
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
   /is not the regular target/);
 refuses("an unknown nodeType is refused",
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
-    pool: { ...poolFor(), nodeType: "gold" } }),
+    pool: { ...poolFor(), nodeType: "gold" },
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
   /is not regular or evo/);
 refuses("a slot book that does not multiply to the target is refused",
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
-    pool: poolFor({ book: [25000000000, 3] }) }),
+    pool: poolFor({ book: [25000000000, 3] }),
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
   /does not equal targetDuffs/);
 refuses("a one-sided slot book is refused",
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
-    pool: { ...poolFor(), slotDuffs: 25000000000 } }),
+    pool: { ...poolFor(), slotDuffs: 25000000000 },
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
   /one-sided slot book/);
 
 // ---------------------------------------------------------------------------
@@ -172,15 +182,18 @@ refuses("a one-sided slot book is refused",
 // ---------------------------------------------------------------------------
 refuses("a receipt whose slotIndex differs from the pool's is refused",
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest(), { slotIndex: 3 }),
-    pool: poolFor({ slotIndex: 1 }), poolId: GP }),
+    pool: poolFor({ slotIndex: 1 }), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
   /slotIndex 3 does not match pool slotIndex 1/);
 refuses("a receipt checked against the WRONG pool is refused before any comparison",
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()),
-    pool: poolFor(), poolId: OTHER_POOL }),
+    pool: poolFor(), poolId: OTHER_POOL,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
   /not the pool this receipt names/);
 refuses("a receipt bound to another contract is refused",
   checkReceiptAgainstPool({ contractId: OTHER_POOL, receipt: receiptFor(manifest()),
-    pool: poolFor(), poolId: GP }),
+    pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }),
   /allocation: /);
 
 // ---------------------------------------------------------------------------
@@ -220,22 +233,26 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
 
   ok("v8: a receipt carrying its own target passes against a pool that has none",
     withLedger("v8", () => checkReceiptAgainstPool({
-      contractId: GC, receipt: unpared(manifest()), pool: v8pool, poolId: GP })).ok === true);
+      contractId: GC, receipt: unpared(manifest()), pool: v8pool, poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" })).ok === true);
 
   refuses("v8: a receipt target that is not the nodeType's target is refused",
     withLedger("v8", () => checkReceiptAgainstPool({
-      contractId: GC, receipt: unpared(manifest(EVO)), pool: v8pool, poolId: GP })),
+      contractId: GC, receipt: unpared(manifest(EVO)), pool: v8pool, poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" })),
     /receipt targetDuffs 400000000000 is not the regular target/);
 
   refuses("v8: a receipt nodeType contradicting the pool is refused",
     withLedger("v8", () => checkReceiptAgainstPool({
-      contractId: GC, receipt: unpared(manifest(), { nodeType: "evo" }), pool: v8pool, poolId: GP })),
+      contractId: GC, receipt: unpared(manifest(), { nodeType: "evo" }), pool: v8pool, poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" })),
     /receipt nodeType "evo" contradicts pool "regular"/);
 
   // and the pared shape is refused on v8, since its target is nowhere to be found
   refuses("v8: a PARED receipt has no target to check and is refused",
     withLedger("v8", () => checkReceiptAgainstPool({
-      contractId: GC, receipt: receiptFor(manifest()), pool: v8pool, poolId: GP })),
+      contractId: GC, receipt: receiptFor(manifest()), pool: v8pool, poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" })),
     /receipt targetDuffs is not a duff amount/);
 }
 
@@ -322,9 +339,11 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   // assertions), so the difference itself is asserted first
   ok("the fixture produces two genuinely different poolId representations",
     Buffer.isBuffer(bufReceipt.poolId) && typeof strReceipt.poolId === "string");
-  const asBuffer = checkReceiptAgainstPool({ contractId: GC, receipt: bufReceipt, pool: poolFor(), poolId: GP });
+  const asBuffer = checkReceiptAgainstPool({ contractId: GC, receipt: bufReceipt, pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   const asString = checkReceiptAgainstPool({ contractId: GC, receipt: strReceipt,
-    pool: poolFor(), poolId: GP });
+    pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a Buffer poolId verifies (the type the SDK and the writer use)", asBuffer.ok === true);
   ok("a base58-string poolId verifies identically (toId32 is the coercion point)",
     asString.ok === true);
@@ -341,18 +360,55 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   const real = Buffer.alloc(32, 0xab);
   const withHash = (h) => ({ ...receiptFor(m), proTxHash: h });
   const r = checkReceiptAgainstPool({ contractId: GC, receipt: withHash(forming),
-    pool: poolFor(), poolId: GP });
+    pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a soundness-review finding: a receipt naming the reserved forming namespace is REFUSED by the shared check",
     r.ok === false && /forming/i.test(r.reason || ""));
   const good = checkReceiptAgainstPool({ contractId: GC, receipt: withHash(real),
-    pool: poolFor(), poolId: GP });
+    pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a soundness-review finding: a real node hash still verifies", good.ok === true);
   const missing = checkReceiptAgainstPool({ contractId: GC,
-    receipt: { ...receiptFor(m), proTxHash: undefined }, pool: poolFor(), poolId: GP });
+    receipt: { ...receiptFor(m), proTxHash: undefined }, pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a soundness-review finding: a receipt with no proTxHash is refused", missing.ok === false);
   const short = checkReceiptAgainstPool({ contractId: GC, receipt: withHash(Buffer.alloc(31, 1)),
-    pool: poolFor(), poolId: GP });
+    pool: poolFor(), poolId: GP,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" });
   ok("a soundness-review finding: a proTxHash of the wrong length is refused", short.ok === false);
+}
+
+// duty 6, the OWNER BINDING (pass 9, major 3). Optional by parameter, because callers
+// that hold only document data cannot supply owners; supplying ONE is a caller defect.
+{
+  const m = manifest();
+  const base = { contractId: GC, receipt: receiptFor(m), pool: poolFor(), poolId: GP };
+  ok("matching owners bind", checkReceiptAgainstPool({ ...base, receiptOwnerId: OA, poolOwnerId: OA }).ok === true);
+  const mismatch = checkReceiptAgainstPool({ ...base, receiptOwnerId: OA, poolOwnerId: OB });
+  ok("a receipt owned by someone other than the pool's operator is refused", mismatch.ok === false);
+  ok("the refusal names both owners", /owned by/.test(mismatch.reason || ""));
+  ok("supplying only the receipt owner is refused as a caller defect",
+    checkReceiptAgainstPool({ ...base, receiptOwnerId: OA }).ok === false);
+  ok("supplying only the pool owner is refused as a caller defect",
+    checkReceiptAgainstPool({ ...base, poolOwnerId: OA,
+    ownerBindingUnavailable: "offline suite exercising a duty other than the owner binding" }).ok === false);
+  // duty 6 FAILS CLOSED (pass 10, F5): supplying neither id is now a refusal, not a
+  // silent pass, unless the caller DECLARES it cannot bind and says why
+  const silent = checkReceiptAgainstPool(base);
+  ok("supplying NEITHER id is refused, never a silent pass", silent.ok === false);
+  ok("the refusal names the fail-closed duty", /fails closed/.test(silent.reason || ""));
+  const declaredOk = checkReceiptAgainstPool({ ...base,
+    ownerBindingUnavailable: "this caller holds pool data only" });
+  ok("an explicit declaration proceeds", declaredOk.ok === true);
+  ok("...and REPORTS that the binding was not checked",
+    declaredOk.ownerBindingChecked === false);
+  ok("a real binding reports that it WAS checked",
+    checkReceiptAgainstPool({ ...base, receiptOwnerId: OA, poolOwnerId: OA }).ownerBindingChecked === true);
+  ok("declaring AND supplying is a caller defect, not a preference",
+    checkReceiptAgainstPool({ ...base, receiptOwnerId: OA, poolOwnerId: OA,
+      ownerBindingUnavailable: "x" }).ok === false);
+  ok("an empty declaration string does not count as a declaration",
+    checkReceiptAgainstPool({ ...base, ownerBindingUnavailable: "" }).ok === false);
 }
 
 console.log(`receiptPoolCheckTest: ${pass} passed, ${fail} failed`);

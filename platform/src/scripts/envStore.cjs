@@ -542,10 +542,42 @@ const ledgerVersion = () => process.env.LEDGER || "v1";
 // an unsupported nonempty selector is a configuration typo, never a silent fallback to
 // the v1 namespace (independent-review finding). Shared so every caller gets the same
 // protection and the message cannot drift between copies.
+// THE RELEASE PROFILE, and it FAILS CLOSED (pass 10, F4). The profile documents the v1
+// direct co-owner tier with ledger v9 operative, and retail (v10), the v8 interface and
+// the research probes OUTSIDE the boundary. That was DOCUMENTATION ONLY: with LEDGER
+// unset the selector silently chose v1, and v8 was accepted, so the boundary could be
+// crossed by configuration accident rather than by decision. Under
+// TEGARA_PROFILE=release the selector must name an operative ledger explicitly.
+// The default (unset) profile is UNCHANGED, because the development and research flows
+// legitimately drive every version; the gate exists so a release context can assert its
+// own boundary rather than trusting that nobody exported the wrong variable.
+const PROFILES = { release: { operative: ["v9"] } };
+const assertProfile = () => {
+  const name = process.env.TEGARA_PROFILE;
+  if (name === undefined || name === "") return;
+  const profile = PROFILES[name];
+  if (!profile) {
+    throw new Error(`unknown TEGARA_PROFILE "${name}" (known: ${Object.keys(PROFILES).join(", ")}); ` +
+      "refusing rather than treating an unrecognized profile as permissive");
+  }
+  const sel = process.env.LEDGER;
+  if (!sel) {
+    throw new Error(`the ${name} profile requires LEDGER to name an operative ledger ` +
+      `(${profile.operative.join(", ")}) explicitly; an unset selector would silently ` +
+      "resolve to v1, which is outside this profile's boundary");
+  }
+  if (!profile.operative.includes(sel)) {
+    throw new Error(`LEDGER=${sel} is outside the ${name} profile's boundary ` +
+      `(operative: ${profile.operative.join(", ")}); retail, the earlier interfaces and ` +
+      "the research probes are deliberately not reachable under this profile");
+  }
+};
+
 const assertSupportedLedger = () => {
   if (process.env.LEDGER && !SUPPORTED_LEDGERS.includes(process.env.LEDGER)) {
     throw new Error(`unsupported LEDGER value "${process.env.LEDGER}" (use ${SUPPORTED_LEDGERS.join(", ")})`);
   }
+  assertProfile();
 };
 
 const activeContractId = (env) => {
@@ -612,7 +644,7 @@ const isCastV3 = () => process.env.CAST === "v3";
 module.exports = { ENV_PATH, STATE_DIR, loadEnv, saveEnv, updateEnvKey, reserveAddrIndex, lockEnv, unlockEnv,
   acquireOpLock, releaseOpLock,
   adoptStateDir, activeContractId, isV3, isV4, isV5, isV6, isV7, isV8, activeCastId, isCastV3,
-  LEDGER_VERSIONS, SUPPORTED_LEDGERS, ledgerVersion, assertSupportedLedger, ledgerCap,
+  LEDGER_VERSIONS, SUPPORTED_LEDGERS, ledgerVersion, assertSupportedLedger, assertProfile, PROFILES, ledgerCap,
   hasReconstructibleAccruals, hasAccrualKindInKey, hasPoolStatus, hasPledgeSlot, hasSlotBook,
   hasCompletionReceipt, hasImmutablePool, hasParedReceipt, hasDelegateTarget,
   hasJoinProvenance, hasMemberRewardScript, ledgerIsExactly };

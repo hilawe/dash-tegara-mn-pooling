@@ -106,6 +106,36 @@ module.exports = async (ctx) => {
     console.log("proceeding on the operator's advertised participate instruction " +
       "(the ledger cannot confirm this pool is still open; the instruction is your evidence)");
   }
+  // THE POOL'S OWNER MUST BE THE CONTRACT OPERATOR (pass 9, major 2), the same
+  // admit-what-completion-refuses shape as the economics triangle and the owner bounds.
+  // Completion applies this binding before it even reads the manifest, so a claim
+  // against a foreign-owned pool is stranded from the moment it is made. On the
+  // immutable ledger pool creation is owner-only AT CONSENSUS, so the property holds by
+  // construction and the fetch is skipped; on v8 pool creation is unrestricted and the
+  // check has to be made here. IT FAILS CLOSED (artifact check): an earlier draft
+  // proceeded when the contract read failed, so as not to block a member on an unrelated
+  // outage, but admitting an UNVERIFIED claim is exactly what this guard exists to
+  // prevent and the design's admission rule is fail-closed throughout. An unreadable
+  // contract means the binding is unknown, and unknown is refused with the reason named.
+  if (!hasImmutablePool()) {
+    let contractOwner;
+    try {
+      contractOwner = (await client.platform.contracts.get(activeContractId(env)))
+        .getOwnerId().toString();
+    } catch (e) {
+      throw new Error("the contract's owner could not be read " +
+        `(${(e && e.message) || e}), so this pool's operator binding cannot be checked. ` +
+        "Completion refuses a pool the operator does not own, so admitting an unverified " +
+        "claim here risks stranding it; refusing instead. Retry when the platform read " +
+        "is healthy.");
+    }
+    const poolOwner = pool.getOwnerId().toString();
+    if (poolOwner !== contractOwner) {
+      throw new Error(`pool ${poolIdStr} is owned by ${poolOwner}, not the contract operator ` +
+        `(${contractOwner}); completion refuses a pool the operator does not own, so a claim ` +
+        "here could never complete. Do not reserve on this pool.");
+    }
+  }
   const slotNo = parseInt(slotArg, 10);
   if (!Number.isInteger(slotNo) || slotNo < 0 || slotNo >= slotCount) {
     throw new Error(`slot must be 0..${slotCount - 1}`);

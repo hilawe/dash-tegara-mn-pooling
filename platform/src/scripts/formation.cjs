@@ -556,6 +556,31 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     const receiptDraftKeyOf = (poolIdStr) =>
       "RECEIPT_DRAFT_" + journal.suffixFor(activeContractId(env), poolIdStr);
 
+    // ONE CLASSIFICATION FOR A STORED DRAFT VALUE, shared by the live key and the abandon
+    // archive (pass 10, F1). The archive path already had this; the LIVE key still used a
+    // truthiness read, so a stored value parsing to null/false/0 was taken for ABSENCE and
+    // recovery quietly dropped to the weaker manifest-only comparison, losing the exact
+    // l1Verification evidence. The writer only ever stores a draft OBJECT, so anything
+    // else is damage. Unrecognized shapes are damage BY DEFAULT rather than by
+    // enumeration, which is the lesson the archive fix already paid for.
+    const classifyStoredDraft = (raw) => {
+      if (raw === undefined) return { state: "absent", value: null };
+      // an empty string needs no clause of its own: JSON.parse("") throws and lands in
+      // the damaged arm below. A redundant guard here would be unobservable, which is a
+      // thing this round has learned to stop writing.
+      if (typeof raw !== "string") return { state: "damaged", value: null };
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { return { state: "damaged", value: null }; }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { state: "damaged", value: null };
+      }
+      return { state: "present", value: parsed };
+    };
+    const DRAFT_DAMAGED = "the frozen receipt draft is DAMAGED (it is present but does not " +
+      "parse to a draft object). It is NOT treated as absent, because the weaker " +
+      "manifest-only comparison cannot check l1Verification; restore its .val.prev " +
+      "generation in .env.local.state/ and re-run, or resolve by hand.";
+
     // The strong-idempotence receipt write (spec C-A, the matcher.cjs pattern, never a
     // bare query-then-create): driven entirely from the FROZEN DRAFT. Query first; if a
     // receipt exists, verify its owner and EVERY field against the draft byte-exactly
@@ -802,10 +827,18 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // item 9), so the binding routes through the SHARED five-duty check instead, which is
     // stronger on the fields that do exist: it also pins the receipt's embedded target to
     // the pool, which the v8 binding never did.
-    const requireReceiptBindsPool = (receiptObj, poolObj, poolIdStr) => {
+    const requireReceiptBindsPool = (receiptObj, poolObj, poolIdStr, owners = null) => {
       if (hasImmutablePool()) {
         const res = checkReceiptAgainstPool({ contractId: activeContractId(env),
-          receipt: receiptObj, pool: poolObj, poolId: poolIdStr });
+          receipt: receiptObj, pool: poolObj, poolId: poolIdStr,
+          // duty 6 fails closed (pass 10, F5), so this helper either forwards the owners
+          // its caller holds or declares the gap. On v9 both document types are
+          // owner-only at consensus, which is why completion's own M1 binding already
+          // covers this path, but the check is told rather than assumed.
+          ...(owners
+            ? { receiptOwnerId: owners.receiptOwnerId, poolOwnerId: owners.poolOwnerId }
+            : { ownerBindingUnavailable: "completion holds pool and receipt DATA at this " +
+                "point; the operator binding is enforced separately by requirePoolOwnedByOperator" }) });
         if (!res.ok) {
           throw new Error(`the on-ledger receipt does not verify against the current pool ` +
             `(${res.reason}). Refusing; local state is kept, resolve by hand.`);
@@ -1341,10 +1374,10 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         const draftKey = receiptDraftKeyOf(poolIdStr);
         const rowsBuf = core.allocationPreimage(activeContractId(env), manifest);
         const rawDraft = loadEnv()[draftKey];
-        if (rawDraft !== undefined) {
-          try { receiptDraft = JSON.parse(rawDraft); } catch {
-            throw new Error("the frozen receipt draft is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated against the manifest and pool before use)");
-          }
+        const liveDraft = classifyStoredDraft(rawDraft);
+        if (liveDraft.state === "damaged") throw new Error(DRAFT_DAMAGED);
+        if (liveDraft.state === "present") {
+          receiptDraft = liveDraft.value;
           // FULL fail-closed validation, not just the rows check (review major): a
           // parseable-but-damaged draft drives an immutable write, so every field is
           // validated and cross-checked against the frozen manifest before use
@@ -1674,11 +1707,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const envNow = loadEnv();
       let draft = null;
       let draftFromArchive = false;
-      if (envNow[draftKey] !== undefined) {
-        try { draft = JSON.parse(envNow[draftKey]); } catch {
-          throw new Error("the frozen receipt draft is corrupt; restore its .val.prev generation in .env.local.state/ (a restored generation is re-validated against the manifest and pool before use)");
-        }
-      }
+      const liveDraft = classifyStoredDraft(envNow[draftKey]);
+      if (liveDraft.state === "damaged") throw new Error(DRAFT_DAMAGED);
+      if (liveDraft.state === "present") draft = liveDraft.value;
       // the on-ledger receipt is fetched BEFORE the manifest-source selection, because on
       // an immutable-pool ledger the archive filter below needs it
       const existing = (await client.platform.documents.get("poolLedger.completionReceipt", {
@@ -1701,7 +1732,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const abandonedKey = "FORMATION_ABANDONED_" + journal.suffixFor(activeContractId(env), poolIdStr);
       let abandonedManifest;
       let abandonedDraft;
-      let archiveHadDraft = false;
+      // "unknown" (no archive read), "none" (archive says there was no draft),
+      // "present" (parsed), "damaged" (anything else, including a missing key)
+      let draftState = "unknown";
       if (envNow[abandonedKey] !== undefined) {
         try {
           const archive = JSON.parse(envNow[abandonedKey]);
@@ -1722,19 +1755,31 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           // independent local source" while that source sat unread in the same archive.
           // A late receipt attesting a WEAKER verification level than the abandoned run
           // had frozen would have been accepted and finalized, and the archive holding
-          // the contradiction cleared. The draft is restored here whenever the archive's
-          // manifest was accepted above, so the exact comparison runs instead.
-          // presence is tested EXPLICITLY, never by truthiness (closing-pass
-          // confirmation): an empty-string draft is damage, and a falsy test
-          // would read it as no draft at all and take the fallback
-          if (abandonedManifest && archive.draft !== undefined && archive.draft !== null) {
-            archiveHadDraft = true;
-            // an UNPARSEABLE draft is damage too (closing-pass confirmation): swallowing
-            // the parse error to `undefined` would slip past the refusal below and land
-            // in manifest-only recovery, which is the very fallback that refusal exists
-            // to prevent. archiveHadDraft records that a draft WAS archived, whether or
-            // not its bytes survived.
-            try { abandonedDraft = JSON.parse(archive.draft); } catch { abandonedDraft = undefined; }
+          // the contradiction cleared.
+          //
+          // ONE EXPLICIT CLASSIFICATION, not a chain of negations. Four review passes
+          // each found another value that slipped through an accumulating `!==` test
+          // (unparseable, empty string, absent property), which is what a growing list
+          // of exclusions does: it enumerates the damage shapes someone thought of. The
+          // ARCHIVE WRITER ALWAYS EMITS THE `draft` KEY, using null when no draft
+          // existed, so the key's own absence is damage and is distinguishable from a
+          // recorded "there was none". Everything not explicitly recognized is damage.
+          if (abandonedManifest) {
+            if (!Object.prototype.hasOwnProperty.call(archive, "draft")) {
+              draftState = "damaged";   // the writer always emits this key
+            } else if (archive.draft === null) {
+              draftState = "none";      // recorded: no draft existed at abandon time
+            } else {
+              // the same classifier the live key uses for the STORED-VALUE shapes. The
+              // archive keeps its own handling for the case the live key does not have,
+              // an explicit null meaning "no draft was archived", and remaps the
+              // helper's absent result to damaged because the archive writer always
+              // emits the key. The shared part is the shape classification, not the
+              // whole decision (artifact check: the earlier comment claimed more).
+              const c = classifyStoredDraft(archive.draft);
+              draftState = c.state === "absent" ? "damaged" : c.state;
+              abandonedDraft = c.value || undefined;
+            }
           }
         } catch { abandonedManifest = undefined; abandonedDraft = undefined; }
       }
@@ -1763,12 +1808,13 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // l1Verification hole a soundness-review finding closed, and finalizing would then CLEAR the archive
       // holding the damaged bytes. Refusing preserves both the archive and its .val.prev
       // generation for hands.
-      if (!draft && archiveHadDraft && !abandonedDraft) {
-        throw new Error("the ARCHIVED receipt draft is present but its bytes do not parse. " +
-          "This pool's abandon archive says an exact draft existed, so the weaker " +
-          "manifest-only comparison must NOT be used in its place (it cannot check " +
-          "l1Verification). Refusing and keeping the archive; restore its .val.prev " +
-          "generation in .env.local.state/ and re-run, or resolve by hand.");
+      if (!draft && draftState === "damaged") {
+        throw new Error("the ARCHIVED receipt draft is DAMAGED (its key is missing, empty, or " +
+          "does not parse). This pool's abandon archive is not in a state that records " +
+          "either an exact draft or an honest absence, so the weaker manifest-only " +
+          "comparison must NOT be used in its place (it cannot check l1Verification). " +
+          "Refusing and keeping the archive; restore its .val.prev generation in " +
+          ".env.local.state/ and re-run, or resolve by hand.");
       }
       if (!draft && abandonedDraft) {
         try {
@@ -1854,7 +1900,10 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         // only thing pinning the embedded target to anything (phase B, round-4 finding).
         const check = hasParedReceipt()
           ? checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: o,
-            pool: poolNow, poolId: poolIdStr })
+            pool: poolNow, poolId: poolIdStr,
+            // both documents are in hand here, so duty 6 is genuinely checked
+            receiptOwnerId: existing.getOwnerId().toString(),
+            poolOwnerId: pool.getOwnerId().toString() })
           : core.verifyReceiptAllocation(activeContractId(env), {
             allocationRows: Buffer.from(o.allocationRows),
             allocationHash: Buffer.from(o.allocationHash),
