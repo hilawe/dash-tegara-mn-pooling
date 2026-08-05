@@ -74,7 +74,10 @@ const loadObservations = () => {
         if (rd) {
           auditReceipt = rd.toObject();
           auditReceiptOk = checkReceiptAgainstPool({ contractId: activeContractId(env),
-            receipt: auditReceipt, pool: p, poolId }).ok === true;
+            receipt: auditReceipt, pool: p, poolId,
+            // the audit holds both documents, so duty 6 is checked here
+            receiptOwnerId: rd.getOwnerId().toString(),
+            poolOwnerId: pool.getOwnerId().toString() }).ok === true;
         }
       }
       // THE NODE COLUMN MUST NOT SILENTLY EMPTY. On v9 the pool names no node, and only a

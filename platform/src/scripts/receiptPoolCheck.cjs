@@ -75,11 +75,47 @@ const toDuffs = (v) => {
  * receipt must be bound to.
  * Returns { ok: true, embedded: {...} } or { ok: false, reason }.
  */
-const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId }) => {
+const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
+  receiptOwnerId, poolOwnerId, ownerBindingUnavailable }) => {
   const bad = (reason) => ({ ok: false, reason });
   try {
     if (!receipt || typeof receipt !== "object") return bad("receipt missing");
     if (!pool || typeof pool !== "object") return bad("pool missing");
+
+    // ---- duty 6, OWNER BINDING, and it FAILS CLOSED ----
+    // The spec states that owner binding establishes the pool's OWN operator recorded
+    // the receipt. On v8 pool creation is unrestricted, so a receipt written by the
+    // contract owner against a pool owned by someone else satisfies every other duty
+    // while the reference writer and the strict reader both refuse it.
+    //
+    // THE PARAMETERS WERE OPTIONAL AND THAT WAS THE DEFECT (pass 10, F5 root cause).
+    // With BOTH ids absent, the mismatch guard and the exactly-one guard both passed and
+    // the check returned ok having verified nothing, so the binding silently did not
+    // happen. A static test that grepped the callers' SOURCE for the argument names was
+    // written as the compensating control, which is a fake control: deleting the real
+    // arguments and leaving the words in a comment kept it green. The fix is here, not
+    // in the test. A caller must now either SUPPLY BOTH ids or DECLARE, with a reason,
+    // that it cannot, and the declaration is reported back in the result so a consumer
+    // can tell a checked binding from an unchecked one rather than assuming.
+    const declared = typeof ownerBindingUnavailable === "string" && ownerBindingUnavailable.length > 0;
+    const haveBoth = receiptOwnerId !== undefined && poolOwnerId !== undefined;
+    if ((receiptOwnerId === undefined) !== (poolOwnerId === undefined)) {
+      return bad("owner binding was requested with only one of the two owners supplied");
+    }
+    if (!haveBoth && !declared) {
+      return bad("owner binding was neither performed nor declared unavailable: supply both " +
+        "receiptOwnerId and poolOwnerId, or pass ownerBindingUnavailable with the reason " +
+        "this caller cannot (duty 6 fails closed)");
+    }
+    if (haveBoth && declared) {
+      return bad("owner binding was both supplied and declared unavailable; the caller " +
+        "cannot mean both");
+    }
+    if (haveBoth && String(receiptOwnerId) !== String(poolOwnerId)) {
+      return bad(`the receipt is owned by ${receiptOwnerId} but the pool by ${poolOwnerId}; ` +
+        "a receipt not written by the pool's own operator does not bind to it");
+    }
+    const ownerBindingChecked = haveBoth;
 
     // ---- duty 1, deferred to the owner of the preimage format ----
     const alloc = core.verifyReceiptAllocation(contractId, receipt);
@@ -164,7 +200,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId }) => {
       return bad(`receipt slotIndex ${receipt.slotIndex} does not match pool slotIndex ${pool.slotIndex}`);
     }
 
-    return { ok: true, embedded: alloc };
+    return { ok: true, embedded: alloc, ownerBindingChecked };
   } catch {
     // a CONSTANT reason: interpolating the caught value could itself throw
     return { ok: false, reason: "the receipt-to-pool check stopped on malformed input" };
@@ -220,7 +256,11 @@ const checkReceiptsAgainstPools = async ({ contractId, receipts, fetchPoolsByIds
     if (!id) return { ok: false, reason: "receipt poolId is not a 32-byte id" };
     const hit = byId.get(id.toString("hex"));
     if (!hit) return { ok: false, reason: "no pool found for this receipt" };
-    return checkReceiptAgainstPool({ contractId, receipt, pool: hit.obj, poolId: hit.poolId });
+    return checkReceiptAgainstPool({ contractId, receipt, pool: hit.obj, poolId: hit.poolId,
+      // the batched form takes injected POOL DATA, not documents, so it cannot perform
+      // duty 6 and says so rather than passing silently; a caller needing the binding
+      // uses the single-receipt form with both owners (pass 10, F5)
+      ownerBindingUnavailable: "batched check receives pool data without document owners" });
   });
 };
 
@@ -262,7 +302,8 @@ const resolveNodeToPools = async ({ contractId, nodeHash, slotIndex, fetchReceip
     }
     const obj = (typeof poolDoc.toObject === "function") ? poolDoc.toObject() : poolDoc;
     const pid = (typeof poolDoc.getId === "function") ? poolDoc.getId() : obj.$id;
-    const verdict = checkReceiptAgainstPool({ contractId, receipt: ro, pool: obj, poolId: pid });
+    const verdict = checkReceiptAgainstPool({ contractId, receipt: ro, pool: obj, poolId: pid,
+      ownerBindingUnavailable: "node resolution receives pool data without document owners" });
     if (!verdict.ok) {
       return { ok: false, reason: `a completion receipt does not verify against its pool (${verdict.reason})` };
     }

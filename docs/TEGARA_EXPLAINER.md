@@ -133,7 +133,7 @@ change cannot be caught mid-change.
 ## What proves a pool completed
 
 Receipt existence alone proves nothing, and the design treats that as a rule rather than
-a nuance. A receipt counts only when it verifies against its pool, four checks in one
+a nuance. A receipt counts only when it verifies against its pool, five checks in one
 shared routine used by every reader.
 
 ```
@@ -149,7 +149,19 @@ shared routine used by every reader.
                             |  with node type) |      target T
                             +------------------+   4. the claimed slot
                                                       matches the pool's
+                                                   5. the named node is a
+                                                      real node identifier,
+                                                      not a placeholder
 ```
+
+The fifth check was added in August 2026 after an independent review found it missing.
+While a pool is still forming its record carries a placeholder in place of a real node
+identifier, and the writing side always refused to put such a placeholder on a receipt.
+The reading side never checked, so a receipt naming a placeholder passed the other four
+checks and would have been read as a completed pool backed by a node that does not exist.
+The rule now lives in the shared routine and in every document that states the routine's
+duties, because a rule enforced only by the writer is not a rule an independent
+implementation can discover.
 
 A receipt that fails any of these establishes nothing, and no reader treats it as merely
 absent either. It is surfaced as a contradiction for a person to resolve. This came out
@@ -209,7 +221,7 @@ listed separately.
 that halts the process at every single mutating step, then restarts it, hundreds of
 boundaries per run. At every boundary the books either resume to exactly the same receipt
 or stop loudly with the recovery evidence intact. Both the current live ledger revision
-and v9 run this way on every test run, roughly 1,200 and 1,080 checks respectively, so a
+and v9 run this way on every test run, roughly 1,370 and 1,220 checks respectively, so a
 regression on either fails the build. The same suite verifies that the simulated ledger
 refuses what the real one refuses, so passing against a lenient simulation does not
 count.
@@ -238,6 +250,41 @@ Each verification level is recorded on the receipt itself:
 | `node-existence-only` | The named node exists on the blockchain. Amounts unchecked. |
 | `amount-reward-verified` | The node exists, is genuinely shared, and its share table matches the frozen member list, amount and reward destination pairwise. Share owner keys and refund destinations are outside the frozen list and stay unverified, a recorded residual. |
 
+## What a long review round changed, and what it says about the method
+
+Between late July and early August 2026 the assembled design went through ten independent
+review passes and two rounds of packet review by three different model families, on top of
+the earlier per-component rounds. That is worth describing plainly, because the shape of
+what it found matters more than the count.
+
+Roughly forty defects were found and fixed. Almost none were in the cryptographic or
+consensus reasoning, which had already been through its own rounds. They clustered in
+three ordinary places instead. Some were rules the code enforced but no document stated,
+so an independent implementation reading the specification would have behaved differently
+from the reference: the placeholder-node check above is exactly that. Some were guards
+that admitted a member to a pool the completion path would later refuse, stranding the
+claim rather than losing money. And several were tests that passed while watching
+something other than the property they were named for.
+
+That last category is the one worth generalising. A test can observe a proxy: it fails
+when the code is broken in the way its author imagined, and passes when the property is
+destroyed some other way. This project found several such tests by deliberately breaking
+the code and checking that the test noticed, and found others only when a reviewer with
+no investment in the code read them. One control had to be deleted outright, because it
+searched the source text for the name of an argument rather than observing what the
+program did, so removing the argument and leaving the word in a comment kept it green.
+
+The review passes also stopped converging at one point, and the reason was instructive:
+each pass was largely finding defects introduced by the previous pass's repairs. Fixing
+quickly, in a long unbroken sitting, was manufacturing the next round of findings. The
+work was deliberately paused on that basis rather than continued to a clean verdict, and
+the later passes were run against a frozen copy of the code so the reviewer saw a fixed
+target. Both of those are recorded in the project's own process notes as findings about
+the method, not about the design.
+
+None of this is a claim that the design is now correct. It is a description of what the
+review actually did and where it kept pointing.
+
 ## What it cannot do yet
 
 - The collateral-sharing covenant is not part of the public Dash network. It is an open
@@ -259,6 +306,13 @@ Each verification level is recorded on the receipt itself:
   disappears, but that is the production design, not the demonstrated state.
 - A member who pools through a smaller sub-group inside a pool relies on that sub-group's
   own arrangement for the inner split, not on the blockchain.
+- Two members reserving the last places in a pool at the same instant can between them
+  produce a pool the completion path will refuse, because the client checks a snapshot of
+  who has already reserved and the accounting layer only guarantees that no two members
+  take the same place. Nothing is lost when it happens, since completion refuses and the
+  places can be released, but the guard is a courtesy check rather than a guarantee, and
+  saying otherwise would overstate it. Closing it properly needs either a rule at the
+  network level or an operator who serialises admissions, and that choice is open.
 
 ## Future directions
 
@@ -293,12 +347,23 @@ with its own protections.
 
 ## Status
 
-Tegara is a reference implementation, not a shipped product. The accounting layer runs
-live on a local Dash network, the v9 ledger is published there and probed at consensus,
-and two full formation rounds have run end to end, one of them verified against a real
-shared registration on the covenant's test build. The code is open source under the MIT
-license, with the failure-injection suites running on both ledger revisions in every
-build. What a careful reader should still hold it to is unchanged in kind, a real
+Tegara is a reference implementation, not a shipped product, and it is research and
+reference only: nothing here is production, and there is no arrangement under which a
+member's real principal is committed. The accounting layer runs live on a local Dash
+network, the v9 ledger is published there and probed at consensus, and two full formation
+rounds have run end to end, one of them verified against a real shared registration on the
+covenant's test build. The code is open source under the MIT license, with the
+failure-injection suites running on both ledger revisions in every build.
+
+The August 2026 review round is closed as a body of work but the design is NOT being
+described as review-complete. The project's own rule is that the line closes only when a
+fresh full review pass returns a clean verdict, and the last pass did not; its remaining
+findings are the concurrent-reservation limit named above, which is a design decision
+rather than a repair, and the routine follow-up from the passes before it. Saying
+review-complete before that has been earned is exactly the kind of claim this document
+tries not to make.
+
+What a careful reader should still hold it to is otherwise unchanged in kind: a real
 member-signed value settlement, the retail trust boundary, a proven relay, evolution-node
 coverage, and public activation of the collateral rule. The reference exists to keep the
 method open and to make exactly those remaining problems concrete.

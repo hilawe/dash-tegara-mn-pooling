@@ -179,6 +179,9 @@ const poolLiveUnderRealHash = () => {
       l1Verification: d.l1Verification, verificationMethodVersion: Number(d.verificationMethodVersion),
     },
     pool: p.data, poolId: POOL,
+    // the harness holds both seeded records, so duty 6 is checked with their real
+    // owners rather than declared away (pass 10, F5: duty 6 fails closed)
+    receiptOwnerId: rs[0].ownerId, poolOwnerId: p.ownerId,
   });
   return verdict.ok === true;
 };
@@ -751,7 +754,9 @@ if (PARED) {
   ok("corrupt-draft setup: a draft exists to corrupt", !!draftFile);
   fs.writeFileSync(path.join(STATE_DIR, draftFile), "{ not json");
   const r = runChild(["receipt", POOL]);
-  ok("a corrupt draft is refused loudly", r.code !== 0 && /corrupt/i.test(r.out));
+  // the refusal is unchanged; the WORD is now "damaged", the single term this class of
+  // draft defect uses across the live key and the archive alike (pass 10, F1)
+  ok("a corrupt draft is refused loudly", r.code !== 0 && /damaged/i.test(r.out));
   ok("a corrupt draft writes no receipt", receipts().length === 0);
 }
 
@@ -910,7 +915,7 @@ if (!PARED) {
   fs.writeFileSync(ap, JSON.stringify(arch2));
   const r2 = runChild(["receipt", POOL]);
   ok("an UNPARSEABLE archived draft refuses too, never falls back",
-    r2.code !== 0 && /do not parse/.test(r2.out));
+    r2.code !== 0 && /DAMAGED/.test(r2.out));
   ok("the unparseable refusal also preserves the archive", fs.existsSync(ap));
   // an EMPTY-STRING draft is damage too, and a truthiness test would read it as absent
   const arch3 = JSON.parse(fs.readFileSync(ap, "utf8"));
@@ -918,7 +923,51 @@ if (!PARED) {
   fs.writeFileSync(ap, JSON.stringify(arch3));
   const r3 = runChild(["receipt", POOL]);
   ok("an EMPTY archived draft refuses too (presence tested explicitly)",
-    r3.code !== 0 && /do not parse/.test(r3.out));
+    r3.code !== 0 && /DAMAGED/.test(r3.out));
+  // the ABSENT KEY is damage too: the writer always emits `draft`, using null when
+  // there was none, so a missing key cannot be read as an honest absence
+  const arch4 = JSON.parse(fs.readFileSync(ap, "utf8"));
+  delete arch4.draft;
+  fs.writeFileSync(ap, JSON.stringify(arch4));
+  const r4 = runChild(["receipt", POOL]);
+  ok("an archive MISSING the draft key refuses (the writer always emits it)",
+    r4.code !== 0 && /DAMAGED/.test(r4.out));
+  // ...while an archive recording `draft: null` is an HONEST absence and must still
+  // take the manifest-only path rather than refusing
+  const arch5 = JSON.parse(fs.readFileSync(ap, "utf8"));
+  arch5.draft = null;
+  fs.writeFileSync(ap, JSON.stringify(arch5));
+  const r5 = runChild(["receipt", POOL]);
+  // POSITIVE assertion, not merely the absence of the damage word (artifact check): the
+  // run must SUCCEED and reach the manifest-derivable comparison, which is the path an
+  // honest "no draft was archived" is supposed to take
+  ok("an archive recording NO draft (null) still recovers, never refuses",
+    r5.code === 0 && /matches the retained manifest/.test(r5.out) && !/DAMAGED/.test(r5.out));
+}
+
+// ---- independent case LIVE DRAFT DAMAGE (pass 10, F1): the LIVE draft key gets the
+//      same classification the archive path received. A stored value that PARSES to a
+//      falsy JSON value (null, false, 0) is damage, not absence: the writer only ever
+//      stores a draft object, so anything else means the bytes were altered, and reading
+//      it as "no draft" silently drops the exact l1Verification evidence and falls back
+//      to the weaker comparison. ----
+{
+  for (const [label, poison] of [["null", "null"], ["false", "false"], ["zero", "0"],
+                                 ["a bare string", "\"draft\""], ["an array", "[]"]]) {
+    writeSeed();
+    runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: PARED ? "shares" : "flip" });
+    const draftFile = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("RECEIPT_DRAFT_") && f.endsWith(".val"));
+    if (!draftFile) { ok(`live-draft ${label}: setup produced a draft`, false); continue; }
+    fs.writeFileSync(path.join(STATE_DIR, draftFile), poison);
+    const r = runChild(["receipt", POOL]);
+    // the assertion names DAMAGED, so it must require exactly that: the earlier
+    // alternation would have accepted the old "corrupt" wording and so observed only
+    // "some refusal happened" (artifact check)
+    ok(`a LIVE draft storing ${label} is refused as damaged, never read as absent`,
+      r.code !== 0 && /DAMAGED/.test(r.out));
+    ok(`...and the ${label} draft file is left in place for hands`,
+      fs.existsSync(path.join(STATE_DIR, draftFile)));
+  }
 }
 
 // ---- independent case E: abandon ARCHIVES before clearing, and receipt RECOVERS from
