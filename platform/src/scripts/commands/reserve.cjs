@@ -43,6 +43,9 @@ module.exports = async (ctx) => {
       contractId: activeContractId(env), pool: po, poolId: pool.getId(),
       receipt: receiptDoc ? receiptDoc.toObject() : null,
       operatorHasInFlight: false, // a member never holds the operator's local state
+      // duty 6, SUPPLY: both documents are in hand (Request 3)
+      receiptOwnerId: receiptDoc ? receiptDoc.getOwnerId().toString() : undefined,
+      poolOwnerId: pool.getOwnerId().toString(),
     });
     admission = lifecycle.admissionVerdict({
       classification: cls, poolIdStr, participateEnv: process.env.TEGARA_PARTICIPATE,

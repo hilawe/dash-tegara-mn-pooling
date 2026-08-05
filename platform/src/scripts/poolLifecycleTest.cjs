@@ -81,26 +81,46 @@ const v8Pool = (hash) => ({ slotIndex: 0, nodeType: "regular", operatorFeeBps: 2
 // v9: the pool cannot answer, so the receipt does or nothing does
 // ---------------------------------------------------------------------------
 withLedger("v9", () => {
-  const done = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest()) });
+  const done = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest()),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v9: a verifying receipt means COMPLETED", done.state === STATES.COMPLETED && done.receiptOk === true);
 
-  const none = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null });
+  const none = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v9: receipt-less and no local state is UNDETERMINED, not 'open'", none.state === STATES.UNDETERMINED);
   ok("v9: and it says why, naming the three states it cannot separate",
     /open, in flight and\s+abandoned are the same document/.test(none.reason));
 
-  const mine = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null, operatorHasInFlight: true });
+  const mine = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null, operatorHasInFlight: true,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v9: the OPERATOR's own local state narrows it to IN_FLIGHT", mine.state === STATES.IN_FLIGHT);
 
   // the contradiction case: a receipt at the wrong target must not read as 'no receipt'
-  const rogue = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest(EVO)) });
+  const rogue = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest(EVO)),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v9: a receipt that FAILS the shared check is UNDETERMINED, never absent",
     rogue.state === STATES.UNDETERMINED && rogue.receiptOk === false);
   ok("v9: and it says the receipt contradicts rather than that none exists",
     /does NOT verify against this pool/.test(rogue.reason));
   // and local state must NOT override a contradiction into a confident in-flight
   const rogueMine = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP,
-    receipt: paredReceiptFor(manifest(EVO)), operatorHasInFlight: true });
+    receipt: paredReceiptFor(manifest(EVO)), operatorHasInFlight: true,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v9: local state does not launder a contradicting receipt into IN_FLIGHT",
     rogueMine.state === STATES.UNDETERMINED);
 });
@@ -109,13 +129,25 @@ withLedger("v9", () => {
 // v8: the pool document answers by itself
 // ---------------------------------------------------------------------------
 withLedger("v8", () => {
-  const forming = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null });
+  const forming = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v8: a forming proTxHash means FORMING", forming.state === STATES.FORMING);
 
-  const flipped = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: null });
+  const flipped = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v8: a real proTxHash with no receipt is IN_FLIGHT", flipped.state === STATES.IN_FLIGHT);
 
-  const done = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: unparedReceiptFor(manifest()) });
+  const done = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: unparedReceiptFor(manifest()),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v8: a verifying receipt still wins", done.state === STATES.COMPLETED);
 
   // a soundness-review finding: on the flip ledgers a structurally verifying receipt counts ONLY when the
@@ -123,18 +155,30 @@ withLedger("v8", () => {
   // never COMPLETED and never absence
   {
     const formingWithReceipt = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH),
-      poolId: GP, receipt: unparedReceiptFor(manifest()) });
+      poolId: GP, receipt: unparedReceiptFor(manifest()),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
     ok("a soundness-review finding: a verifying receipt over a still-forming v8 pool is a contradiction",
       formingWithReceipt.state === STATES.UNDETERMINED
       && /does NOT verify/.test(formingWithReceipt.reason)
       && /still forming/.test(formingWithReceipt.reason));
     ok("a soundness-review finding: and abandon refuses over it", mayAbandon(formingWithReceipt).ok === false);
     const otherHash = classifyPool({ contractId: GC, pool: v8Pool(Buffer.alloc(32, 0xbb)),
-      poolId: GP, receipt: unparedReceiptFor(manifest()) });
+      poolId: GP, receipt: unparedReceiptFor(manifest()),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
     ok("a soundness-review finding: a receipt naming a different node than the live pool is a contradiction",
       otherHash.state === STATES.UNDETERMINED && /different node/.test(otherHash.reason));
     const noReceiptHash = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP,
-      receipt: { ...unparedReceiptFor(manifest()), proTxHash: undefined } });
+      receipt: { ...unparedReceiptFor(manifest()), proTxHash: undefined },
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
     // the refusal MOVED UPSTREAM with a soundness-review finding: the shared check now rejects a missing or
     // wrong-length proTxHash on every receipt ledger, so this case is caught before the
     // classifier's own v8 comparison ever runs. Same fail-closed outcome, earlier and on
@@ -145,9 +189,17 @@ withLedger("v8", () => {
   }
 
   ok("v8: a missing proTxHash is UNDETERMINED rather than assumed forming",
-    classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null }).state === STATES.UNDETERMINED);
+    classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  }).state === STATES.UNDETERMINED);
   ok("v8: a short proTxHash is UNDETERMINED",
-    classifyPool({ contractId: GC, pool: v8Pool(Buffer.alloc(31, 0)), poolId: GP, receipt: null })
+    classifyPool({ contractId: GC, pool: v8Pool(Buffer.alloc(31, 0)), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  })
       .state === STATES.UNDETERMINED);
 });
 
@@ -155,21 +207,41 @@ withLedger("v8", () => {
 // abandon, the guard that had no v9 equivalent
 // ---------------------------------------------------------------------------
 withLedger("v9", () => {
-  const done = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest()) });
+  const done = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest()),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("abandon is refused for a COMPLETED pool", mayAbandon(done).ok === false);
   ok("and the refusal explains the orphaning risk", /orphan real state/.test(mayAbandon(done).reason));
 
-  const none = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null });
+  const none = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("abandon is allowed for a pool with no completion record", mayAbandon(none).ok === true);
 
-  const rogue = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest(EVO)) });
+  const rogue = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest(EVO)),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("abandon is refused while a contradicting receipt is unresolved", mayAbandon(rogue).ok === false);
 });
 withLedger("v8", () => {
   ok("v8: abandon allowed while forming",
-    mayAbandon(classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null })).ok === true);
+    mayAbandon(classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  })).ok === true);
   ok("v8: abandon allowed pre-receipt after the flip (the v8 command adds its own live guard)",
-    mayAbandon(classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: null })).ok === true);
+    mayAbandon(classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  })).ok === true);
 });
 
 // ---------------------------------------------------------------------------
@@ -181,8 +253,16 @@ withLedger("v8", () => {
 // to let someone leave has turned not-knowing into lock-in. These cases fail if a later
 // change makes the two symmetric in either direction.
 withLedger("v9", () => {
-  const open = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null });
-  const done = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest()) });
+  const open = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
+  const done = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest()),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
 
   const bare = admissionVerdict({ classification: open, poolIdStr: GP });
   ok("v9: a merely discovered pool REFUSES admission", bare.ok === false);
@@ -207,12 +287,20 @@ withLedger("v9", () => {
   // completion is a fact, not a judgement, so no instruction overrides it
   ok("v9: a COMPLETED pool refuses even with the instruction",
     admissionVerdict({ classification: done, poolIdStr: GP, participateEnv: GP }).ok === false);
-  const rogue = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest(EVO)) });
+  const rogue = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest(EVO)),
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v9: a contradicting receipt refuses even with the instruction",
     admissionVerdict({ classification: rogue, poolIdStr: GP, participateEnv: GP }).ok === false);
 });
 withLedger("v8", () => {
-  const forming = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null });
+  const forming = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null,
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
   ok("v8: a forming pool admits with no instruction, because the pool itself says it is open",
     admissionVerdict({ classification: forming, poolIdStr: GP }).ok === true);
 });
@@ -291,7 +379,11 @@ ok("mayAbandon refuses a missing classification", mayAbandon(null).ok === false)
   const forming = Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 7)]);
   withLedger("v9", () => {
     const r = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP,
-      receipt: { ...paredReceiptFor(manifest()), proTxHash: forming } });
+      receipt: { ...paredReceiptFor(manifest()), proTxHash: forming },
+    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
+    // and each case still exercises the property its name claims
+    receiptOwnerId: OA, poolOwnerId: OA,
+  });
     ok("a soundness-review finding: a reserved-namespace receipt is NOT completion on the immutable ledger",
       r.state !== STATES.COMPLETED);
     const node = backingNode({ pool: v9Pool(),

@@ -646,7 +646,12 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       let doc = await queryReceipt();
       if (doc) {
         verifyReceiptAgainstDraft(doc, draft);
-        requireReceiptBindsPool(doc.toObject(), (await getPool(poolIdStr)).toObject(), poolIdStr); // round-6: fresh pool bind
+        {
+          const freshPool = await getPool(poolIdStr); // round-6: fresh
+          requireReceiptBindsPool(doc.toObject(), freshPool.toObject(), poolIdStr,
+            { receiptOwnerId: doc.getOwnerId().toString(),
+              poolOwnerId: freshPool.getOwnerId().toString() });
+        } // round-6: fresh pool bind
         console.log(`completion receipt already recorded (${doc.getId().toString()}), matches the draft and pool`);
         return doc;
       }
@@ -698,7 +703,12 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           "the manifest and draft are KEPT, re-run to verify (never assume the write landed)");
       }
       verifyReceiptAgainstDraft(doc, draft);
-      requireReceiptBindsPool(doc.toObject(), (await getPool(poolIdStr)).toObject(), poolIdStr); // round-6: fresh pool bind
+      {
+        const freshPool = await getPool(poolIdStr); // round-6: fresh p
+        requireReceiptBindsPool(doc.toObject(), freshPool.toObject(), poolIdStr,
+          { receiptOwnerId: doc.getOwnerId().toString(),
+            poolOwnerId: freshPool.getOwnerId().toString() });
+      } // round-6: fresh pool bind
       return doc;
     };
 
@@ -827,18 +837,19 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // item 9), so the binding routes through the SHARED five-duty check instead, which is
     // stronger on the fields that do exist: it also pins the receipt's embedded target to
     // the pool, which the v8 binding never did.
-    const requireReceiptBindsPool = (receiptObj, poolObj, poolIdStr, owners = null) => {
+    const requireReceiptBindsPool = (receiptObj, poolObj, poolIdStr, owners) => {
+      if (!owners || owners.receiptOwnerId === undefined || owners.poolOwnerId === undefined) {
+        throw new Error("requireReceiptBindsPool was called without both document owners; " +
+          "duty 6 cannot be checked and an unchecked binding is not a pass (Request 3)");
+      }
       if (hasImmutablePool()) {
         const res = checkReceiptAgainstPool({ contractId: activeContractId(env),
           receipt: receiptObj, pool: poolObj, poolId: poolIdStr,
-          // duty 6 fails closed (pass 10, F5), so this helper either forwards the owners
-          // its caller holds or declares the gap. On v9 both document types are
-          // owner-only at consensus, which is why completion's own M1 binding already
-          // covers this path, but the check is told rather than assumed.
-          ...(owners
-            ? { receiptOwnerId: owners.receiptOwnerId, poolOwnerId: owners.poolOwnerId }
-            : { ownerBindingUnavailable: "completion holds pool and receipt DATA at this " +
-                "point; the operator binding is enforced separately by requirePoolOwnedByOperator" }) });
+          // DISPOSITION: SUPPLY (Request 3). The declaration fallback is gone: all three
+          // callers of this helper hold BOTH documents at the call, so there was never a
+          // genuine gap here, only a convenient one. Passing data without owners is now
+          // a programming error rather than a silently unchecked binding.
+          receiptOwnerId: owners.receiptOwnerId, poolOwnerId: owners.poolOwnerId });
         if (!res.ok) {
           throw new Error(`the on-ledger receipt does not verify against the current pool ` +
             `(${res.reason}). Refusing; local state is kept, resolve by hand.`);
@@ -888,6 +899,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           contractId: activeContractId(env), pool: po, poolId: pool.getId(),
           receipt: receiptDoc ? receiptDoc.toObject() : null,
           operatorHasInFlight,
+          // duty 6, SUPPLY: both documents are in hand (Request 3)
+          receiptOwnerId: receiptDoc ? receiptDoc.getOwnerId().toString() : undefined,
+          poolOwnerId: pool.getOwnerId().toString(),
         }),
         receiptDoc,
       };
@@ -1429,7 +1443,12 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           // and settlement mutated before the flip guard refused. The receipt must also
           // bind to the CURRENT pool, through the same helper both writers use, so the
           // still-forming and wrong-hash contradictions stop the resume pre-settlement.
-          requireReceiptBindsPool(preSettle.toObject(), (await getPool(poolIdStr)).toObject(), poolIdStr);
+          {
+            const freshPool = await getPool(poolIdStr);
+            requireReceiptBindsPool(preSettle.toObject(), freshPool.toObject(), poolIdStr,
+              { receiptOwnerId: preSettle.getOwnerId().toString(),
+                poolOwnerId: freshPool.getOwnerId().toString() });
+          }
           console.log("an existing completion receipt matches the frozen draft and binds to the " +
             "current pool; resuming idempotently past it");
         }

@@ -181,10 +181,15 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       const verdict = checkReceiptAgainstPool({ contractId: env.CONTRACT_V9_ID,
         receipt: receiptProps(pool.getId().toBuffer(), proTx, 0),
         pool: basePool, poolId: pool.getId().toString(),
-        // the probe builds receipt PROPS it is about to create, so no receipt document
-        // exists yet to take an owner from; the creation itself is owner-gated by the
-        // contract and probe P5 covers that refusal
-        ownerBindingUnavailable: "probe verifies props before the receipt document exists" });
+        // DISPOSITION: EXEMPT, stated explicitly rather than by silence (Request 3).
+        // This is a deployment probe, outside the release profile's boundary by that
+        // profile's own terms, and it verifies receipt PROPS it is about to create, so
+        // no receipt document exists yet to read an owner from. The property the binding
+        // would establish is covered here by a different probe: P5 confirms the contract
+        // itself refuses a non-owner receipt creation at consensus. Nothing downstream
+        // consumes this verdict as a completion claim.
+        ownerBindingUnavailable: "EXEMPT: probe verifies props before the receipt document " +
+          "exists; owner-only creation is covered by probe P5 at consensus" });
       result("P6 receipt VERIFIES through the shared receipt-to-pool check",
         verdict.ok === true, verdict.ok ? "five duties pass" : verdict.reason);
     }

@@ -63,14 +63,23 @@ const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInF
     // the embedded target to the pool at all.
     let receiptOk = false, receiptReason = null;
     if (receipt) {
-      // duty 6 is the CALLER'S to satisfy: this function takes plain data and cannot
-      // fetch owners, so it passes through whatever its caller supplied and declares the
-      // gap otherwise. classifyPool's own callers hold the documents (pass 10, F5).
+      // DUTY 6 IS REQUIRED HERE, and an unchecked binding is NOT a pass (Request 3,
+      // criterion 6). The earlier version declared the binding unavailable and carried
+      // on, which made the gap auditable without closing it: a receipt written by the
+      // WRONG OPERATOR then produced a definite COMPLETED verdict, because every other
+      // duty passes for such a receipt. Recording a hole is not the same as closing one.
+      // classifyPool takes plain data and cannot fetch owners itself, so the caller must
+      // supply them; every caller in this codebase holds both documents. Callers that
+      // genuinely cannot must accept the UNDETERMINED verdict rather than a completed one.
+      if (receiptOwnerId === undefined || poolOwnerId === undefined) {
+        return { state: STATES.UNDETERMINED, receiptOk: false,
+          reason: "the receipt's owner binding could not be checked: classifyPool was " +
+            "called without the receipt and pool document owners, and a completed verdict " +
+            "over an unchecked binding would report a pool whose receipt may have been " +
+            "written by another identity" };
+      }
       const res = checkReceiptAgainstPool({ contractId, receipt, pool, poolId,
-        receiptOwnerId, poolOwnerId,
-        ...(receiptOwnerId === undefined && poolOwnerId === undefined
-          ? { ownerBindingUnavailable: "classifyPool was called with document data only; " +
-              "its caller did not supply the receipt and pool owners" } : {}) });
+        receiptOwnerId, poolOwnerId });
       receiptOk = res.ok === true;
       if (!receiptOk) receiptReason = res.reason;
     }
