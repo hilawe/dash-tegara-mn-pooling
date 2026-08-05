@@ -220,7 +220,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
  * refusal, never a skip, because a silently dropped receipt reads downstream as a pool that
  * simply had none.
  */
-const checkReceiptsAgainstPools = async ({ contractId, receipts, fetchPoolsByIds }) => {
+const checkReceiptsAgainstPools = async ({ contractId, receipts, owners, fetchPoolsByIds }) => {
   if (!Array.isArray(receipts)) throw new Error("receipts must be an array");
   if (typeof fetchPoolsByIds !== "function") throw new Error("fetchPoolsByIds must be a function");
 
@@ -256,11 +256,23 @@ const checkReceiptsAgainstPools = async ({ contractId, receipts, fetchPoolsByIds
     if (!id) return { ok: false, reason: "receipt poolId is not a 32-byte id" };
     const hit = byId.get(id.toString("hex"));
     if (!hit) return { ok: false, reason: "no pool found for this receipt" };
-    return checkReceiptAgainstPool({ contractId, receipt, pool: hit.obj, poolId: hit.poolId,
-      // the batched form takes injected POOL DATA, not documents, so it cannot perform
-      // duty 6 and says so rather than passing silently; a caller needing the binding
-      // uses the single-receipt form with both owners (pass 10, F5)
-      ownerBindingUnavailable: "batched check receives pool data without document owners" });
+    // DISPOSITION: REFUSE (Request 3). This form takes injected pool DATA, so it cannot
+    // read owners itself, and it has no production caller today. Rather than leave a
+    // reachable path that answers ok over an unchecked binding, it refuses unless the
+    // caller supplies the owners alongside the records. The refusal is per receipt, in
+    // the same shape as every other verdict this function returns.
+    const rOwner = (receipt && typeof receipt.getOwnerId === "function")
+      ? receipt.getOwnerId().toString() : (owners && owners[i] && owners[i].receiptOwnerId);
+    const pOwner = hit.poolOwnerId !== undefined
+      ? hit.poolOwnerId : (owners && owners[i] && owners[i].poolOwnerId);
+    if (rOwner === undefined || pOwner === undefined) {
+      return { ok: false, reason: "the batched check was given records without document owners, " +
+        "so the receipt's owner binding cannot be checked; supply owners, or use the " +
+        "single-receipt form with both identifiers" };
+    }
+    const ro = (typeof receipt.toObject === "function") ? receipt.toObject() : receipt;
+    return checkReceiptAgainstPool({ contractId, receipt: ro, pool: hit.obj, poolId: hit.poolId,
+      receiptOwnerId: rOwner, poolOwnerId: pOwner });
   });
 };
 
@@ -302,8 +314,22 @@ const resolveNodeToPools = async ({ contractId, nodeHash, slotIndex, fetchReceip
     }
     const obj = (typeof poolDoc.toObject === "function") ? poolDoc.toObject() : poolDoc;
     const pid = (typeof poolDoc.getId === "function") ? poolDoc.getId() : obj.$id;
+    // DISPOSITION: SUPPLY (Request 3). Both documents are in hand here: `r` is a receipt
+    // DOCUMENT when the caller passes one, and poolDoc comes from fetchPoolById, so the
+    // owners are readable and the binding is checked rather than declared away. When a
+    // caller passes plain receipt DATA instead of a document, the owner is genuinely
+    // unavailable and this resolution REFUSES rather than returning an affirmative
+    // result over an unchecked binding, which is the global invariant.
+    const rOwner = (r && typeof r.getOwnerId === "function") ? r.getOwnerId().toString() : undefined;
+    const pOwner = (poolDoc && typeof poolDoc.getOwnerId === "function")
+      ? poolDoc.getOwnerId().toString() : undefined;
+    if (rOwner === undefined || pOwner === undefined) {
+      return { ok: false, reason: "node resolution was given records without document owners, so " +
+        "the receipt's owner binding cannot be checked; refusing rather than resolving a node " +
+        "from a receipt that may have been written by another identity" };
+    }
     const verdict = checkReceiptAgainstPool({ contractId, receipt: ro, pool: obj, poolId: pid,
-      ownerBindingUnavailable: "node resolution receives pool data without document owners" });
+      receiptOwnerId: rOwner, poolOwnerId: pOwner });
     if (!verdict.ok) {
       return { ok: false, reason: `a completion receipt does not verify against its pool (${verdict.reason})` };
     }

@@ -40,7 +40,10 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     Dash: { Core: { Script: { buildPublicKeyHashOut: () => ({ toBuffer: () => Buffer.alloc(25) }) } } },
     fetchAll: async () => { if (!claims) throw new Error(SENTINEL); return claims; },
     isV6: () => true, isV7: () => true,
-    getPool: async () => ({ toObject: () => po, getId: () => POOL_ID }),
+    // the stub pool now carries an owner, because reserve supplies both document owners
+    // to the classifier (Request 3, duty 6 SUPPLY)
+    getPool: async () => ({ toObject: () => po, getId: () => POOL_ID,
+      getOwnerId: () => ({ toString: () => "operator" }) }),
     journal, env: { CONTRACT_V9_ID: CONTRACT },
     activeContractId: () => CONTRACT,
     myId: "member-1",

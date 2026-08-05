@@ -270,8 +270,11 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
     return [{ getId: () => GP, toObject: () => poolFor() }];
   };
 
+  // the batched form REFUSES without owners now (Request 3, disposition REFUSE), so the
+  // batch supplies them per receipt; the four cases below still test what they name
+  const batchOwners = [0, 1, 2, 3].map(() => ({ receiptOwnerId: OA, poolOwnerId: OA }));
   const results = await checkReceiptsAgainstPools({
-    contractId: GC, receipts: [good, rogue, good, orphan], fetchPoolsByIds });
+    contractId: GC, receipts: [good, rogue, good, orphan], owners: batchOwners, fetchPoolsByIds });
 
   ok("batched: exactly ONE fetch for four receipts", calls === 1);
   ok("batched: the fetch asked for the two DISTINCT pools only", sawIds.length === 2);
@@ -280,6 +283,11 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   ok("batched: the contradicting receipt is refused", results[1].ok === false);
   ok("batched: a receipt whose pool is absent is REFUSED, not skipped",
     results[3].ok === false && /no pool found/.test(results[3].reason));
+  // and WITHOUT owners the whole batch refuses rather than answering ok unbound
+  const unbound = await checkReceiptsAgainstPools({
+    contractId: GC, receipts: [good], fetchPoolsByIds });
+  ok("batched: records without owners REFUSE, never pass unbound",
+    unbound[0].ok === false && /owner binding cannot be checked/.test(unbound[0].reason));
 
   const empty = await checkReceiptsAgainstPools({ contractId: GC, receipts: [], fetchPoolsByIds: async () => {
     throw new Error("must not fetch for an empty batch");
@@ -291,9 +299,14 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   //    against a pool field that no longer exists
   // -------------------------------------------------------------------------
   const NODE = Buffer.alloc(32, 0xaa);
-  const poolDoc = { getId: () => GP, toObject: () => poolFor() };
-  const goodReceipt = { ...receiptFor(manifest()), proTxHash: NODE };
-  const badReceipt = { ...receiptFor(manifest(EVO)), proTxHash: NODE };
+  // the fixtures are DOCUMENTS with owners, because node resolution now checks the owner
+  // binding rather than declaring it unavailable (Request 3, disposition SUPPLY). A
+  // receipt document and its pool document are what the real caller holds.
+  const asDoc = (obj, owner, id) => ({ getId: () => id, toObject: () => obj,
+    getOwnerId: () => ({ toString: () => owner }) });
+  const poolDoc = asDoc(poolFor(), OA, GP);
+  const goodReceipt = asDoc({ ...receiptFor(manifest()), proTxHash: NODE }, OA, GP);
+  const badReceipt = asDoc({ ...receiptFor(manifest(EVO)), proTxHash: NODE }, OA, GP);
 
   const resolve = (receipts, pool) => resolveNodeToPools({
     contractId: GC, nodeHash: NODE, slotIndex: 0,
@@ -319,6 +332,13 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
     contradiction.ok === false);
   ok("resolve: and names the verification failure",
     /does not verify against its pool/.test(contradiction.reason));
+  // the SUPPLY disposition's own refusal: given records WITHOUT owners, resolution must
+  // refuse rather than resolve a node from an unbound receipt (Request 3, criterion 6)
+  const ownerless = await resolve([{ ...receiptFor(manifest()), proTxHash: NODE }],
+    { getId: () => GP, toObject: () => poolFor() });
+  ok("resolve: records without document owners REFUSE, never resolve unbound",
+    ownerless.ok === false && /owner binding cannot be checked/.test(ownerless.reason || ""));
+
   ok("resolve: the refusal is distinguishable from the empty case, which is the whole point",
     contradiction.ok === false && miss.ok === true);
 

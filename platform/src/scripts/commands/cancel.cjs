@@ -41,6 +41,9 @@ module.exports = async (ctx) => {
             const cls = lifecycle.classifyPool({
               contractId: activeContractId(env), pool: po, poolId: pool.getId(),
               receipt: receiptDoc ? receiptDoc.toObject() : null, operatorHasInFlight: false,
+              // duty 6, SUPPLY: both documents are in hand (Request 3)
+              receiptOwnerId: receiptDoc ? receiptDoc.getOwnerId().toString() : undefined,
+              poolOwnerId: pool.getOwnerId().toString(),
             });
             if (cls.state === lifecycle.STATES.COMPLETED) {
               throw new Error("this pool has COMPLETED; the claim became a share and there is " +
