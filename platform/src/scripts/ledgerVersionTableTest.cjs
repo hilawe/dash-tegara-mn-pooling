@@ -175,5 +175,45 @@ ok("contract id keys are unique", new Set(Object.values(S.LEDGER_VERSIONS).map((
 ok("v9 is selectable", S.SUPPORTED_LEDGERS.includes("v9"));
 
 fs.rmSync(TMP, { recursive: true, force: true });
+// ---- the RELEASE PROFILE fails closed (pass 10, F4) ----
+// The profile documents v9 as the operative ledger, with retail (v10), the v8 interface
+// and the research probes OUTSIDE the boundary. It was documentation only: with LEDGER
+// unset the selector silently chose v1, and v8 was accepted, so the boundary could be
+// crossed by configuration ACCIDENT rather than by decision. Under TEGARA_PROFILE=release
+// an unset or non-operative selector is now a refusal that names the profile.
+{
+  const withProfile = (profile, ledger, fn) => {
+    const pp = process.env.TEGARA_PROFILE, pl = process.env.LEDGER;
+    if (profile === undefined) delete process.env.TEGARA_PROFILE; else process.env.TEGARA_PROFILE = profile;
+    if (ledger === undefined) delete process.env.LEDGER; else process.env.LEDGER = ledger;
+    try { return fn(); } finally {
+      if (pp === undefined) delete process.env.TEGARA_PROFILE; else process.env.TEGARA_PROFILE = pp;
+      if (pl === undefined) delete process.env.LEDGER; else process.env.LEDGER = pl;
+    }
+  };
+  const refused = (profile, ledger) => {
+    try { withProfile(profile, ledger, () => S.assertSupportedLedger()); return null; }
+    catch (e) { return e.message; }
+  };
+  // the message must name the UNSET case specifically: both the unset branch and the
+  // out-of-boundary branch mention the profile, so matching that shared phrase would
+  // observe the text rather than the branch (caught by mutating the unset branch away)
+  ok("release profile REFUSES an unset selector (no silent v1)",
+    /requires LEDGER to name an operative/.test(refused("release", undefined) || ""));
+  ok("release profile REFUSES v8, which is outside the boundary",
+    /outside the release profile/.test(refused("release", "v8") || ""));
+  // v10 is refused EARLIER, as an unsupported selector (it is not in the table at all),
+  // so the profile never sees it; both refusals are correct and the case pins that the
+  // retail contract cannot be selected, not which layer says no
+  ok("release profile: v10, the retail contract, is refused (as an unsupported selector)",
+    /unsupported LEDGER value/.test(refused("release", "v10") || ""));
+  ok("release profile ADMITS v9, the operative ledger", refused("release", "v9") === null);
+  ok("the default profile is unchanged: unset still resolves to v1",
+    withProfile(undefined, undefined, () => S.ledgerVersion()) === "v1");
+  ok("the default profile still admits v8", refused(undefined, "v8") === null);
+  ok("an unknown profile value is refused rather than treated as permissive",
+    refused("relase", "v9") !== null);
+}
+
 console.log(`ledgerVersionTableTest: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

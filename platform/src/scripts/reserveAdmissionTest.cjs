@@ -106,6 +106,36 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
   ok("a SECOND owner filling the book is admitted (the pool becomes completable)",
     r6.includes(WALLET_SENTINEL));
 
+  // the MUTABLE-POOL operator binding at the command level (pass 9, major 2): a
+  // foreign-owned forming pool must be refused at admission, since completion refuses
+  // it outright. Driven on v7, chosen because the guard is gated on
+  // `!hasImmutablePool()` and so covers every mutable-pool ledger identically; the
+  // cases are named for that capability rather than for one version (artifact check).
+  {
+    const prev = process.env.LEDGER;
+    process.env.LEDGER = "v7"; // a mutable-pool ledger with a slot book
+    const mutablePool = { nodeType: "regular", status: "forming",
+      slotDuffs: 50000000000, slotCount: 2, operatorFeeBps: 2000 };
+    const ctxWith = (poolOwner, contractOwner) => ({
+      ...mkCtx(mutablePool, []),
+      client: { platform: {
+        documents: { get: async () => [] },
+        contracts: { get: async () => ({ getOwnerId: () => ({ toString: () => contractOwner }) }) },
+      }, getWalletAccount: async () => { throw new Error(WALLET_SENTINEL); } },
+      getPool: async () => ({ toObject: () => mutablePool, getId: () => POOL_ID,
+        getOwnerId: () => ({ toString: () => poolOwner }) }),
+    });
+    const bad = await (async () => { try { await reserve(ctxWith("stranger", "operator")); return "returned"; }
+      catch (e) { return e.message; } })();
+    ok("reserve refuses a mutable-pool pool owned by someone other than the contract operator",
+      /not the contract operator/.test(bad) && !bad.includes(WALLET_SENTINEL));
+    const good = await (async () => { try { await reserve(ctxWith("operator", "operator")); return "returned"; }
+      catch (e) { return e.message; } })();
+    ok("reserve admits a mutable-pool pool owned by the contract operator",
+      good.includes(WALLET_SENTINEL));
+    if (prev === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev;
+  }
+
   // ---- the PLEDGE path's command-level coverage (pass 7 fold-2 re-confirmation) ----
   // pledge is the exact-fill admission path and refuses slot-book ledgers outright, so
   // these cases run it as a v5-style ledger: the pledge that COMPLETES the fill with a

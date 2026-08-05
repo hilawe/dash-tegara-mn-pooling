@@ -79,7 +79,8 @@ const { fetchL1Vote } = require("./l1gov.cjs");
       if (rd) {
         receiptObj = rd.toObject();
         receiptOk = checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: receiptObj,
-          pool: pool.toObject(), poolId: pool.getId() }).ok === true;
+          pool: pool.toObject(), poolId: pool.getId(),
+          receiptOwnerId: rd.getOwnerId().toString(), poolOwnerId: pool.getOwnerId().toString() }).ok === true;
       }
     }
     const proTxHex = lifecycle.requireBackingNode(

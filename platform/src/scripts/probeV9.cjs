@@ -52,8 +52,11 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
 
 (async () => {
   if (process.env.PROBE_CONFIRM !== "leave-probe-evidence") {
-    console.error("this suite writes permanent evidence documents; run it only against a THROWAWAY " +
-      "namespace with PROBE_CONFIRM=leave-probe-evidence");
+    console.error("this suite writes permanent evidence documents. Both sanctioned uses need " +
+      "PROBE_CONFIRM=leave-probe-evidence: a THROWAWAY namespace, or the CANONICAL contract " +
+      "immediately after its publish, where the adoption checklist mandates these probes " +
+      "against the artifact actually published. It is never run casually against a namespace " +
+      "whose documents readers already consume.");
     process.exit(2);
   }
   const env = loadEnv();
@@ -177,7 +180,11 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       // probe leaves behind reads as a completion, never as a contradiction
       const verdict = checkReceiptAgainstPool({ contractId: env.CONTRACT_V9_ID,
         receipt: receiptProps(pool.getId().toBuffer(), proTx, 0),
-        pool: basePool, poolId: pool.getId().toString() });
+        pool: basePool, poolId: pool.getId().toString(),
+        // the probe builds receipt PROPS it is about to create, so no receipt document
+        // exists yet to take an owner from; the creation itself is owner-gated by the
+        // contract and probe P5 covers that refusal
+        ownerBindingUnavailable: "probe verifies props before the receipt document exists" });
       result("P6 receipt VERIFIES through the shared receipt-to-pool check",
         verdict.ok === true, verdict.ok ? "five duties pass" : verdict.reason);
     }

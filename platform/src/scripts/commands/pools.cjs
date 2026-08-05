@@ -27,7 +27,10 @@ module.exports = async (ctx) => {
             { where: [["poolId", "==", p.getId()]] }))[0] || null;
           const ro = rd ? rd.toObject() : null;
           const okR = ro ? checkReceiptAgainstPool({ contractId: activeContractId(env), receipt: ro,
-            pool: o, poolId: p.getId() }).ok === true : false;
+            pool: o, poolId: p.getId(),
+            // both documents are in hand in this listing, so duty 6 is checked
+            receiptOwnerId: rd.getOwnerId().toString(),
+            poolOwnerId: p.getOwnerId().toString() }).ok === true : false;
           node = lifecycle.backingNode({ pool: o, receipt: ro, receiptOk: okR });
         }
         const nodeLabel = node.known ? `node ${node.hex.slice(0, 12)}...` : "node UNKNOWN";
