@@ -98,5 +98,31 @@ const lifecycle = require("./poolLifecycle.cjs");
     mismatched.receiptOk !== true);
 }
 
+// ---- 4. THE GLOBAL INVARIANT: no affirmative verdict on an unchecked binding ----
+// Request 3's criterion 6. Declaring the binding unavailable made the gap auditable but
+// still let a definite lifecycle verdict be returned over it, which is the difference
+// between recording a hole and closing one. A pool whose receipt was written by the
+// wrong operator was reported COMPLETED, reproduced with valid fixtures below.
+{
+  const pool = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+    targetDuffs: Number(REGULAR) };
+  const noOwners = lifecycle.classifyPool({ contractId: GC, pool, poolId: GP, receipt: goodReceipt });
+  ok("classifyPool WITHOUT owners does not report a definite completed verdict",
+    noOwners.state !== "completed");
+  ok("...and says the binding is why", /owner binding/i.test(noOwners.reason || ""));
+  ok("classifyPool WITHOUT owners reports the receipt as NOT verified",
+    noOwners.receiptOk !== true);
+
+  const supplied = lifecycle.classifyPool({ contractId: GC, pool, poolId: GP, receipt: goodReceipt,
+    receiptOwnerId: A, poolOwnerId: A });
+  ok("classifyPool WITH matching owners does report completed", supplied.state === "completed");
+  ok("...and reports the receipt verified", supplied.receiptOk === true);
+
+  const mismatched = lifecycle.classifyPool({ contractId: GC, pool, poolId: GP, receipt: goodReceipt,
+    receiptOwnerId: A, poolOwnerId: B });
+  ok("classifyPool with MISMATCHED owners does not report completed",
+    mismatched.state !== "completed");
+}
+
 console.log(`ownerBindingTest: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
