@@ -10,7 +10,7 @@
  * valid receipt embedding a wrong target passing the allocation verifier alone.
  *
  * So the evidence for "this pool completed" is the RECEIPT-PLUS-ITS-POOL PAIR, both
- * immutable, and this module is the one place that check lives. It owes FIVE DUTIES, and a
+ * immutable, and this module is the one place that check lives. It owes SIX DUTIES, and a
  * caller that performs any subset has not performed the check:
  *
  *   1. THE ALLOCATION IS VALID AND CANONICAL, with top-level poolId and participantCount
@@ -32,6 +32,36 @@
  *      placeholder node passes every other duty and classifies as COMPLETED. The rule is
  *      part of the stated verifier contract, not of the schema, so an implementation that
  *      reads the schema alone will not derive it.
+ *   6. THE SUPPLIED RECEIPT AND POOL OWNERS ARE IDENTIFIERS AND ARE EQUAL (pass 9 major 3,
+ *      made mandatory by pass 10 F5, published here by pass 11 F1). On v8 pool creation is
+ *      unrestricted, so a receipt written by the contract owner against a pool owned by a
+ *      different identity satisfies duties 1 through 5 while the reference writer and the
+ *      strict reader both refuse it. This duty was enforced in code for two passes while
+ *      this list still said FIVE, which meant an independent implementation conforming to
+ *      the published contract would accept exactly that pair. Checked FIRST, before duty 1,
+ *      because a receipt from the wrong identity is not worth comparing further. Both
+ *      owners are required, so no AFFIRMATIVE verdict is reachable without them (a caller
+ *      that omits them still gets a verdict: a refusal).
+ *
+ *      AND HERE IS ITS TRUST BOUNDARY, stated because the pre-commit check found the
+ *      earlier wording claiming past it, twice. Duty 6 establishes that the two values it
+ *      COMPARED decode as 32-byte document identifiers and are equal. It does NOT establish
+ *      their provenance. A caller that passes the pool's owner as both arguments gets an
+ *      affirmative result while the receipt's real owner is someone else.
+ *
+ *      Where each compared value comes from, exactly:
+ *        - `checkReceiptAgainstPool` derives NEITHER. Both are its arguments. It receives
+ *          plain objects and cannot read a document owner.
+ *        - `checkReceiptsAgainstPools` always takes the RECEIPT owner from the caller's
+ *          `owners` entry, and takes the POOL owner from the fetched value itself when that
+ *          value exposes getOwnerId(), falling back to the `owners` entry otherwise. So the
+ *          categorical "this module never reads an owner" is false for that one side, and
+ *          saying it that way was itself an overclaim.
+ *      Sourcing the remaining values from their own documents is the CALLER'S duty,
+ *      discharged and recorded at the call site. Every PRODUCTION call site in this
+ *      repository does that from documents it already holds. The offline suites do not, and
+ *      are not meant to: they pass fixture constants, because what they exercise is this
+ *      module's comparison rather than any caller's sourcing.
  *
  * PLUS AN IDENTITY PRECONDITION that is not numbered in the review's list because it is
  * assumed rather than checked there: the pool passed in must BE the pool the receipt names.
@@ -52,6 +82,15 @@
 const core = require("./formationCore.cjs");
 const { hasParedReceipt } = require("./envStore.cjs");
 
+// Platform's recognized document SYSTEM fields, always allowed alongside a contract's own
+// properties. A KNOWN set, NOT any $-prefixed key: an invented $-field is a document the
+// contract rejects (packet wave, folder-access review F2; the same narrowing pass 18 made for the pool
+// validator, now applied to the receipt shape gate that still had the wildcard).
+const SYSTEM_FIELDS = new Set(["$id", "$type", "$ownerId", "$revision", "$createdAt",
+  "$updatedAt", "$transferredAt", "$createdAtBlockHeight", "$updatedAtBlockHeight",
+  "$transferredAtBlockHeight", "$createdAtCoreBlockHeight", "$updatedAtCoreBlockHeight",
+  "$transferredAtCoreBlockHeight", "$protocolVersion"]);
+
 /** the collateral target a nodeType must carry, as a BigInt */
 const targetForNodeType = (nodeType) =>
   (nodeType === "regular" || nodeType === "evo") ? core.TARGETS[nodeType] : null;
@@ -71,51 +110,183 @@ const toDuffs = (v) => {
 
 /**
  * The shared check. `receipt` and `pool` are PLAIN OBJECTS (post `toObject()`), `poolId` is
- * the pool document's own id as base58 or bytes, and `contractId` is the contract the
- * receipt must be bound to.
+ * the pool document's own id as base58 or bytes (the ARGUMENT is dual-form; the receipt's
+ * own poolId FIELD must be the 32-byte array the schema types, round 20), and `contractId`
+ * is the contract the receipt must be bound to.
  * Returns { ok: true, embedded: {...} } or { ok: false, reason }.
  */
 const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
-  receiptOwnerId, poolOwnerId, ownerBindingUnavailable }) => {
+  receiptOwnerId, poolOwnerId }) => {
   const bad = (reason) => ({ ok: false, reason });
   try {
     if (!receipt || typeof receipt !== "object") return bad("receipt missing");
     if (!pool || typeof pool !== "object") return bad("pool missing");
 
-    // ---- duty 6, OWNER BINDING, and it FAILS CLOSED ----
+    // ---- duty 6, OWNER BINDING, UNCONDITIONAL ----
     // The spec states that owner binding establishes the pool's OWN operator recorded
     // the receipt. On v8 pool creation is unrestricted, so a receipt written by the
     // contract owner against a pool owned by someone else satisfies every other duty
     // while the reference writer and the strict reader both refuse it.
     //
-    // THE PARAMETERS WERE OPTIONAL AND THAT WAS THE DEFECT (pass 10, F5 root cause).
-    // With BOTH ids absent, the mismatch guard and the exactly-one guard both passed and
-    // the check returned ok having verified nothing, so the binding silently did not
-    // happen. A static test that grepped the callers' SOURCE for the argument names was
-    // written as the compensating control, which is a fake control: deleting the real
-    // arguments and leaving the words in a comment kept it green. The fix is here, not
-    // in the test. A caller must now either SUPPLY BOTH ids or DECLARE, with a reason,
-    // that it cannot, and the declaration is reported back in the result so a consumer
-    // can tell a checked binding from an unchecked one rather than assuming.
-    const declared = typeof ownerBindingUnavailable === "string" && ownerBindingUnavailable.length > 0;
-    const haveBoth = receiptOwnerId !== undefined && poolOwnerId !== undefined;
-    if ((receiptOwnerId === undefined) !== (poolOwnerId === undefined)) {
-      return bad("owner binding was requested with only one of the two owners supplied");
+    // THE HISTORY MATTERS BECAUSE IT REPEATED. The parameters were first OPTIONAL, so a
+    // caller supplying neither got a silent pass having verified nothing (pass 10, F5),
+    // and a static test that grepped the callers' SOURCE for the argument names was the
+    // compensating control, which is no control at all. F5's repair made the duty fail
+    // closed but added a DECLARATION escape: a caller could say it was unable to bind and
+    // still receive ok, with a companion field recording that the binding had not
+    // happened. That is the same defect wearing a label, and pass 11 F1 found it still
+    // reachable and still pinned by a test. THE ESCAPE IS GONE. Both owners are required,
+    // there is no opt-out to reach for, and no result field records a skipped binding,
+    // because a skipped binding can no longer produce an AFFIRMATIVE result. A caller
+    // without owners still gets a verdict, a refusal; an earlier draft of this comment
+    // said it could obtain no verdict at all, which was false.
+    //
+    // THE IDENTIFIERS ARE DECODED, NOT STRINGIFIED, and that is not fussiness. A presence
+    // test written as `!== undefined` admits null, the empty string, a number and a plain
+    // object, and `String(a) !== String(b)` then compares their COERCIONS, so two nulls
+    // bind, two `{}` bind as "[object Object]", and 1 binds to "1". That is an affirmative
+    // result over a binding nobody performed, which is this duty's defect for the third
+    // time in three repairs, and the pre-commit check caught it in the second draft of
+    // this very fix. Decoding to the 32-byte document identifier and comparing BYTES is
+    // what makes the guarantee real: it accepts the shapes the call sites hold (a base58
+    // string, a Buffer, an object exposing toBuffer()) and refuses everything that does
+    // not DECODE to a 32-byte identifier. Note the limit of that: decoding is structural,
+    // so a duck-typed object returning the right 32 bytes is accepted, and this says
+    // nothing about where the value came from. The provenance boundary is in the header.
+    const rOwnerId = core.toId32(receiptOwnerId);
+    const pOwnerId = core.toId32(poolOwnerId);
+    if (rOwnerId === null || pOwnerId === null) {
+      return bad("owner binding requires BOTH the receipt and pool document owners, each a " +
+        "32-byte document identifier; this check has no unbound mode, so a caller that " +
+        "cannot read them cannot obtain an affirmative verdict from it (duty 6)");
     }
-    if (!haveBoth && !declared) {
-      return bad("owner binding was neither performed nor declared unavailable: supply both " +
-        "receiptOwnerId and poolOwnerId, or pass ownerBindingUnavailable with the reason " +
-        "this caller cannot (duty 6 fails closed)");
+    if (!rOwnerId.equals(pOwnerId)) {
+      // the message says SUPPLIED, because that is what was compared. Stating it as the
+      // documents' actual ownership would be a false diagnostic whenever a caller supplied
+      // the wrong value, which is exactly the case this refusal fires on.
+      return bad(`the supplied receipt owner ${receiptOwnerId} differs from the supplied pool ` +
+        `owner ${poolOwnerId}; a receipt not written by the pool's own operator does not bind ` +
+        "to it, and these two do not name one identity");
     }
-    if (haveBoth && declared) {
-      return bad("owner binding was both supplied and declared unavailable; the caller " +
-        "cannot mean both");
+
+    // ---- the RECEIPT IS A VALID INSTANCE OF ITS LEDGER'S SHAPE, checked before any duty
+    // reasons about its content (pass 13, F1). The allocation helper checks the top-level
+    // correspondences ONLY WHEN THE FIELD IS PRESENT, because it also serves draft shapes
+    // that legitimately omit them, and nothing anywhere examined formatVersion,
+    // l1Verification or verificationMethodVersion, so a receipt stripped of its identity
+    // fields, or carrying formatVersion 99, passed every duty and classified COMPLETED.
+    // Ledger callers were protected by the consensus schema, which requires every one of
+    // these fields; the exported reader's own boundary was narrower than its published
+    // contract, which is the same defect duty 6 had two passes ago. The sweep for the
+    // shape "schema-required field the reader never examines" also found v8's nodeType
+    // (checked only when present) and operatorFeeBps (never examined), so the enforcement
+    // below covers the ledger shape completely rather than the three fields a reviewer
+    // named. WHAT THIS GATE IS AND IS NOT: presence for every CONTRACT-DEFINED receipt
+    // field the ledger's shape requires, plus the value checks the schema states as
+    // consts, enums and ranges. $createdAt is schema-required too and is DELIBERATELY not
+    // demanded here (pass 16, F4, a narrowing not an omission): it is SYSTEM-SUPPLIED,
+    // stamped by Platform at creation, so a ledger-read document always carries it while
+    // legitimate PRE-CREATE verification (the probe checks the props it is about to
+    // broadcast) never can. Requiring it would refuse the pre-create half of this
+    // module's real callers; exempting $-fields from the unknown-key allowlist and not
+    // demanding the one $-field the schema names are the same decision applied in both
+    // directions.
+    // (formatVersion const 1, the three-value l1Verification enum, verificationMethodVersion
+    // const 1, and on the unpared shape nodeType's enum and operatorFeeBps's 0..10000). The
+    // TYPES of the byte and integer fields are checked by the duties that consume them
+    // (proTxHash by a soundness-review finding, which since the closing wave requires the byte-array form and
+    // refuses the string spelling, the same boundary rule as allocationHash below;
+    // allocationRows and allocationHash by the allocation verifier and the byte gate below;
+    // slotIndex by duty 4, targetDuffs by the carrier read), so this gate does not repeat
+    // them, and an earlier comment claiming it mirrors the schema "exactly" and "completely"
+    // said more than that (the pre-commit check on this fold flagged it).
+    const pared0 = hasParedReceipt();
+    const requiredShape = ["poolId", "proTxHash", "slotIndex", "formatVersion",
+      "allocationRows", "allocationHash", "participantCount", "l1Verification",
+      "verificationMethodVersion", ...(pared0 ? [] : ["nodeType", "operatorFeeBps", "targetDuffs"])];
+    for (const k of requiredShape) {
+      // OWN properties only. `receipt[k]` reads the prototype chain, so a direct caller
+      // passing an object that INHERITS these fields would satisfy a presence test while
+      // carrying none of them itself; a ledger-deserialized object is always plain, so the
+      // stricter read costs nothing (pre-commit check on this fold, question 4).
+      if (!Object.hasOwn(receipt, k) || receipt[k] == null) {
+        return bad(`receipt is missing required field ${k}; a receipt outside its ledger's ` +
+          "published shape verifies nothing, whatever its other fields say");
+      }
     }
-    if (haveBoth && String(receiptOwnerId) !== String(poolOwnerId)) {
-      return bad(`the receipt is owned by ${receiptOwnerId} but the pool by ${poolOwnerId}; ` +
-        "a receipt not written by the pool's own operator does not bind to it");
+    // ...AND EVERY FIELD OUTSIDE THE SELECTED LEDGER'S SET IS REFUSED TOO (pass 14, F1).
+    // The presence loop above enforced half of `additionalProperties: false` and not the
+    // other half: v9's schema DELETES the three v8-only fields, so a valid v8 receipt,
+    // which carries all nine shared fields plus those three, satisfied the v9 presence
+    // check and verified under LEDGER=v9, an affirmative result for a document the
+    // selected contract rejects. Third fold running whose gate enforced what its author
+    // was looking at and not the complement stated by the same schema line.
+    //
+    // WRITTEN AS THE ALLOWLIST THE SCHEMA IS, not as a denylist of the three fields the
+    // author was looking at, after the checker on the first draft constructed two
+    // survivals a denylist admits: a forbidden field present with a null VALUE (own
+    // presence is what additionalProperties forbids, whatever the value), and an
+    // arbitrary property outside the schema entirely. `$`-prefixed keys are Platform
+    // SYSTEM fields ($createdAt and kin), which live outside a contract's property set,
+    // so they are exempt exactly as the real contract treats them.
+    for (const k of Object.keys(receipt)) {
+      if (SYSTEM_FIELDS.has(k)) continue;   // Platform's KNOWN system fields, not any $-key
+      if (!requiredShape.includes(k)) {
+        return bad(`receipt carries ${k}, which this ledger's schema does not define ` +
+          "(additionalProperties: false); a receipt outside its ledger's published shape " +
+          "does not verify under it, whatever its other fields say");
+      }
     }
-    const ownerBindingChecked = haveBoth;
+    // allocationHash is a byteArray HASH32 in the schema (packet wave, folder-access review F2). Duty 1
+    // (verifyReceiptAllocation) recomputes and compares it but tolerates a hex STRING there,
+    // correct for that comparison and wrong at the shape boundary: the schema forbids the
+    // string form. And receipt.poolId is the SAME shape (confirm-pass round 20, major):
+    // the schema types it a 32-byte array and toObject() decodes it to bytes, so a
+    // base58 STRING here has no legitimate arrival form at this post-toObject boundary.
+    // The earlier disposition kept it dual-form because hand-built and packet fixtures
+    // pass strings, but a fixture the published contract cannot store is not an
+    // alternative representation, it is a schema-invalid document, and this gate's whole
+    // claim is the selected ledger's published shape. The FUNCTION ARGUMENT `poolId`
+    // stays dual-form (base58 or bytes), per the module header; only the receipt FIELD
+    // is bound to the schema. proTxHash's own 32-byte check is duty 5 below.
+    const ah = receipt.allocationHash;
+    if (!((Buffer.isBuffer(ah) || ah instanceof Uint8Array) && Buffer.from(ah).length === 32)) {
+      return bad("receipt allocationHash is not a 32-byte array (the schema forbids the hex-string form)");
+    }
+    const rpid = receipt.poolId;
+    if (!((Buffer.isBuffer(rpid) || rpid instanceof Uint8Array) && Buffer.from(rpid).length === 32)) {
+      return bad("receipt poolId is not a 32-byte array (the schema forbids the base58-string form)");
+    }
+    if (receipt.formatVersion !== 1) {
+      return bad(`receipt formatVersion ${String(receipt.formatVersion)} is not the const 1 the schema requires`);
+    }
+    if (!["amount-reward-verified", "node-existence-only", "demo-unverified"].includes(receipt.l1Verification)) {
+      return bad(`receipt l1Verification "${String(receipt.l1Verification)}" is not in the schema's enum`);
+    }
+    if (receipt.verificationMethodVersion !== 1) {
+      return bad(`receipt verificationMethodVersion ${String(receipt.verificationMethodVersion)} is not the const 1 the schema requires`);
+    }
+    if (!pared0) {
+      if (!["regular", "evo"].includes(receipt.nodeType)) {
+        return bad(`receipt nodeType "${String(receipt.nodeType)}" is not in the schema's enum`);
+      }
+      if (!(Number.isSafeInteger(receipt.operatorFeeBps)
+          && receipt.operatorFeeBps >= 0 && receipt.operatorFeeBps <= 10000)) {
+        return bad("receipt operatorFeeBps is not an integer in 0..10000");
+      }
+      // targetDuffs is a schema INTEGER on the unpared receipt (pass 18, F1). The shape
+      // gate claims the receipt is a valid instance of the ledger's shape, but the target
+      // carrier read below (toDuffs) accepts a base-10 STRING too, because the ledger
+      // legitimately produces both a stored integer and an allocation-preimage string
+      // elsewhere. That tolerance is right at the carrier read, wrong at the shape
+      // boundary: the v8 schema requires an integer, so a string here is a document the
+      // contract rejects, and the gate must say so rather than let the lenient carrier
+      // read wave it through. (On a pared ledger the receipt has no targetDuffs; the pool
+      // carries it, and the pool is not this gate's subject.)
+      if (!Number.isSafeInteger(receipt.targetDuffs) || receipt.targetDuffs < 1) {
+        return bad("receipt targetDuffs is not a positive integer (the v8 schema requires an integer)");
+      }
+    }
 
     // ---- duty 1, deferred to the owner of the preimage format ----
     const alloc = core.verifyReceiptAllocation(contractId, receipt);
@@ -150,12 +321,112 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
     // that attributes L1 activity. Applies on EVERY receipt ledger: on the flip ledgers
     // the classifier's pool-hash comparison caught it transitively, which is not the same
     // as checking it. ----
-    const receiptHash = receipt.proTxHash == null ? null : Buffer.from(receipt.proTxHash);
-    if (!receiptHash || receiptHash.length !== 32) {
-      return bad("receipt proTxHash is missing or not 32 bytes");
+    // THE TYPE IS PART OF THE DUTY (closing wave, FA1): the schema types proTxHash as a
+    // 32-byte byteArray, same as allocationHash above, and `Buffer.from(<string>)` coerces
+    // a 32-CHARACTER string into 32 UTF-8 bytes that passed the length test, so a receipt
+    // Platform would reject verified here. A document in hand always carries the field as
+    // bytes (toObject() decodes it), so a string has no legitimate arrival form at this
+    // boundary, exactly like allocationHash and receipt.poolId (round 20; only the
+    // poolId function ARGUMENT is legitimately dual-form).
+    const rawReceiptHash = receipt.proTxHash;
+    if (rawReceiptHash == null) return bad("receipt proTxHash is missing");
+    if (!(Buffer.isBuffer(rawReceiptHash) || rawReceiptHash instanceof Uint8Array)) {
+      return bad("receipt proTxHash is not a byte array (the schema forbids the string form)");
+    }
+    const receiptHash = Buffer.from(rawReceiptHash);
+    if (receiptHash.length !== 32) {
+      return bad("receipt proTxHash is not 32 bytes");
     }
     if (core.isFormingHash(receiptHash)) {
       return bad("receipt proTxHash is in the reserved forming namespace, which names no real node");
+    }
+
+    // ---- the POOL IS A VALID INSTANCE OF ITS LEDGER'S SHAPE too (closing confirm-pass
+    // round 5, H1: the RECEIPT side has had this gate since pass 13 and the pool side
+    // never did, so a pair whose POOL the published contract rejects, a v9 pool missing
+    // operatorFeeBps, carrying the v8-only fields, or typing its integers as strings,
+    // verified and classified COMPLETED). Same decisions as the receipt gate: presence
+    // for the contract-required fields, unknown keys refused with the KNOWN system-field
+    // set exempt, the schema's types and bounds enforced at the boundary, and $createdAt
+    // deliberately not demanded (system-supplied; pre-create verification legitimately
+    // lacks it). ----
+    const isInt = (v, lo, hi) => Number.isInteger(v) && v >= lo && (hi === undefined || v <= hi);
+    const poolShapeBad = (why) => bad(`pool ${why} (the pool is not a valid instance of this ledger's shape)`);
+    {
+      const known = pared0
+        ? ["slotIndex", "nodeType", "operatorFeeBps", "targetDuffs", "slotDuffs", "slotCount"]
+        : ["proTxHash", "slotIndex", "nodeType", "status", "operatorIdentityId",
+          "operatorFeeBps", "slotDuffs", "slotCount"];
+      for (const k of Object.keys(pool)) {
+        if (typeof k === "string" && SYSTEM_FIELDS.has(k)) continue;
+        if (!Object.prototype.hasOwnProperty.call(pool, k)) continue;
+        if (!known.includes(k)) {
+          return poolShapeBad(`carries ${k}, which this ledger's pool schema does not define ` +
+            "(additionalProperties: false)");
+        }
+      }
+      const required = pared0
+        ? ["slotIndex", "nodeType", "operatorFeeBps", "targetDuffs"]
+        : ["proTxHash", "slotIndex", "nodeType", "status"];
+      for (const k of required) {
+        // OWN properties only, the same rule the receipt gate states (confirm-pass round
+        // 6, H1: `pool[k]` read the prototype chain, so Object.create over a valid pool,
+        // which serializes with NO required fields and is not a valid ledger document,
+        // passed this gate with zero own fields and classified COMPLETED)
+        if (!Object.prototype.hasOwnProperty.call(pool, k)) {
+          return poolShapeBad(`is missing ${k}, which its schema requires (own property, not inherited)`);
+        }
+      }
+      if (!isInt(pool.slotIndex, 0, 31)) return poolShapeBad("slotIndex is not an integer in 0..31");
+      if (!["regular", "evo"].includes(pool.nodeType)) return poolShapeBad("nodeType is not in the enum");
+      if (pared0) {
+        if (!isInt(pool.operatorFeeBps, 0, 10000)) return poolShapeBad("operatorFeeBps is not an integer in 0..10000");
+        if (!isInt(pool.targetDuffs, 1, 400000000000)) {
+          return poolShapeBad("targetDuffs is not an integer in the schema's range (the string form is not the published type)");
+        }
+      } else {
+        if (!((Buffer.isBuffer(pool.proTxHash) || pool.proTxHash instanceof Uint8Array)
+            && Buffer.from(pool.proTxHash).length === 32)) {
+          return poolShapeBad("proTxHash is not a 32-byte array");
+        }
+        if (!["forming", "live"].includes(pool.status)) return poolShapeBad("status is not in the enum");
+        // OPTIONAL fields by own-property too (confirm-pass round 7, minor: a pool whose
+        // own serialized shape validly omits an optional field must not be refused over a
+        // value it merely inherits, the false-refusal mirror of round 6's false pass)
+        if (Object.prototype.hasOwnProperty.call(pool, "operatorIdentityId")
+            && !((Buffer.isBuffer(pool.operatorIdentityId) || pool.operatorIdentityId instanceof Uint8Array)
+              && Buffer.from(pool.operatorIdentityId).length === 32)) {
+          return poolShapeBad("operatorIdentityId is not a 32-byte array");
+        }
+        if (Object.prototype.hasOwnProperty.call(pool, "operatorFeeBps")
+            && !isInt(pool.operatorFeeBps, 0, 10000)) {
+          return poolShapeBad("operatorFeeBps is not an integer in 0..10000");
+        }
+      }
+      // own-property presence for the optional book too, same H1 rule. THIS REFUSAL IS
+      // THE READER'S OWN COHERENCE RULE, wider than the pre-v9 contracts (confirm-pass
+      // round 18, finding 2): only the v9 pool schema enforces both-or-neither
+      // (dependentRequired), while the published v7/v8 schemas leave the fields
+      // independently optional, so a one-sided pool can legitimately sit on those
+      // ledgers. This verifier still refuses it, fail-closed, because a receipt's slot
+      // claims cannot be checked against half-stated economics; the classifier reads a
+      // failed check as a contradiction to resolve, never as a completion, so the
+      // refusal cannot mint a wrong COMPLETED.
+      const hasD = Object.prototype.hasOwnProperty.call(pool, "slotDuffs");
+      const hasC = Object.prototype.hasOwnProperty.call(pool, "slotCount");
+      if (hasD !== hasC) return poolShapeBad("carries a one-sided slot book (this check refuses to reason over half-stated slot economics)");
+      if (hasD && !isInt(pool.slotDuffs, 1)) return poolShapeBad("slotDuffs is not a positive integer");
+      // THE BOUND IS THE LEDGER THE READER READS (confirm-pass round 6, H2): the LIVE v8
+      // contract is immutable and retains its published slotCount maximum of 10000
+      // (contractV8.cjs header; the 512 ceiling is a SOURCE-contract tightening the
+      // CLIENT enforces at create), so a reader of ON-LEDGER v8 documents must accept
+      // what the live schema can hold. v9 was PUBLISHED with 512, so 512 is its real
+      // bound. The first draft of this gate applied the source ceiling to v8 and refused
+      // a coherent live book of 1000 slots as outside "the ledger shape", which it is not.
+      const maxSlots = pared0 ? 512 : 10000;
+      if (hasC && !isInt(pool.slotCount, 1, maxSlots)) {
+        return poolShapeBad(`slotCount is not an integer in 1..${maxSlots}`);
+      }
     }
 
     // ---- duty 3 first, because duty 2 is meaningless against an incoherent pool ----
@@ -170,8 +441,13 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
       return bad(`receipt nodeType "${String(receipt.nodeType)}" contradicts pool "${String(pool.nodeType)}"`);
     }
     const poolTarget = carriedTarget;
-    // the slot book is both-or-neither at consensus; a one-sided pool is malformed here too
-    const hasSlotDuffs = pool.slotDuffs != null, hasSlotCount = pool.slotCount != null;
+    // the slot book is both-or-neither at consensus ONLY on v9 (dependentRequired); on
+    // v7/v8 a one-sided pool is schema-valid and this is the reader's own fail-closed
+    // coherence rule, same ground as the shape gate above (round 18, finding 2).
+    // own-property presence, same round-7 rule as the shape gate above; a null-valued own
+    // book entry is still refused by the integral check below
+    const hasSlotDuffs = Object.prototype.hasOwnProperty.call(pool, "slotDuffs") && pool.slotDuffs != null;
+    const hasSlotCount = Object.prototype.hasOwnProperty.call(pool, "slotCount") && pool.slotCount != null;
     if (hasSlotDuffs !== hasSlotCount) return bad("pool carries a one-sided slot book");
     if (hasSlotDuffs) {
       const slotDuffs = toDuffs(pool.slotDuffs), slotCount = toDuffs(pool.slotCount);
@@ -199,8 +475,21 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
     if (receipt.slotIndex !== pool.slotIndex) {
       return bad(`receipt slotIndex ${receipt.slotIndex} does not match pool slotIndex ${pool.slotIndex}`);
     }
+    // ...and the AGREED value must sit inside the published range (closing confirm-pass,
+    // must-fix): both schemas bound slotIndex 0..31, and an EQUAL pair at -1 or 32
+    // satisfied the match test while naming a slot no document the contract accepts can
+    // name, so the reader affirmed a pair outside the published format. Same character as
+    // the manifest-range and reserve-range folds: agreement between two copies proves
+    // nothing about either copy's validity. Since round 5's POOL shape gate above, the
+    // pool side is refused before an equal out-of-range pair can reach here, so this
+    // check is redundant BY CONSTRUCTION today and is kept deliberately: a pool-gate
+    // regression must not silently reopen the agreed-out-of-range acceptance (the same
+    // caught-transitively-is-not-checked rule a soundness-review finding states).
+    if (receipt.slotIndex < 0 || receipt.slotIndex > 31) {
+      return bad(`slotIndex ${receipt.slotIndex} is outside the schema's 0..31 range`);
+    }
 
-    return { ok: true, embedded: alloc, ownerBindingChecked };
+    return { ok: true, embedded: alloc };
   } catch {
     // a CONSTANT reason: interpolating the caught value could itself throw
     return { ok: false, reason: "the receipt-to-pool check stopped on malformed input" };
@@ -248,7 +537,12 @@ const checkReceiptsAgainstPools = async ({ contractId, receipts, owners, fetchPo
     const obj = (p && typeof p.toObject === "function") ? p.toObject() : p;
     const pid = (p && typeof p.getId === "function") ? p.getId() : (obj && obj.$id);
     const key = core.toId32(pid);
-    if (key) byId.set(key.toString("hex"), { obj, poolId: pid });
+    // the pool side of duty 6 is readable here WHEN the fetched value exposes
+    // getOwnerId(), so in that case it is read rather than demanded from the caller. A
+    // fetcher returning plain data leaves this undefined and the caller's `owners` entry
+    // supplies it. This is what the removed `hit.poolOwnerId` branch claimed and never did.
+    const powner = (p && typeof p.getOwnerId === "function") ? p.getOwnerId().toString() : undefined;
+    if (key) byId.set(key.toString("hex"), { obj, poolId: pid, poolOwnerId: powner });
   }
 
   return receipts.map((receipt, i) => {
@@ -256,13 +550,18 @@ const checkReceiptsAgainstPools = async ({ contractId, receipts, owners, fetchPo
     if (!id) return { ok: false, reason: "receipt poolId is not a 32-byte id" };
     const hit = byId.get(id.toString("hex"));
     if (!hit) return { ok: false, reason: "no pool found for this receipt" };
-    // DISPOSITION: REFUSE (Request 3). This form takes injected pool DATA, so it cannot
-    // read owners itself, and it has no production caller today. Rather than leave a
-    // reachable path that answers ok over an unchecked binding, it refuses unless the
-    // caller supplies the owners alongside the records. The refusal is per receipt, in
-    // the same shape as every other verdict this function returns.
-    const rOwner = (receipt && typeof receipt.getOwnerId === "function")
-      ? receipt.getOwnerId().toString() : (owners && owners[i] && owners[i].receiptOwnerId);
+    // DISPOSITION: REFUSE (Request 3). This form takes injected receipt DATA, so it
+    // cannot read the receipt's owner itself and the caller must supply it. The POOL's
+    // owner is taken from the fetched value above WHEN THAT VALUE EXPOSES getOwnerId();
+    // a fetcher returning plain data still needs the caller's `owners` entry. Two claims
+    // that stood here were wider than the code and are corrected (pass 11): a
+    // `hit.poolOwnerId` that nothing ever populated, and a `receipt.getOwnerId()` branch
+    // that no call site or test in this repository reaches, because every one of them
+    // passes receipt DATA, which is the only shape whose `poolId` survives the decode
+    // above. Whether some other document interface could reach it is not established
+    // here, and the branch is removed rather than left as an untested claim. The refusal
+    // is per receipt, in the same shape as every other verdict this function returns.
+    const rOwner = owners && owners[i] && owners[i].receiptOwnerId;
     const pOwner = hit.poolOwnerId !== undefined
       ? hit.poolOwnerId : (owners && owners[i] && owners[i].poolOwnerId);
     if (rOwner === undefined || pOwner === undefined) {
@@ -270,8 +569,7 @@ const checkReceiptsAgainstPools = async ({ contractId, receipts, owners, fetchPo
         "so the receipt's owner binding cannot be checked; supply owners, or use the " +
         "single-receipt form with both identifiers" };
     }
-    const ro = (typeof receipt.toObject === "function") ? receipt.toObject() : receipt;
-    return checkReceiptAgainstPool({ contractId, receipt: ro, pool: hit.obj, poolId: hit.poolId,
+    return checkReceiptAgainstPool({ contractId, receipt, pool: hit.obj, poolId: hit.poolId,
       receiptOwnerId: rOwner, poolOwnerId: pOwner });
   });
 };

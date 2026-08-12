@@ -6,7 +6,7 @@
  * (verifyRewardDecision), which this module must agree with exactly; the test
  * cross-checks every reward record of the shipped positive vector.
  *
- * The finality model (review blocker 2, removed everywhere): the ONLY finality gate is
+ * The finality model (packet-review blocker 2, removed everywhere): the ONLY finality gate is
  * H <= validated best ChainLock. Later lifecycle transitions are REPORTING data; there
  * is no per-boundary gate. Entitlement takes the TYPED authenticated list(H-1)
  * eligibility (the five-state form + list height + the authenticated list root), never

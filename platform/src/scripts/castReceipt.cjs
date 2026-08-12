@@ -142,8 +142,15 @@ const { fetchL1Vote } = require("./l1gov.cjs");
     const prefs = (await fetchAll(client, "poolLedger.votePreference", {
       where: [["poolId", "==", poolId]],
     })).filter((d) => Buffer.from(d.toObject().proposalHash).toString("hex") === proposalHex.toLowerCase());
-    const choiceByOwner = new Map(prefs.map((d) => [d.getOwnerId().toString(), d.toObject().choice]));
-    const tally = computeTally(shares.map(({ owner, bps }) => ({ owner, bps })), choiceByOwner);
+    // THE ONE preference-map helper, like the governor and the snapshot-first publisher
+    // (confirm-pass round 10, major: this legacy publisher still built its own map and
+    // never read delegateTo, which is the exact divergence ledgerTally.cjs's header says
+    // the F6 fold existed to end, so a targeted delegation here fell into the untargeted
+    // net and this tool published a different tally and hash than the governor computed
+    // from the same ledger)
+    const { prefsToMaps } = require("./ledgerTally.cjs");
+    const { choiceByOwner, delegateToByOwner } = prefsToMaps(prefs);
+    const tally = computeTally(shares.map(({ owner, bps }) => ({ owner, bps })), choiceByOwner, delegateToByOwner);
     const tHash = tallyHash(activeContractId(env), poolIdStr, proposalHex, tally);
     console.log(`tally: yes ${tally.final.yes} / no ${tally.final.no} / abstain ${tally.final.abstain}, ` +
       `withheld ${tally.weights.withheld} -> outcome "${tally.outcome}"`);

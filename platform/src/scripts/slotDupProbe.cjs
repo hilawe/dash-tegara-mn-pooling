@@ -1,11 +1,13 @@
 /**
- * The duplicate-claim consensus probe (v6/v7): skip the client's read-before-write
+ * The duplicate-claim consensus probe (any pledge-slot ledger, v6 and later; the
+ * isV6 guard is the pledgeSlot capability, not the v7 slot book): skip the
+ * client's read-before-write
  * check and DIRECTLY broadcast a pledgeSlot claim for a slot that is already taken, to
  * prove the ledger itself rejects it (the unique (poolId, slotNo) index). This is the
  * double-broadcast proof from the v6 build, kept as a script so the property stays
  * reproducible on every ledger revision.
  *
- * Run (container, like the client): WHO=funderN LEDGER=v6|v7 \
+ * Run (container, like the client): WHO=funderN LEDGER=<any pledge-slot ledger> \
  *   node src/scripts/slotDupProbe.cjs <poolId> <takenSlotNo>
  * Exit 0 = the ledger REJECTED the duplicate (the property holds).
  * Exit 1 = the ledger ACCEPTED it (a soundness regression; investigate immediately).
@@ -21,7 +23,7 @@ const { loadEnv, activeContractId, isV6, isV7 } = require("./envStore.cjs");
     console.error("usage: slotDupProbe.cjs <poolId> <takenSlotNo>");
     process.exit(2);
   }
-  if (!isV6()) { console.error("needs LEDGER=v6 or v7"); process.exit(2); }
+  if (!isV6()) { console.error("needs a pledge-slot ledger (LEDGER=v6 or later)"); process.exit(2); }
   const who = /^funder\d+$/.test(process.env.WHO || "") ? process.env.WHO : "funder2";
   const whoNum = parseInt(who.slice(6), 10);
   const myId = env[whoNum === 1 ? "FUNDER_ID" : `FUNDER${whoNum}_ID`];

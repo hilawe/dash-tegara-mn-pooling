@@ -22,9 +22,10 @@
  *   watch [loop <sec>]   diff my ledger view against a local watermark and report changes
  *   pledge <poolId> <duffs> [rewardAddress] | pledges <poolId>   FORMING-pool participation
  *   reserve <poolId> <slotNo> [rewardAddress] | slots <poolId>   the on-ledger slot book
- *                        (every ledger with the slot-book capability, v6 onward INCLUDING
- *                        v8 and v9; from v7 the pool document carries the slot economics
- *                        and claims are sizeless and cancellable)
+ *                        (every ledger with on-ledger pledge slots, the pledgeSlot
+ *                        capability, v6 onward INCLUDING v8 and v9; from v7, the
+ *                        slotBook capability, the pool document carries the slot
+ *                        economics and claims are sizeless and cancellable)
  *   join <poolId> <duffs> | exit <poolId> <duffs>   membership requests
  *   requests | cancel <requestId | slotClaimId>      my requests and the self-sovereign undo
  *                        (cancel also deletes a pledgeSlot claim while forming, from v7

@@ -39,7 +39,9 @@
  * Reuses .env.local state (MNEMONIC, IDENTITY_ID, CONTRACT_ID, FUNDER_ID) and registers a
  * second funder identity on first run (persisted as FUNDER2_ID). Wallet-funded runs create
  * a fresh random pool per run; Track C runs reuse the pool recorded for the observed
- * masternode (one pool per proTxHash, enforced by the contract).
+ * masternode slot. The pre-v9 pool contract enforces one pool per proTxHash
+ * (byProTxHash); on v9 uniqueness is per (proTxHash, slotIndex), so distinct covenant
+ * slots of one node may each carry a pool, and the reads below include the slot.
  *
  * Env: NETWORK, DAPI_HOST[/DAPI_PORT] (same as register.cjs), REWARD_DUFFS (default 1 DASH),
  * RAIL_FUNDERS (how many funder identities to load/register, default 2), RAIL_SHARE_SPEC
@@ -777,8 +779,10 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
     }
 
     // the pool and its recorded shares. A pool is one masternode slot and persists
-    // across epochs (the contract enforces one pool per proTxHash), so a Track C run
-    // REUSES the pool and shares already recorded for the observed masternode and only
+    // across epochs (pre-v9 the contract enforces one pool per proTxHash; on v9 the
+    // uniqueness is per (proTxHash, slotIndex), and this lookup carries the slot), so a
+    // Track C run REUSES the pool and shares already recorded for the observed
+    // masternode slot and only
     // creates them on the slot's first epoch. Wallet-funded runs keep a fresh random
     // pool per run. New pools take their share layout from RAIL_SHARE_SPEC (comma bps
     // list, one entry per funder in order, default "6000,4000"); reused pools take it

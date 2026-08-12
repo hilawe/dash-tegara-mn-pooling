@@ -20,10 +20,14 @@
  *   ownership), and any document that was not in the planned set stops the sweep
  *   outright, so a completion, a pledge, or a join landing at any point during the
  *   sweep stops the remaining deletions rather than only the first.
- * - On an immutable-pool ledger the pool document CANNOT be deleted (canBeDeleted:
- *   false) and is excluded from the deletion set aloud; its shares and requests are still
- *   cleaned under the same controlled-identity preflight, and the pool remains on the
- *   ledger as the permanent receipt-less document the admission rule fails closed against.
+ * - On an immutable-pool ledger a RECEIPT-LESS pool is NOT swept at all (packet wave,
+ *   folder-access review F1). The earlier design deleted its shares and requests (withholding only the
+ *   undeletable pool document), but a receipt-less immutable pool is OPEN, IN-FLIGHT, or
+ *   ABANDONED indistinguishably, so sweeping its member documents can delete a live
+ *   reservation on an open pool. The plan now returns skip-indeterminate for it, the same
+ *   fail-closed rule admission uses. A completed immutable pool is kept by the receipt
+ *   check; there is therefore no immutable pool the sweep acts on, which is the honest
+ *   consequence of the ledger not exposing lifecycle for a receipt-less pool.
  *
  * Every skip-or-sweep decision is `debrisPlan.cjs`, a transport-free function covered
  * offline by cleanupDebrisPlanTest.cjs; this script fetches, holds each pool's
@@ -34,12 +38,41 @@
  */
 const Dash = require("dash");
 const { loadEnv, activeContractId, isV3, hasCompletionReceipt, hasImmutablePool,
-  hasPledgeSlot, acquireOpLock, releaseOpLock } = require("./envStore.cjs");
+  hasPledgeSlot, hasSlotBook, acquireOpLock, releaseOpLock } = require("./envStore.cjs");
 const { fetchAll } = require("./query.cjs");
 const journal = require("./compoundJournal.cjs");
+const core = require("./formationCore.cjs");
 const { planPoolSweep } = require("./debrisPlan.cjs");
 
-(async () => {
+// THE POOL'S LIFECYCLE READ for the debris plan (pass 17, F1). On a mutable-pool ledger a
+// real (non-forming) proTxHash means a masternode is live behind the pool, and a live pool
+// is never debris. The immutable ledger has no flip and no proTxHash on the pool, so it is
+// never "live" in this sense (its own document is withheld from deletion regardless). A
+// malformed or absent hash is treated as NOT live here, which is safe because a forming or
+// absent hash is exactly the debris-eligible state; the count-based decisions still apply.
+const poolIsLive = (poolObj) => {
+  if (hasImmutablePool()) return false;
+  const h = poolObj && poolObj.proTxHash;
+  if (h == null) return false;
+  // BOTH SHAPES, because `Buffer.from(hexString)` defaults to UTF-8 and would read a
+  // 64-char hex string as 64 bytes, never 32, so a genuinely live pool whose proTxHash
+  // arrived as a hex string would read as NOT live and this whole guard would silently
+  // not fire (pre-commit check on this fold; the production toObject() yields a Buffer,
+  // but a caller handing stored ledger data would hand a hex string, and a liveness guard
+  // that depends on which caller reached it is the shape this round keeps repairing).
+  let buf;
+  try {
+    if (Buffer.isBuffer(h) || h instanceof Uint8Array) buf = Buffer.from(h);
+    else if (typeof h === "string" && /^[0-9a-fA-F]{64}$/.test(h)) buf = Buffer.from(h, "hex");
+    else return false;
+  } catch { return false; }
+  if (buf.length !== 32) return false;
+  return !core.isFormingHash(buf);
+};
+
+module.exports = { poolIsLive };
+
+if (require.main === module) (async () => {
   const env = loadEnv();
   const clientOpts = {
     network: process.env.NETWORK || "testnet",
@@ -133,17 +166,59 @@ const { planPoolSweep } = require("./debrisPlan.cjs");
         const slots = hasPledgeSlot() ? await fetchAll(client, "poolLedger.pledgeSlot", {
           where: [["poolId", "==", poolId]],
         }) : [];
+        // votePreference is a poolId-referencing member document too (confirm-pass round
+        // 11, must-fix: it was absent from the enumeration, so a sweep could delete the
+        // pool around a preference, orphaning it with its owner never consulted by the
+        // whole-pool preflight). It joins the enumeration, the preflight, the deletable
+        // set, the refresh and the newcomer count, exactly like requests and slots.
+        const prefs = await fetchAll(client, "poolLedger.votePreference", {
+          where: [["poolId", "==", poolId]],
+        });
+        // settlements are lifecycle HISTORY, not deletable debris: their COUNT is a plan
+        // input that refuses the pool outright (same round, same rule as accruals). The
+        // TYPE exists only from v3 (registerV3 introduced the matcher's on-ledger
+        // journal), so the query is capability-gated (confirm-pass round 12, major: the
+        // first draft queried unconditionally, the exact missing-type shape the reserve
+        // fold already settled, at a new call site; on v1 the SDK refuses the unknown
+        // type before the plan can run, wedging the whole sweep)
+        const settlements = isV3() ? await fetchAll(client, "poolLedger.settlement", {
+          where: [["poolId", "==", poolId]],
+        }) : [];
 
+        // the v6 reservation is IMMUTABLE AND UNDELETABLE (its schema; cancel.cjs
+        // documents v6 claims as permanent), so on that ledger every enumerated claim is
+        // reported to the plan as permanent and the plan refuses the pool outright
+        // (confirm-pass round 14: sweeping around them left a partially applied sweep)
+        const claimsPermanent = hasPledgeSlot() && !hasSlotBook();
         // every skip-or-sweep decision is the PLAN's, one transport-free function covered
         // offline (cleanupDebrisPlanTest.cjs); this loop only fetches and executes it
-        const docs = [...shares, ...requests, ...slots, pool];
+        const docs = [...shares, ...requests, ...slots, ...prefs, pool];
         const plan = planPoolSweep({
           shareBpsSum: bps, shareCount: shares.length, accrualCount: accruals.length,
+          settlementCount: settlements.length,
+          permanentClaimCount: claimsPermanent ? slots.length : 0,
           receiptCount: receipts.length, ownerIds: docs.map((d) => d.getOwnerId().toString()),
           controlled: mine, receiptLedger: hasCompletionReceipt(),
           immutablePool: hasImmutablePool(),
+          poolLive: poolIsLive(pool.toObject()),
         });
+        if (plan.action === "skip-live") {
+          console.log(`SKIP ${poolId.toString()}: ${plan.reason}`);
+          continue;
+        }
+        if (plan.action === "skip-indeterminate") {
+          console.log(`SKIP ${poolId.toString()}: ${plan.reason}`);
+          continue;
+        }
         if (plan.action === "keep") continue; // a complete pool is not debris
+        if (plan.action === "skip-permanent-claims") {
+          console.log(`SKIP ${poolId.toString()}: ${plan.reason}`);
+          continue;
+        }
+        if (plan.action === "skip-settlements") {
+          console.log(`SKIP ${poolId.toString()}: ${plan.reason}; not touching it`);
+          continue;
+        }
         if (plan.action === "skip-accruals") {
           console.log(`SKIP ${poolId.toString()}: ${plan.reason}; not touching it`);
           continue;
@@ -170,11 +245,26 @@ const { planPoolSweep } = require("./debrisPlan.cjs");
         // the pool is no longer the pool the plan covered. The decision is the SAME
         // tested function on fresh counts each time. What remains is one irreducible
         // window PER DELETE, between that delete's re-check and its consensus
-        // inclusion, FOR EVERY DOCUMENT FAMILY (receipts, shares, requests, accruals,
-        // ownership), because Platform caps a batch at one transition and a
-        // conditional check-plus-delete is not expressible.
+        // inclusion, FOR EVERY DOCUMENT FAMILY (receipts, shares, requests, slots,
+        // preferences, settlements, accruals, ownership), because Platform caps a batch
+        // at one transition and a conditional check-plus-delete is not expressible.
         const plannedIds = new Set(docs.map((d) => d.getId().toString()));
         for (const doc of deletable) {
+          // RE-FETCH THE POOL before every delete, not only its member documents (pass 17,
+          // F1): the previous re-check reused the original `pool` object, so a pool that
+          // FLIPPED LIVE between planning and this delete would still read as forming. The
+          // pool the fresh plan reasons about must be the pool as it stands now.
+          const freshPoolDoc = (await fetchAll(client, "poolLedger.pool", {
+            where: [["$id", "==", poolId]],
+          }))[0];
+          if (!freshPoolDoc) {
+            // the decision routes through the tested plan like every other skip (closing
+            // confirm-pass, minor): poolPresent:false short-circuits before any other
+            // input is read, so no stale counts need faking here
+            const gone = planPoolSweep({ poolPresent: false });
+            console.log(`STOP ${poolId.toString()}: ${gone.reason}`);
+            break;
+          }
           const freshShares = await fetchAll(client, "poolLedger.share", {
             where: [["poolId", "==", poolId]],
           });
@@ -188,15 +278,24 @@ const { planPoolSweep } = require("./debrisPlan.cjs");
           const freshSlots = hasPledgeSlot() ? await fetchAll(client, "poolLedger.pledgeSlot", {
             where: [["poolId", "==", poolId]],
           }) : [];
-          const freshDocs = [...freshShares, ...freshRequests, ...freshSlots, pool];
+          const freshPrefs = await fetchAll(client, "poolLedger.votePreference", {
+            where: [["poolId", "==", poolId]],
+          });
+          const freshSettlements = isV3() ? await fetchAll(client, "poolLedger.settlement", {
+            where: [["poolId", "==", poolId]],
+          }) : [];
+          const freshDocs = [...freshShares, ...freshRequests, ...freshSlots, ...freshPrefs, freshPoolDoc];
           const freshBps = freshShares.reduce((s, d) => s + Number(d.toObject().shareBps), 0);
           const again = planPoolSweep({
             shareBpsSum: freshBps, shareCount: freshShares.length,
-            accrualCount: freshAccruals.length, receiptCount: freshReceipts.length,
+            accrualCount: freshAccruals.length, settlementCount: freshSettlements.length,
+            permanentClaimCount: claimsPermanent ? freshSlots.length : 0,
+            receiptCount: freshReceipts.length,
             ownerIds: freshDocs.map((d) => d.getOwnerId().toString()),
             controlled: mine, receiptLedger: hasCompletionReceipt(),
             immutablePool: hasImmutablePool(),
-            newcomerCount: freshDocs.filter((d) => d !== pool
+            poolLive: poolIsLive(freshPoolDoc.toObject()),
+            newcomerCount: freshDocs.filter((d) => d !== freshPoolDoc
               && !plannedIds.has(d.getId().toString())).length,
           });
           if (again.action !== "sweep") {

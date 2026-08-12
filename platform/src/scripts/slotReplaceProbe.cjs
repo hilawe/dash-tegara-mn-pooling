@@ -1,12 +1,15 @@
 /**
- * The claim-mutation probe (v7): REPLACE an existing pledgeSlot claim's rewardScript
+ * The claim-mutation probe (the slotBook-capability ledgers the isV7 guard selects,
+ * whose published pledgeSlot type is mutable): REPLACE an
+ * existing pledgeSlot claim's rewardScript
  * while keeping its document id, exactly the post-COMMIT mutation that review finding
  * F-C1 says completion must detect (bare existence rechecking cannot). Kept as a script
  * so the refusal stays reproducible on every ledger revision, like slotDupProbe.cjs.
  *
- * Run (container, like the client): WHO=funderN LEDGER=v7 \
+ * Run (container, like the client): WHO=funderN LEDGER=<any slotBook-capability ledger> \
  *   node src/scripts/slotReplaceProbe.cjs <claimId>
- * Exit 0 = the replace was ACCEPTED by the ledger (expected for mutable v7 claims);
+ * Exit 0 = the replace was ACCEPTED by the ledger (expected where the published
+ * pledgeSlot type is mutable);
  * the point is what formation.cjs `complete` says AFTERWARDS.
  */
 const Dash = require("dash");
@@ -17,7 +20,7 @@ const { loadEnv, activeContractId, isV7 } = require("./envStore.cjs");
   const env = loadEnv();
   const [claimIdStr] = process.argv.slice(2);
   if (!claimIdStr) { console.error("usage: slotReplaceProbe.cjs <claimId>"); process.exit(2); }
-  if (!isV7()) { console.error("needs LEDGER=v7 (v6 claims are immutable)"); process.exit(2); }
+  if (!isV7()) { console.error("needs a slotBook-capability ledger (v7 onward; v6 claims are immutable)"); process.exit(2); }
   const who = /^funder\d+$/.test(process.env.WHO || "") ? process.env.WHO : "funder2";
   const whoNum = parseInt(who.slice(6), 10);
   const myId = env[whoNum === 1 ? "FUNDER_ID" : `FUNDER${whoNum}_ID`];

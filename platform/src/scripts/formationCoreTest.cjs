@@ -466,24 +466,25 @@ for (const [name, thrown] of [
 //                             members can still join; a guard that refuses every
 //                             single-owner claim breaks the first reservation of
 //                             every pool, which is the accepting row an author skips
-//   first invalid             1 owner, book full, non-demo
-//   two limits differ         demo mode accepts 1 owner with a full book
-//   guard disabled            demo
+//   first invalid             1 owner, book full
+//   NO DEMO PARAMETER (round 23, major): the member's environment cannot speak for the
+//   operator's completion profile, so the old demo opt-out is gone and a demo-shaped
+//   argument must change nothing
 {
-  const t = (owners, full, demo) => {
+  const t = (owners, full, extra) => {
     try { core.requireCompletableOwnerCount({ distinctOwnersAfterClaim: owners,
-      bookFullAfterClaim: full, demo }); return null; } catch (e) { return e.message; }
+      bookFullAfterClaim: full, ...(extra || {}) }); return null; } catch (e) { return e.message; }
   };
-  ok("completable: two owners filling the book is valid", t(2, true, false) === null);
-  ok("completable: eight owners filling the book is valid", t(8, true, false) === null);
+  ok("completable: two owners filling the book is valid", t(2, true) === null);
+  ok("completable: eight owners filling the book is valid", t(8, true) === null);
   ok("completable: ONE owner with free slots left is valid (more members may still join)",
-    t(1, false, false) === null);
-  ok("completable: one owner FILLING the book is refused outside demo (first invalid)",
-    /cannot complete|product tier|two/.test(t(1, true, false) || ""));
-  ok("completable: demo mode accepts one owner filling the book",
-    t(1, true, true) === null);
+    t(1, false) === null);
+  ok("completable: one owner FILLING the book is refused (first invalid)",
+    /cannot complete|product tier|two/.test(t(1, true) || ""));
+  ok("completable: a demo:true argument no longer buys admission (the opt-out is gone)",
+    /cannot complete|product tier|two/.test(t(1, true, { demo: true }) || ""));
   ok("completable: zero owners is refused (a claim always adds one)",
-    t(0, false, false) !== null);
+    t(0, false) !== null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -30,11 +30,19 @@ The mixed-transition question is settled as pursue-behind-a-probe (see that sect
 
 ## What the receipt DOES and does NOT attest (the honesty ceiling, state it everywhere)
 
-The receipt is operator-signed. With the owner-binding below, consensus establishes ONLY that:
+The receipt is created by the contract owner (owner-only creation). Consensus establishes
+ONLY that:
 
-- the pool's own operator (its immutable `$ownerId`) recorded exactly one immutable
-  completionReceipt for the pool, and
+- the CONTRACT OWNER recorded exactly one immutable completionReceipt for the pool
+  (owner-only creation plus the byPool unique index), and
 - its embedded allocation and its fields cannot be altered or a second receipt substituted.
+
+Consensus does NOT compare the receipt's owner to the pool's. Pool creation is unrestricted
+on v8, so a pool owned by another identity can carry a contract-owner receipt that consensus
+accepts. That the receipt's owner is also the pool's own operator (its immutable `$ownerId`)
+is checked by duty 6 of the shared reader (receiptPoolCheck), a writer and reader
+requirement rather than a consensus guarantee (round 19 corrected this paragraph, which had
+attributed the binding to consensus).
 
 It does NOT prove that the L1 registration matched the manifest, that the member shares exist or
 match, that the claimed `l1Verification` level was actually performed, that principal
@@ -138,9 +146,11 @@ role as the frozen prior commitment. The allocation is a formation-epoch fact (w
 and the node is a completion-epoch fact. They are kept separate: the allocation hash commits to the
 member split, and `proTxHash` is recorded as a top-level receipt field and indexed by `byProTx`. No
 third-party protection is lost, because the receipt is already immutable, owner-only, and unique on
-`byPool` (poolId is in the hash) and `byProTx`, so the pool-to-node binding is enforced by the
-indices and the pool document, and the honesty ceiling already says the operator is trusted for the
-L1 binding either way. The frozen receipt draft (Formation changes) is what keeps the top-level
+`byPool` (poolId is in the hash), while `byProTx` is a LOOKUP index and NOT unique (pass 14, F6
+corrected this sentence, which had claimed uniqueness the v8 schema does not state; the pool
+schema's own unique node index is what bounds one node to one pool, and v9's receipt gains the
+genuinely unique bySlot pair). The pool-to-node binding is enforced by the pool document and its
+index, and the honesty ceiling already says the operator is trusted for the L1 binding either way. The frozen receipt draft (Formation changes) is what keeps the top-level
 proTxHash and every other field self-consistent between create and the idempotent re-verify.
 
 Rules: base-10 duff strings with no leading zeroes; bps as integers; lowercase hex for scripts;

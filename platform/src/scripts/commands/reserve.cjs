@@ -1,4 +1,5 @@
-// reserve (every ledger carrying the slot-book capability, v6 onward, which INCLUDES v8
+// reserve (every ledger carrying on-ledger pledge slots, the pledgeSlot capability,
+// v6 onward, which INCLUDES v8
 // and v9 through the isV6/isV7 capability aliases; the header used to say "v6 or v7",
 // narrower than the code, pass 7 minor 5): claim a fixed-size collateral slot of a forming pool on
 // the ledger. The unique (poolId, slotNo) index means Platform REJECTS a duplicate
@@ -15,7 +16,7 @@ module.exports = async (ctx) => {
   const { client, args, cmd, who, DASHfmt, short, Identifier, Dash, fetchAll, isV6, isV7,
     getPool, journal, env, activeContractId } = ctx;
   const myId = ctx.myId;
-  if (!isV6()) throw new Error("the on-ledger reservation needs a ledger with the slot book (v6 or later; run the matching register script)");
+  if (!isV6()) throw new Error("the on-ledger reservation needs a ledger with on-ledger pledge slots (v6 or later; run the matching register script)");
 
   const [poolIdStr, slotArg, rewardAddressArg] = args;
   if (!poolIdStr) throw new Error(`usage: ${cmd} <poolId>${cmd === "reserve" ? " <slotNo> [rewardAddress]" : ""}`);
@@ -28,34 +29,49 @@ module.exports = async (ctx) => {
   // throw on it (Buffer.from(undefined)).
   const lifecycle = require("../poolLifecycle.cjs");
   const { hasImmutablePool } = require("../envStore.cjs");
-  let forming;
-  let admission = { ok: true };
-  // the DISPLAY label for `slots`: on v8 the pool's own state; on an immutable ledger
-  // the CLASSIFIER's word, never a live/forming guess, because an admission refusal
-  // does not make a pool LIVE, it makes it undetermined, and printing "LIVE" for an
-  // undetermined pool is exactly the claim the classifier refuses to make (vetting
-  // round, finding 7)
-  let stateLabel;
-  if (hasImmutablePool()) {
-    const receiptDoc = (await client.platform.documents.get(
-      "poolLedger.completionReceipt", { where: [["poolId", "==", pool.getId()]] }))[0] || null;
-    const cls = lifecycle.classifyPool({
-      contractId: activeContractId(env), pool: po, poolId: pool.getId(),
-      receipt: receiptDoc ? receiptDoc.toObject() : null,
-      operatorHasInFlight: false, // a member never holds the operator's local state
-      // duty 6, SUPPLY: both documents are in hand (Request 3)
-      receiptOwnerId: receiptDoc ? receiptDoc.getOwnerId().toString() : undefined,
-      poolOwnerId: pool.getOwnerId().toString(),
-    });
-    admission = lifecycle.admissionVerdict({
-      classification: cls, poolIdStr, participateEnv: process.env.TEGARA_PARTICIPATE,
-    });
-    forming = admission.ok;
-    stateLabel = cls.state.toUpperCase();
-  } else {
-    forming = po.status !== undefined ? po.status === "forming"
-      : core.isFormingHash(Buffer.from(po.proTxHash));
-    stateLabel = forming ? "FORMING" : "LIVE";
+  // ONE ADMISSION PATH FOR EVERY LEDGER (closing wave, FA2): the v8 branch used to decide
+  // from status/forming-hash alone and never queried the completion receipt, so a member
+  // could reserve into a still-forming pool that already carried a receipt, a claim
+  // `complete` refuses and the reservation strands. Both ledgers now fetch the receipt and
+  // route through the SAME classifier and verdict the completion path reasons with, so the
+  // two admission points cannot disagree. On v8 the classifier's own arm reads the pool's
+  // status and hash (and holds a present receipt to the a soundness-review finding agreement), so nothing the
+  // old branch decided is lost. The DISPLAY label is the classifier's word on both
+  // ledgers, never a live/forming guess, because an admission refusal does not make a
+  // pool LIVE, it makes it undetermined, and printing "LIVE" for an undetermined pool is
+  // exactly the claim the classifier refuses to make (vetting round, finding 7).
+  // the receipt DOCUMENT TYPE exists only on the completion-receipt ledgers (v8/v9), so
+  // the query is capability-gated (closing confirm-pass, F1: the first draft of this fold
+  // queried unconditionally, which broke reserve and slots on v6/v7 outright, since the
+  // contract there has no such type to resolve). On the earlier ledgers the classifier
+  // receives null, exactly the fact the ledger states: no receipt type, no receipt.
+  const { hasCompletionReceipt, hasPledgeSlot, hasSlotBook } = require("../envStore.cjs");
+  const receiptDoc = hasCompletionReceipt()
+    ? (await client.platform.documents.get(
+        "poolLedger.completionReceipt", { where: [["poolId", "==", pool.getId()]] }))[0] || null
+    : null;
+  const cls = lifecycle.classifyPool({
+    contractId: activeContractId(env), pool: po, poolId: pool.getId(),
+    receipt: receiptDoc ? receiptDoc.toObject() : null,
+    operatorHasInFlight: false, // a member never holds the operator's local state
+    // duty 6, SUPPLY: both documents are in hand (Request 3)
+    receiptOwnerId: receiptDoc ? receiptDoc.getOwnerId().toString() : undefined,
+    poolOwnerId: pool.getOwnerId().toString(),
+  });
+  const admission = lifecycle.admissionVerdict({
+    classification: cls, poolIdStr, participateEnv: process.env.TEGARA_PARTICIPATE,
+  });
+  const stateLabel = cls.state.toUpperCase();
+  // the RESERVE path refuses BEFORE the claim book is even fetched: a refused admission
+  // must not reason over claims at all, and fetching them first meant the refusal
+  // depended on an unrelated read succeeding. `slots` is display and continues below on
+  // any pool, refused or not, printing the classifier's word.
+  if (cmd !== "slots") {
+    if (!admission.ok) throw new Error(admission.reason);
+    if (admission.viaInstruction) {
+      console.log("proceeding on the operator's advertised participate instruction " +
+        "(the ledger cannot confirm this pool is still open; the instruction is your evidence)");
+    }
   }
   let slotDuffs, slotCount;
   if (isV7()) {
@@ -84,10 +100,22 @@ module.exports = async (ctx) => {
     slotCount = Number(target / slotDuffs);
   }
 
+  // A BOOK WIDER THAN COMPLETION'S CLAIM SCAN CAN NEVER COMPLETE (confirm-pass round 16,
+  // major): completion enumerates at most MAX_PLEDGE_CLAIMS claims and refuses a truncated
+  // scan, so a full fill of a wider book is unobservable there, whatever the schema allows
+  // (v6 derives the width from local SLOT_DUFFS, v7's published pools go to 10000).
+  // Admitting a claim into such a book strands it, permanently on v6. One shared constant,
+  // read from the same core module completion reads.
+  if (slotCount > core.MAX_PLEDGE_CLAIMS) {
+    throw new Error(`this pool's book has ${slotCount} slots, wider than the ` +
+      `${core.MAX_PLEDGE_CLAIMS}-claim scan completion can enumerate, so a full fill can ` +
+      "never be observed and every claim in it strands; do not reserve on this pool" +
+      (isV7() ? "" : " (lower SLOT_DUFFS derives a wider book; align it with a completable width)"));
+  }
   const claims = await fetchAll(client, "poolLedger.pledgeSlot", {
     where: [["poolId", "==", pool.getId()]],
   });
-  const claimed = new Map(claims.map((d) => [Number(d.toObject().slotNo), d.getOwnerId().toString()]));
+const claimed = new Map(claims.map((d) => [Number(d.toObject().slotNo), d.getOwnerId().toString()]));
 
   if (cmd === "slots") {
     console.log(`pool ${poolIdStr}: ${stateLabel} (${po.nodeType}), ` +
@@ -100,15 +128,6 @@ module.exports = async (ctx) => {
     return;
   }
 
-  if (!forming) {
-    throw new Error(admission.ok
-      ? "this pool is LIVE; reservations are only for forming pools"
-      : admission.reason);
-  }
-  if (admission.viaInstruction) {
-    console.log("proceeding on the operator's advertised participate instruction " +
-      "(the ledger cannot confirm this pool is still open; the instruction is your evidence)");
-  }
   // THE POOL'S OWNER MUST BE THE CONTRACT OPERATOR (pass 9, major 2), the same
   // admit-what-completion-refuses shape as the economics triangle and the owner bounds.
   // Completion applies this binding before it even reads the manifest, so a claim
@@ -139,6 +158,46 @@ module.exports = async (ctx) => {
         "here could never complete. Do not reserve on this pool.");
     }
   }
+  // EVERY FETCHED CLAIM IS VALIDATED AGAINST THIS POOL'S OWN RANGE before the RESERVE path
+  // counts it
+  // (pass 15, F2). The schema bounds slotNo per LEDGER (0..511 on v9) and cannot state the
+  // cross-document rule that a claim's slotNo sits below its particular pool's slotCount,
+  // so a schema-valid foreign claim at slot 511 on a two-slot pool is representable, and
+  // this command previously COUNTED it: the owner and book-full preflights ran over the
+  // unfiltered map, so admission could pass toward a book completion later refuses, the
+  // exact stranded state the preflights exist to prevent. Completion refuses out-of-range
+  // claims already; admission now refuses to reason over them at all rather than admitting
+  // a member into a book known to be uncompletable.
+  // Placed AFTER the `slots` branch DELIBERATELY (checker on this fold): `slots` is the
+  // reporting command, and refusing to REPORT a book holding a foreign claim would hide
+  // the very state the refusal below tells the member to resolve. Reporting shows it;
+  // reserving into it refuses.
+  // ON THE SIZED-CLAIM LEDGER every existing PERMANENT claim's size must equal the size
+  // this run would write (confirm-pass round 15, D-2): v6 claims carry their own
+  // slotDuffs, completion requires one uniform size across the book, and the claims are
+  // immutable and undeletable, so writing a mismatched one wedges the pool permanently.
+  // The size here is local configuration, which is exactly how the drift happens.
+  if (hasPledgeSlot() && !hasSlotBook()) {
+    for (const d of claims) {
+      const existing = BigInt(d.toObject().slotDuffs);
+      if (existing !== slotDuffs) {
+        throw new Error(`this pool's book holds a PERMANENT claim sized ${existing} duffs by ` +
+          `${d.getOwnerId().toString()}, while this run is configured for ${slotDuffs} duffs ` +
+          "(SLOT_DUFFS). Completion requires one uniform slot size, and v6 claims cannot be " +
+          "replaced or deleted, so writing a mismatched claim would wedge the pool " +
+          "permanently; align SLOT_DUFFS with the existing book before reserving");
+      }
+    }
+  }
+  for (const d of claims) {
+    const n = Number(d.toObject().slotNo);
+    if (!Number.isInteger(n) || n < 0 || n >= slotCount) {
+      throw new Error(`this pool's book holds a claim at slot ${String(d.toObject().slotNo)} by ` +
+        `${d.getOwnerId().toString()}, outside this pool's range 0..${slotCount - 1}. Completion ` +
+        "must refuse such a book, so reserving into it would strand your contribution behind an " +
+        "uncompletable pool; resolve the foreign claim by hand before reserving");
+    }
+  }
   const slotNo = parseInt(slotArg, 10);
   if (!Number.isInteger(slotNo) || slotNo < 0 || slotNo >= slotCount) {
     throw new Error(`slot must be 0..${slotCount - 1}`);
@@ -160,14 +219,18 @@ module.exports = async (ctx) => {
   const ownersAfter = new Set([...claimed.values(), myId]).size;
   core.requireOwnerCapacity(ownersAfter);
   // the PRODUCT-MINIMUM preflight (pass 7, major 2): the claim that fills the book with
-  // a single owner produces a pool completion must refuse forever, so it is refused
+  // a single owner produces a pool completion refuses under the non-demo operator
+  // profile, so it is refused
   // here instead. A single-owner claim with free slots left stays admissible, since the
   // second member can still arrive; only the book-closing one is refused. Sequential
   // preflight over a read snapshot, not atomic, exactly like the capacity check above.
+  // UNCONDITIONAL (confirm-pass round 23, major): the member's own
+  // FORMATION_ALLOW_UNVERIFIED must not decide admission, because completion reads the
+  // OPERATOR'S environment, and the two disagreeing admitted a one-owner full book
+  // completion refuses under the non-demo operator profile
   core.requireCompletableOwnerCount({
     distinctOwnersAfterClaim: ownersAfter,
     bookFullAfterClaim: claimed.size + 1 === slotCount,
-    demo: process.env.FORMATION_ALLOW_UNVERIFIED === "demo",
   });
   // the member's own reward script (v6 carries it on the claim)
   const rewardScript = rewardAddressArg
