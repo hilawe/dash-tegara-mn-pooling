@@ -9,9 +9,11 @@
  * committed to, from the receipt alone (the canonical allocation preimage is EMBEDDED
  * as allocationRows; allocationHash is its sha256 content id). What it does NOT attest
  * (the honesty ceiling, stated in the spec and repeated here): consensus establishes
- * only that the pool's own operator recorded exactly one immutable receipt per pool;
- * it does not prove the L1 registration matched, that the shares still match, or that
- * the claimed verification level was actually performed.
+ * only that the CONTRACT OWNER recorded exactly one immutable receipt per pool; that
+ * this identity is also the pool's own operator is duty 6 of the shared reader, not a
+ * consensus comparison, because pool creation is unrestricted (round 19). It does not
+ * prove the L1 registration matched, that the shares still match, or that the claimed
+ * verification level was actually performed.
  *
  * Schema decisions (all forced by the review rounds, see the spec's notes):
  *   - documentsMutable:false + canBeDeleted:false + creationRestrictionMode:1

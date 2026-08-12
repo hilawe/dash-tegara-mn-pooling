@@ -51,7 +51,7 @@ const STATES = {
  * with the reason attached, because a classifier that throws turns a readable state into an
  * outage at the call site.
  */
-const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInFlight = false,
+const classifyPoolInner = ({ contractId, pool, poolId, receipt = null, operatorHasInFlight = false,
   receiptOwnerId, poolOwnerId }) => {
   try {
     if (!pool || typeof pool !== "object") {
@@ -69,8 +69,11 @@ const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInF
       // WRONG OPERATOR then produced a definite COMPLETED verdict, because every other
       // duty passes for such a receipt. Recording a hole is not the same as closing one.
       // classifyPool takes plain data and cannot fetch owners itself, so the caller must
-      // supply them; every caller in this codebase holds both documents. Callers that
-      // genuinely cannot must accept the UNDETERMINED verdict rather than a completed one.
+      // supply them. Every caller CONVERTED FOR THIS CHANGE holds both documents and
+      // passes both; that is a statement about those four call sites, not a guarantee
+      // about any caller written later (artifact check: the earlier wording claimed the
+      // wider thing). A caller that genuinely cannot supply them gets the UNDETERMINED
+      // verdict, which is the point: it is a refusal to guess, not a failure.
       if (receiptOwnerId === undefined || poolOwnerId === undefined) {
         return { state: STATES.UNDETERMINED, receiptOk: false,
           reason: "the receipt's owner binding could not be checked: classifyPool was " +
@@ -88,13 +91,20 @@ const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInF
     // asserts the node and the lifecycle itself, and a structurally verifying receipt
     // over a still-forming pool, or over a pool live under a DIFFERENT hash, is a
     // contradiction to resolve, never a completion. The v9 pool asserts nothing here,
-    // which is exactly why the five-duty check is its whole binding.
+    // which is exactly why the shared six-duty check is its whole binding.
     if (receiptOk && !hasImmutablePool()) {
       const disagree = (why) => { receiptOk = false; receiptReason = why; };
-      const poolHash = pool.proTxHash == null ? null : Buffer.from(pool.proTxHash);
-      const receiptHash = receipt.proTxHash == null ? null : Buffer.from(receipt.proTxHash);
-      if (!poolHash || poolHash.length !== 32) disagree("the pool's proTxHash is missing or malformed");
-      else if (!receiptHash || receiptHash.length !== 32) disagree("the receipt's proTxHash is missing or malformed");
+      // BYTES, not anything Buffer.from() coerces (closing wave, FA1): the schema types
+      // proTxHash as a byteArray and toObject() always decodes it to bytes, so a string
+      // here is a malformed document, not an alternate spelling. Buffer.from("<32 chars>")
+      // is 32 UTF-8 bytes and passed the length test, letting a schema-invalid pool agree
+      // with a schema-invalid receipt.
+      const asHash32 = (v) => ((Buffer.isBuffer(v) || v instanceof Uint8Array)
+        && Buffer.from(v).length === 32) ? Buffer.from(v) : null;
+      const poolHash = pool.proTxHash == null ? null : asHash32(pool.proTxHash);
+      const receiptHash = receipt.proTxHash == null ? null : asHash32(receipt.proTxHash);
+      if (!poolHash) disagree("the pool's proTxHash is missing or not a 32-byte array");
+      else if (!receiptHash) disagree("the receipt's proTxHash is missing or not a 32-byte array");
       else if (core.isFormingHash(poolHash)) disagree("the pool is still forming while a receipt exists");
       else if (!poolHash.equals(receiptHash)) disagree("the receipt names a different node than the live pool");
       else if (pool.status !== undefined && pool.status !== "live") disagree(`pool status is "${String(pool.status)}", not live`);
@@ -115,6 +125,11 @@ const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInF
       const hash = pool.proTxHash;
       if (hash == null) {
         return { state: STATES.UNDETERMINED, reason: "the pool carries no proTxHash", receiptOk: false };
+      }
+      // bytes only (closing wave, FA1): a 32-char string coerced to 32 UTF-8 bytes here
+      // and classified IN_FLIGHT, which no schema-valid document can be
+      if (!(Buffer.isBuffer(hash) || hash instanceof Uint8Array)) {
+        return { state: STATES.UNDETERMINED, reason: "the pool's proTxHash is not a byte array", receiptOk: false };
       }
       const buf = Buffer.from(hash);
       if (buf.length !== 32) {
@@ -143,6 +158,75 @@ const classifyPool = ({ contractId, pool, poolId, receipt = null, operatorHasInF
 };
 
 /**
+ * WHETHER A RECEIPT WAS PRESENT IS STRUCTURAL, not something a downstream guard should have
+ * to recover from prose (pass 12, F1).
+ *
+ * `mayAbandon` and `admissionVerdict` used to decide by testing the classification's REASON
+ * TEXT for the phrase "does NOT verify". That worked only while there was exactly ONE
+ * receipt-present refusal to recognize. Request 3 added a second, UNDETERMINED because the
+ * caller supplied no owners, whose reason does not contain the phrase, and both guards then
+ * answered ok for a pool holding a receipt that had not been verified: admission returned
+ * `{ok: true, viaInstruction: true}` and abandonment returned `{ok: true}` for the very pair
+ * they refuse once owners are supplied. Reproduced by execution before this repair.
+ *
+ * This is rule 1 of the pre-commit playbook in its purest form. The old guarantee was riding
+ * on a LIMITATION (only one refusal shape had ever existed), nobody wrote that down, and
+ * adding a second shape removed the guarantee silently. The flag is added here, in ONE place
+ * at the exit, rather than at eleven return sites, so a future refusal shape cannot be
+ * introduced without carrying it.
+ */
+const classifyPool = (args) => {
+  const res = classifyPoolInner(args || {});
+  // truthiness matches what the callers pass: `receiptDoc ? receiptDoc.toObject() : null`
+  return { ...res, receiptPresent: !!(args && args.receipt) };
+};
+
+/** A classification that HELD A RECEIPT and did not conclude COMPLETED is a contradiction to
+ *  resolve by hand, whatever the reason says. Both guards below key on this rather than on
+ *  wording, so a new refusal shape is covered the day it is written. */
+// A CLASSIFICATION THIS MODULE DID NOT PRODUCE MUST PROVE IT IS USABLE BEFORE IT IS ACTED
+// ON. Both guards are EXPORTED and take an object from the caller, so "what the classifier
+// emits" is not the input domain; anything can arrive. Two repairs of the same shape landed
+// here in one session, the second found by a checker asked to find a way past the first:
+//
+//   - written `receiptPresent === true`, the contradiction test ignored any classification
+//     predating that field, so a stale object with `receiptOk: false` and no flag sailed
+//     through the very guard added to catch it,
+//   - and rewritten to fail closed on the missing flag, it still admitted an INCOHERENT
+//     object claiming `receiptOk: true` while not being COMPLETED, which this classifier
+//     never emits, because the contradiction test only looked at one field at a time.
+//
+// So usability is now its own question, asked first, and it is about the object's INTERNAL
+// CONSISTENCY rather than about any one field: both structural fields must be present as
+// booleans, and a claim that a receipt verified is only coherent on a COMPLETED
+// classification. Absence and incoherence are both refusals, and they are separate from a
+// receipt that genuinely did not verify, which is what `receiptContradicts` now means and
+// nothing more.
+// ...and a STATE OUTSIDE THE DEFINED FOUR is unusable too (pass 13, F2). The first version
+// of this predicate checked the receipt booleans and one state relationship and never asked
+// whether the state IS a state, so {state:"banana"} passed both guards and fell through to
+// the instruction rule. The property suite swept exactly that row and PASSED, because its
+// author-written expected rule carried the same permissive default, which is the sharpest
+// available demonstration that an expectation written by the code's own author under the
+// same unexamined assumption reproduces the assumption. The classifier only ever emits
+// members of STATES (adding a fifth there admits it here automatically); anything else is
+// a caller's invention and is refused, not interpreted.
+const KNOWN_STATES = Object.values(STATES);
+const unusableClassification = (c) =>
+  typeof c.receiptOk !== "boolean" ||
+  typeof c.receiptPresent !== "boolean" ||
+  !KNOWN_STATES.includes(c.state) ||
+  (c.receiptOk === true && c.state !== STATES.COMPLETED);
+const UNUSABLE_REASON = "this classification cannot be acted on: it is missing the structural " +
+  "fields a verdict depends on, or it claims a verified receipt without being COMPLETED, and " +
+  "guessing which was meant is how an unverified receipt gets treated as none";
+
+/** A classification that HELD A RECEIPT which did not verify is a contradiction to resolve by
+ *  hand, whatever its reason text says. Reached only for objects that passed the usability
+ *  check above, so it can now read the flag directly. */
+const receiptContradicts = (c) => c.receiptPresent === true && c.receiptOk !== true;
+
+/**
  * May the operator abandon its local state for this pool?
  *
  * On v8 the guard was "the pool is still forming", read from `proTxHash`. On v9 there is no
@@ -160,11 +244,15 @@ const mayAbandon = (classification) => {
   if (!classification || typeof classification !== "object") {
     return { ok: false, reason: "no classification supplied" };
   }
+  if (unusableClassification(classification)) {
+    return { ok: false, reason: UNUSABLE_REASON };
+  }
   if (classification.state === STATES.COMPLETED) {
     return { ok: false, reason: "the pool COMPLETED; abandoning its manifest would orphan real state" };
   }
-  if (classification.receiptOk === false && /does NOT verify/.test(classification.reason || "")) {
-    return { ok: false, reason: classification.reason };
+  if (receiptContradicts(classification)) {
+    return { ok: false, reason: classification.reason ||
+      "a completion receipt is present for this pool and did not verify against it" };
   }
   return { ok: true };
 };
@@ -202,16 +290,41 @@ const admissionVerdict = ({ classification, poolIdStr, participateEnv }) => {
   if (!classification || typeof classification !== "object") {
     return { ok: false, reason: "no classification supplied" };
   }
+  if (unusableClassification(classification)) {
+    return { ok: false, reason: UNUSABLE_REASON };
+  }
   if (classification.state === STATES.COMPLETED) {
     return { ok: false, reason: "this pool has COMPLETED (a receipt verifies against it); it is not open" };
   }
-  if (classification.receiptOk === false && /does NOT verify/.test(classification.reason || "")) {
-    return { ok: false, reason: classification.reason };
+  if (receiptContradicts(classification)) {
+    return { ok: false, reason: classification.reason ||
+      "a completion receipt is present for this pool and did not verify against it" };
   }
   if (classification.state === STATES.FORMING) return { ok: true }; // v8 says so itself
 
-  // v9, or anything else the ledger cannot answer
-  if (participateEnv && poolIdStr && participateEnv === poolIdStr) {
+  // IN_FLIGHT is an ANSWERED state, not an unanswerable one (closing wave, FA2 fold): on
+  // v8 it means the pool has flipped, and on v9 it means the operator's own local evidence
+  // says a formation is underway. Admitting a claim into either strands it at completion
+  // (or lands it on a live pool), and the operator instruction below exists for the state
+  // the LEDGER cannot answer, not to override one it did answer, so no instruction admits
+  // here. The earlier form let the instruction admit any non-refused state, which on a
+  // receipt-aware v8 admission would have turned a leftover TEGARA_PARTICIPATE into
+  // admission onto a flipped pool.
+  if (classification.state === STATES.IN_FLIGHT) {
+    return { ok: false, reason: "a formation is in flight for this pool (on v8, the pool has " +
+      "flipped; on an immutable ledger, local completion evidence exists), so it is not open " +
+      "to new claims; the operator instruction does not apply to a state the ledger answered" };
+  }
+
+  // UNDETERMINED: the one state the ledger genuinely cannot answer (an immutable pool
+  // with no completion receipt is open, in flight, or abandoned, and they are the same
+  // document), so the operator's explicit instruction is the only honest tiebreaker.
+  // REQUIRED EXPLICITLY (checker on the FA2 fold): unknown states are already refused
+  // upstream by unusableClassification, so this gate is unreachable for them today, but
+  // the instruction's scope is this branch's own claim and must not depend on a check
+  // that lives elsewhere staying strict.
+  if (classification.state === STATES.UNDETERMINED
+      && participateEnv && poolIdStr && participateEnv === poolIdStr) {
     return { ok: true, viaInstruction: true };
   }
   return { ok: false, reason:
@@ -241,6 +354,13 @@ const backingNode = ({ pool, receipt = null, receiptOk = false }) => {
     if (!hasImmutablePool()) {
       const h = pool && pool.proTxHash;
       if (h == null) return { known: false, why: "the pool carries no proTxHash" };
+      // bytes only (closing wave, FA1): consumers that ACT on a node identity route it
+      // through this function (the requireBackingNode invariant below), and
+      // Buffer.from("<32 chars>") is 32 UTF-8 bytes, so a schema-invalid string would have
+      // become an established node hex here
+      if (!(Buffer.isBuffer(h) || h instanceof Uint8Array)) {
+        return { known: false, why: "the pool's proTxHash is not a byte array" };
+      }
       const buf = Buffer.from(h);
       if (buf.length !== 32) return { known: false, why: "the pool's proTxHash is not 32 bytes" };
       if (core.isFormingHash(buf)) return { known: false, why: "the pool is still forming, so no node backs it yet" };
@@ -253,6 +373,10 @@ const backingNode = ({ pool, receipt = null, receiptOk = false }) => {
     }
     const h = receipt.proTxHash;
     if (h == null) return { known: false, why: "the completion receipt carries no proTxHash" };
+    // bytes only, same rule as the v8 arm above (closing wave, FA1)
+    if (!(Buffer.isBuffer(h) || h instanceof Uint8Array)) {
+      return { known: false, why: "the receipt's proTxHash is not a byte array" };
+    }
     const buf = Buffer.from(h);
     if (buf.length !== 32) return { known: false, why: "the receipt's proTxHash is not 32 bytes" };
     // DEFENSIVE, and deliberately redundant with the shared check (a soundness review): `receiptOk`

@@ -5,7 +5,9 @@ module.exports = async (ctx) => {
     getPool, myShares, myRequests, isMyAccrual, myAccruals, requestExists, earnedRewardsBig,
     autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep } = ctx;
   const myId = ctx.myId;
-      // On the slot-book ledgers (v6/v7) formation completes FROM pledgeSlot claims and
+      // On the pledge-slot ledgers (v6 and later; the isV6 alias is the pledgeSlot
+      // capability) formation
+      // completes FROM pledgeSlot claims and
       // IGNORES join requests, so a pledge here would look accepted and then silently
       // count for nothing (review F-P). Refuse and point at the real participation path.
       if (isV6()) {
@@ -26,12 +28,11 @@ module.exports = async (ctx) => {
       const pool = await getPool(poolIdStr);
       const po = pool.toObject();
       const core = require("../formationCore.cjs");
-      // v5's lifecycle field is authoritative; the placeholder-hash convention decides
-      // on the earlier ledgers
-      // WHETHER THIS POOL IS OPEN. v5's lifecycle field is authoritative where it exists, and
-      // the placeholder-hash convention decides on the earlier ledgers. An immutable pool has
-      // NEITHER, and cannot answer at all, so the admission rule below decides instead and
-      // this expression is not evaluated there (Buffer.from(undefined) would throw).
+      // WHETHER THIS POOL IS OPEN. Where the v5 lifecycle field exists it must AGREE
+      // with the placeholder-hash convention, both saying forming (round 18, D-1); the
+      // hash alone decides on the earlier ledgers. An immutable pool has neither field
+      // and cannot answer at all, so the admission rule below decides instead and this
+      // expression is not evaluated there (Buffer.from(undefined) would throw).
       const lifecycle = require("../poolLifecycle.cjs");
       const { hasImmutablePool } = require("../envStore.cjs");
       const { checkReceiptAgainstPool } = require("../receiptPoolCheck.cjs");
@@ -54,8 +55,19 @@ module.exports = async (ctx) => {
         });
         forming = admission.ok;
       } else {
+        // WHERE THE v5 LIFECYCLE FIELD EXISTS, it AND the hash namespace must both say
+        // forming; without it (v1-v4) the hash decides alone (confirm-pass round 18,
+        // D-1): completion's nothing-to-do check reads the HASH on every mutable ledger
+        // (formation.cjs, "already LIVE"), so a v5 pool whose proTxHash flipped to a
+        // real hash while status stayed "forming" was admitted here and refused there,
+        // the admit-what-completion-refuses family again. The status conjunct is kept
+        // where the field exists, because a status the operator set to "live" is the
+        // pool's own word that its book is closed, whatever the hash still says.
+        // Short-circuited so a non-forming status still refuses without reading the
+        // hash, the same evaluation order as before this repair.
         forming = isV5() && po.status !== undefined
-          ? po.status === "forming" : core.isFormingHash(Buffer.from(po.proTxHash));
+          ? po.status === "forming" && core.isFormingHash(Buffer.from(po.proTxHash))
+          : core.isFormingHash(Buffer.from(po.proTxHash));
       }
       const target = core.TARGETS[po.nodeType];
       const joins = (await fetchAll(client, "poolLedger.membershipRequest", {
@@ -75,6 +87,30 @@ module.exports = async (ctx) => {
         return;
       }
 
+      // THE MUTABLE-POOL OPERATOR BINDING, the same rule reserve enforces (confirm-pass
+      // round 15, D-1): completion's final pool replacement is signed by the operator on
+      // EVERY mutable ledger, so a pool some other identity owns can never complete under
+      // this operator, and admitting a pledge into it strands the contribution. The check
+      // was v8-gated in formation while the replacement is not. Fail closed on an
+      // unreadable contract owner, exactly like reserve.
+      if (!hasImmutablePool()) {
+        let contractOwner;
+        try {
+          contractOwner = (await client.platform.contracts.get(activeContractId(env)))
+            .getOwnerId().toString();
+        } catch (e) {
+          throw new Error("the contract's owner could not be read " +
+            `(${(e && e.message) || e}), so this pool's operator binding cannot be checked. ` +
+            "Completion refuses a pool the operator does not own, so admitting a pledge here " +
+            "risks stranding it; refusing instead. Retry when the platform read is healthy.");
+        }
+        const poolOwner = pool.getOwnerId().toString();
+        if (poolOwner !== contractOwner) {
+          throw new Error(`pool ${poolIdStr} is owned by ${poolOwner}, not the contract operator ` +
+            `(${contractOwner}); completion refuses a pool the operator does not own, so a pledge ` +
+            "here could never complete. Do not pledge into this pool.");
+        }
+      }
       if (!forming) {
         // the admission rule's own words when it decided, because "this pool is LIVE" is a
         // claim an immutable ledger cannot support and a member acting on it would be misled
@@ -109,10 +145,11 @@ module.exports = async (ctx) => {
       //   one owner stay admissible.
       const ownersAfterPledge = new Set([...joins.map((d) => d.getOwnerId().toString()), myId]).size;
       core.requireOwnerCapacity(ownersAfterPledge);
+      // UNCONDITIONAL (confirm-pass round 23, major): same rule as reserve, the
+      // member's environment cannot speak for the operator's completion profile
       core.requireCompletableOwnerCount({
         distinctOwnersAfterClaim: ownersAfterPledge,
         bookFullAfterClaim: pledged + amountBig === target,
-        demo: process.env.FORMATION_ALLOW_UNVERIFIED === "demo",
       });
       // the member may supply their OWN reward address, so formation never derives
       // a script for them (the review's member-supplied-script note, closed). Gated on

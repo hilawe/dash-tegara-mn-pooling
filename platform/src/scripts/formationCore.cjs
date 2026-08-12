@@ -449,10 +449,21 @@ const requireTierOwnerCount = (distinctOwners, { demo = false } = {}) => {
  * The admission-side PRODUCT-MINIMUM preflight (pass 7, major 2). `requireTierOwnerCount`
  * refuses a one-owner COMPLETION, so admission must refuse the claim that FILLS a pool
  * with a single distinct owner: otherwise the book fills, nothing more can be admitted,
- * and completion refuses forever. The condition is deliberately narrow, and the narrowness
+ * and completion refuses it under the non-demo operator profile (round 24 narrowed this
+ * sentence to match the paragraph below). The condition is deliberately narrow, and the narrowness
  * IS the guard: a single-owner claim is perfectly admissible while free capacity remains,
  * because the second owner can still arrive. Only the claim that closes the book with one
- * owner is refused. Demo mode keeps the consensus width, exactly as the tier guard does.
+ * owner is refused.
+ *
+ * NO DEMO CARVE HERE, deliberately (confirm-pass round 23, major): this preflight runs
+ * in the MEMBER'S process, and the member's ambient FORMATION_ALLOW_UNVERIFIED cannot
+ * speak for the operator's completion profile. The earlier demo parameter let a member
+ * with the variable set close a one-owner book that a non-demo operator refuses,
+ * admission and completion reading two independent environments. The tier
+ * guard at completion keeps its demo carve, because there it is the operator's own
+ * declaration about its own run. (The refusal is per completion attempt under the
+ * non-demo profile, not a permanent verdict; a demo-profile operator can complete
+ * such a book.)
  *
  * `bookFullAfterClaim` is the caller's notion of full: the last free slot on the slot-book
  * path, the exact-fill target on the pledge path.
@@ -463,18 +474,28 @@ const requireTierOwnerCount = (distinctOwners, { demo = false } = {}) => {
  * uncompletable pool, not the concurrent one; completion's own owner checks remain the
  * enforcement.
  */
-const requireCompletableOwnerCount = ({ distinctOwnersAfterClaim, bookFullAfterClaim, demo = false }) => {
+const requireCompletableOwnerCount = ({ distinctOwnersAfterClaim, bookFullAfterClaim }) => {
   if (!Number.isInteger(distinctOwnersAfterClaim) || distinctOwnersAfterClaim < 1) {
     throw new Error("a claim always adds an owner, so the count must be a positive integer");
   }
-  if (!demo && bookFullAfterClaim && distinctOwnersAfterClaim < 2) {
+  if (bookFullAfterClaim && distinctOwnersAfterClaim < 2) {
     throw new Error("this claim would fill the pool with a single owner, and a one-owner pool " +
-      "cannot complete outside demo mode (the product tier is two to eight co-owners); " +
-      "leave room for a second member or form a smaller pool");
+      "cannot complete outside the operator's own demo mode (the product tier is two to " +
+      "eight co-owners); leave room for a second member or form a smaller pool");
   }
 };
 
+// F-G, moved here from formation.cjs (confirm-pass round 16) so admission and completion
+// read ONE capacity rule: MAX_SLOT_COUNT caps a legit book at the reference writer's pool
+// creation; MAX_PLEDGE_CLAIMS is completion's claim-scan ceiling, set above it so a full
+// legit book plus a grief-detection window fits before the truncation refusal. A book
+// wider than the scan ceiling can NEVER be enumerated by completion, whatever schema
+// allows it, so admission must refuse it too.
+const MAX_SLOT_COUNT = 512;
+const MAX_PLEDGE_CLAIMS = MAX_SLOT_COUNT + 128;
+
 module.exports = { TARGETS, isFormingHash, aggregateByOwner, allocateBps, verifyRegistration,
+  MAX_SLOT_COUNT, MAX_PLEDGE_CLAIMS,
   requireCoherentSlotEconomics, requireOwnerCapacity, requireTierOwnerCount,
   requireCompletableOwnerCount,
   decodeId32, toId32, buildAllocationArray, allocationPreimage, allocationHash, verifyReceiptAllocation,

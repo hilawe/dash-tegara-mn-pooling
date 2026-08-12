@@ -73,11 +73,39 @@ const loadObservations = () => {
           { where: [["poolId", "==", poolId]] }))[0] || null;
         if (rd) {
           auditReceipt = rd.toObject();
-          auditReceiptOk = checkReceiptAgainstPool({ contractId: activeContractId(env),
+          const verdict = checkReceiptAgainstPool({ contractId: activeContractId(env),
             receipt: auditReceipt, pool: p, poolId,
             // the audit holds both documents, so duty 6 is checked here
             receiptOwnerId: rd.getOwnerId().toString(),
-            poolOwnerId: pool.getOwnerId().toString() }).ok === true;
+            poolOwnerId: pool.getOwnerId().toString() });
+          auditReceiptOk = verdict.ok === true;
+          // A PRESENT RECEIPT THAT DOES NOT VERIFY IS AN INCONSISTENCY, never ordinary
+          // unfinished state (closing confirm-pass round 4, major): collapsing it into
+          // node-unknown let the incomplete-share warning branch continue past it, and a
+          // ledger holding a contradicting receipt was reported AUDIT OK with exit 0,
+          // against this script's own header. Receipt ABSENCE stays a non-failure (a pool
+          // awaiting completion is honest state); receipt PRESENCE without verification
+          // fails here, before any share-table branch can continue past it.
+          // EVERY EXCLUSION IS A DELIBERATE ONE: the canonical namespace permanently
+          // carries ONE schema-valid, non-verifying receipt, the P6 probe artifact
+          // (V9_CANONICAL_PUBLISH_2026-08-03.md, "Probe evidence left on the canonical
+          // namespace, by design", which lists it precisely so a later audit recognizes
+          // it). Failing on it would leave this audit permanently red on the published
+          // contract, which is how a gate stops being read, so that ONE id is recognized
+          // by name and reported loudly as the documented artifact instead.
+          const KNOWN_PROBE_RECEIPTS = new Set(["2DWKsvWdFvRZWScvT5zXFWhDDVX8garJB7XP4tHC6M8Z"]);
+          if (!auditReceiptOk) {
+            if (KNOWN_PROBE_RECEIPTS.has(rd.getId().toString())) {
+              console.log(`  NOTE: receipt ${rd.getId().toString()} does not verify and is the ` +
+                "DOCUMENTED P6 probe artifact (V9_CANONICAL_PUBLISH_2026-08-03.md); recognized, " +
+                "not an inconsistency");
+            } else {
+              fail(`pool ${poolId.toString()} carries a completion receipt ` +
+                `(${rd.getId().toString()}) that does NOT verify against it (${verdict.reason}); ` +
+                "a present receipt that fails the shared check is a contradiction on the ledger, " +
+                "not a pool awaiting completion");
+            }
+          }
         }
       }
       // THE NODE COLUMN MUST NOT SILENTLY EMPTY. On v9 the pool names no node, and only a

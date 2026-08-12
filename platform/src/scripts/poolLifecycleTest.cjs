@@ -54,8 +54,10 @@ const manifest = (target = REGULAR) => {
 const paredReceiptFor = (m) => {
   const rows = core.allocationPreimage(GC, m);
   // every real receipt carries proTxHash (required on both shapes); its earlier absence
-  // here was itself a fixture-producibility gap the a soundness-review finding binding exposed
-  return { poolId: GP, proTxHash: Buffer.from(m.realHash, "hex"), slotIndex: 0,
+  // here was itself a fixture-producibility gap the a soundness-review finding binding exposed. poolId as
+  // BYTES for the same producibility reason (round 20: the schema types it byteArray
+  // and the shape gate now refuses the base58-string form)
+  return { poolId: core.toId32(GP), proTxHash: Buffer.from(m.realHash, "hex"), slotIndex: 0,
     formatVersion: 1, allocationRows: rows,
     allocationHash: core.allocationHash(rows), participantCount: 3,
     l1Verification: "demo-unverified", verificationMethodVersion: 1 };
@@ -72,10 +74,12 @@ const v9Pool = () => ({ slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
 // v8: carries proTxHash and status, and NO targetDuffs
 const v8Pool = (hash) => ({ slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
   proTxHash: hash,
-  // a malformed-length hash is a deliberate fixture in one case below, and isFormingHash
-  // throws on it, so the status is only derived when the hash is well formed
-  ...(Buffer.isBuffer(hash) && hash.length === 32
-    ? { status: core.isFormingHash(hash) ? "forming" : "live" } : {}) });
+  // a malformed hash is a deliberate fixture in several cases below, and isFormingHash
+  // throws on it, so the status is derived only for a well-formed hash; the malformed
+  // cases carry "live" so the round-5 pool shape gate reaches the FIELD UNDER TEST (the
+  // hash) instead of refusing on a missing status the case is not about
+  status: (Buffer.isBuffer(hash) && hash.length === 32)
+    ? (core.isFormingHash(hash) ? "forming" : "live") : "live" });
 
 // ---------------------------------------------------------------------------
 // v9: the pool cannot answer, so the receipt does or nothing does
@@ -89,18 +93,16 @@ withLedger("v9", () => {
   ok("v9: a verifying receipt means COMPLETED", done.state === STATES.COMPLETED && done.receiptOk === true);
 
   const none = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   });
   ok("v9: receipt-less and no local state is UNDETERMINED, not 'open'", none.state === STATES.UNDETERMINED);
   ok("v9: and it says why, naming the three states it cannot separate",
     /open, in flight and\s+abandoned are the same document/.test(none.reason));
 
   const mine = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null, operatorHasInFlight: true,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   });
   ok("v9: the OPERATOR's own local state narrows it to IN_FLIGHT", mine.state === STATES.IN_FLIGHT);
 
@@ -130,18 +132,29 @@ withLedger("v9", () => {
 // ---------------------------------------------------------------------------
 withLedger("v8", () => {
   const forming = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   });
   ok("v8: a forming proTxHash means FORMING", forming.state === STATES.FORMING);
 
   const flipped = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   });
   ok("v8: a real proTxHash with no receipt is IN_FLIGHT", flipped.state === STATES.IN_FLIGHT);
+
+  // BYTES ONLY at the pool-hash read (closing wave, FA1): Buffer.from("<32 chars>") is 32
+  // UTF-8 bytes, so a schema-invalid STRING hash classified IN_FLIGHT and backingNode
+  // established a node from it. Both string spellings are refused, and the honest state is
+  // UNDETERMINED, never a definite lifecycle read off a malformed document.
+  for (const [label, s] of [["a 32-char string", "B".repeat(32)], ["a 64-char hex string", "ab".repeat(32)]]) {
+    const strung = classifyPool({ contractId: GC, pool: v8Pool(s), poolId: GP, receipt: null });
+    ok(`v8: ${label} proTxHash is UNDETERMINED, not a coerced lifecycle`,
+      strung.state === STATES.UNDETERMINED && /byte array/.test(strung.reason));
+    const bn = backingNode({ pool: v8Pool(s) });
+    ok(`v8: backingNode refuses ${label} proTxHash rather than establishing a node`,
+      bn.known === false && /byte array/.test(bn.why));
+  }
 
   const done = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: unparedReceiptFor(manifest()),
     // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
@@ -173,6 +186,16 @@ withLedger("v8", () => {
   });
     ok("a soundness-review finding: a receipt naming a different node than the live pool is a contradiction",
       otherHash.state === STATES.UNDETERMINED && /different node/.test(otherHash.reason));
+    // ...and the a soundness-review finding agreement arm holds the POOL side to bytes too (closing wave, FA1):
+    // a string pool hash beside a fully verifying receipt used to coerce through
+    // Buffer.from and could even AGREE with a matching receipt; it is a malformed
+    // document, so the state is the contradiction, never COMPLETED
+    const strungPool = classifyPool({ contractId: GC, pool: v8Pool("C".repeat(32)),
+      poolId: GP, receipt: unparedReceiptFor(manifest()),
+      receiptOwnerId: OA, poolOwnerId: OA,
+    });
+    ok("a soundness-review finding: a STRING pool hash beside a verifying receipt is a contradiction, not COMPLETED",
+      strungPool.state === STATES.UNDETERMINED && /not a 32-byte array/.test(strungPool.reason));
     const noReceiptHash = classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP,
       receipt: { ...unparedReceiptFor(manifest()), proTxHash: undefined },
     // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
@@ -185,14 +208,14 @@ withLedger("v8", () => {
     // both ledgers, so the assertion accepts either wording.
     ok("a soundness-review finding: a receipt missing its proTxHash fails closed on v8",
       noReceiptHash.state === STATES.UNDETERMINED
-      && /(missing or malformed|missing or not 32 bytes)/.test(noReceiptHash.reason));
+      // moved upstream again by the pass-13 required-shape gate, which names the field
+      && /(missing or malformed|missing or not 32 bytes|missing required field proTxHash)/.test(noReceiptHash.reason));
   }
 
   ok("v8: a missing proTxHash is UNDETERMINED rather than assumed forming",
     classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   }).state === STATES.UNDETERMINED);
   ok("v8: a short proTxHash is UNDETERMINED",
     classifyPool({ contractId: GC, pool: v8Pool(Buffer.alloc(31, 0)), poolId: GP, receipt: null,
@@ -216,9 +239,8 @@ withLedger("v9", () => {
   ok("and the refusal explains the orphaning risk", /orphan real state/.test(mayAbandon(done).reason));
 
   const none = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   });
   ok("abandon is allowed for a pool with no completion record", mayAbandon(none).ok === true);
 
@@ -232,15 +254,13 @@ withLedger("v9", () => {
 withLedger("v8", () => {
   ok("v8: abandon allowed while forming",
     mayAbandon(classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   })).ok === true);
   ok("v8: abandon allowed pre-receipt after the flip (the v8 command adds its own live guard)",
     mayAbandon(classifyPool({ contractId: GC, pool: v8Pool(REAL_HASH), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   })).ok === true);
 });
 
@@ -254,9 +274,8 @@ withLedger("v8", () => {
 // change makes the two symmetric in either direction.
 withLedger("v9", () => {
   const open = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   });
   const done = classifyPool({ contractId: GC, pool: v9Pool(), poolId: GP, receipt: paredReceiptFor(manifest()),
     // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
@@ -297,9 +316,8 @@ withLedger("v9", () => {
 });
 withLedger("v8", () => {
   const forming = classifyPool({ contractId: GC, pool: v8Pool(FORMING_HASH), poolId: GP, receipt: null,
-    // duty 6 now REQUIRES the owners (Request 3); matching ids so the binding passes
-    // and each case still exercises the property its name claims
-    receiptOwnerId: OA, poolOwnerId: OA,
+    // receipt-less: duty 6 is not reached, so no owners are needed here and
+    // supplying them would hide that a pool with no receipt classifies normally
   });
   ok("v8: a forming pool admits with no instruction, because the pool itself says it is open",
     admissionVerdict({ classification: forming, poolIdStr: GP }).ok === true);
@@ -330,6 +348,17 @@ withLedger("v9", () => {
   ok("v9: no receipt at all is unknown", backingNode({ pool: v9Pool() }).known === false);
   ok("v9: the pool's own fields are never consulted, so a stray proTxHash on it is ignored",
     backingNode({ pool: { ...v9Pool(), proTxHash: Buffer.alloc(32, 0xbb) } }).known === false);
+  // the receipt arm holds the hash to BYTES even when the caller claims receiptOk (closing
+  // wave, FA1): this arm is deliberately redundant with the shared check for exactly this
+  // reason, a caller that verified nothing (or with an older check) must not be able to
+  // turn a schema-invalid string into an established node here, the same rule as the
+  // forming-namespace refusal beside it
+  for (const [label, s] of [["a 32-char string", "D".repeat(32)], ["a 64-char hex string", "ab".repeat(32)]]) {
+    ok(`v9: ${label} receipt hash is refused even under a claimed receiptOk`,
+      (() => { const b = backingNode({ pool: v9Pool(),
+        receipt: { ...r, proTxHash: s }, receiptOk: true });
+      return b.known === false && /byte array/.test(b.why); })());
+  }
 });
 
 // THE EXECUTABLE INVARIANT. A caller that writes a statement about a node must crash rather
@@ -392,6 +421,59 @@ ok("mayAbandon refuses a missing classification", mayAbandon(null).ok === false)
       node.known === false && /forming/i.test(node.why || ""));
   });
 }
+
+// ---------------------------------------------------------------------------
+// THE GUARDS COMPOSE FOR EVERY RECEIPT-PRESENT REFUSAL, not just the one whose reason
+// happens to carry a particular phrase (pass 12, F1).
+//
+// Both guards used to test the reason TEXT for "does NOT verify". Request 3 had added a
+// second receipt-present refusal, UNDETERMINED because the caller supplied no owners,
+// whose reason does not contain that phrase, so admission returned {ok:true,
+// viaInstruction:true} and abandonment returned {ok:true} for a pool holding an
+// unverified receipt. The cases below drive EACH receipt-present refusal shape through
+// both guards, so a third shape added later is covered the day it is written rather
+// than the day someone notices.
+// ---------------------------------------------------------------------------
+withLedger("v9", () => {
+  const pool = v9Pool();
+  const shapes = [
+    ["owners ABSENT (the Request 3 refusal, whose reason lacks the old phrase)",
+      { contractId: GC, pool, poolId: GP, receipt: paredReceiptFor(manifest()) }],
+    ["owners MISMATCHED (the classic refusal)",
+      { contractId: GC, pool, poolId: GP, receipt: paredReceiptFor(manifest()),
+        receiptOwnerId: OA, poolOwnerId: OB }],
+    ["a receipt that fails a NON-owner duty",
+      { contractId: GC, pool, poolId: GP, receipt: paredReceiptFor(manifest(EVO)),
+        receiptOwnerId: OA, poolOwnerId: OA }],
+  ];
+  for (const [name, args] of shapes) {
+    const cls = classifyPool(args);
+    ok(`receipt-present refusal, ${name}: classification is not COMPLETED`,
+      cls.state !== STATES.COMPLETED && cls.receiptOk !== true);
+    ok(`...and it reports receiptPresent structurally`, cls.receiptPresent === true);
+    ok(`...and ADMISSION refuses it even with a matching participate instruction`,
+      admissionVerdict({ classification: cls, poolIdStr: GP, participateEnv: GP }).ok === false);
+    ok(`...and ABANDON refuses it`, mayAbandon(cls).ok === false);
+  }
+  // and the receipt-LESS pool is untouched: the instruction still admits it, and
+  // abandoning it is still allowed. Without this pair the fix above could be "refuse
+  // everything", which would pass every assertion in the loop and break the product.
+  const none = classifyPool({ contractId: GC, pool, poolId: GP, receipt: null });
+  ok("a receipt-LESS pool still reports receiptPresent false", none.receiptPresent === false);
+  ok("...and admission still admits it on a matching instruction",
+    admissionVerdict({ classification: none, poolIdStr: GP, participateEnv: GP }).ok === true);
+  ok("...and abandon is still allowed for it", mayAbandon(none).ok === true);
+
+  // A CLASSIFICATION WITHOUT THE FLAG FAILS CLOSED (pre-commit check on this repair). Both
+  // guards are exported and take an object from the caller, so one built by hand or left
+  // over from before the field existed must not be read as "no receipt". Only an explicit
+  // false licenses proceeding.
+  const legacy = { state: STATES.UNDETERMINED, receiptOk: false,
+    reason: "a stale classification carrying no receiptPresent field" };
+  ok("a classification with NO receiptPresent field is refused by admission",
+    admissionVerdict({ classification: legacy, poolIdStr: GP, participateEnv: GP }).ok === false);
+  ok("...and by abandon", mayAbandon(legacy).ok === false);
+});
 
 console.log(`poolLifecycleTest: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

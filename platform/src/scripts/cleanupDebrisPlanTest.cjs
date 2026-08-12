@@ -53,9 +53,23 @@ ok("a foreign-owned POOL document skips the pool (the pool stays in the prefligh
 {
   const mutable = planPoolSweep({ ...base });
   ok("a mutable-ledger sweep deletes the pool document", mutable.action === "sweep" && mutable.deletePool === true);
+  // AN IMMUTABLE RECEIPT-LESS POOL IS NOT SWEPT AT ALL (packet wave, folder-access review F1). The old
+  // answer swept its member documents (withholding only the undeletable pool doc), which
+  // deletes a live reservation on an OPEN pool the immutable ledger cannot distinguish from
+  // abandoned debris. This test previously ENCODED THE UNSAFE ANSWER as expected; it now
+  // asserts the fail-closed skip, the same indeterminacy the admission rule refuses on.
   const immutable = planPoolSweep({ ...base, immutablePool: true });
-  ok("an immutable-ledger sweep withholds the pool document",
-    immutable.action === "sweep" && immutable.deletePool === false);
+  ok("an immutable receipt-less pool is left intact, not swept",
+    immutable.action === "skip-indeterminate");
+  ok("the skip names the indeterminate lifecycle",
+    /open, in-flight or abandoned/.test(immutable.reason || ""));
+  // a mutable receipt-less pool is still swept: the pool document answers forming-vs-live
+  // there, so the count-based debris decision is safe
+  ok("a mutable receipt-less pool is still swept (its lifecycle IS readable)",
+    planPoolSweep({ ...base, immutablePool: false }).action === "sweep");
+  // a LIVE mutable pool still short-circuits to skip-live before this point
+  ok("regression: a live mutable pool still skips as live, not indeterminate",
+    planPoolSweep({ ...base, poolLive: true }).action === "skip-live");
 }
 
 // the per-delete re-check is THIS SAME FUNCTION on fresh input, so the pair below is the
@@ -91,6 +105,111 @@ ok("regression pin: the lock skip still outranks the newcomer skip (checked firs
   planPoolSweep({ ...base, newcomerCount: 1, lockHeld: true }).action === "skip-locked");
 ok("regression pin: zero newcomers changes nothing",
   planPoolSweep({ ...base, newcomerCount: 0 }).action === "sweep");
+
+// A LIVE POOL IS NEVER DEBRIS (pass 17, F1). The plan had no lifecycle input, so a
+// controlled operator's one-basis-point non-participant share pushed the aggregate off
+// 10000, defeated the complete-table keep, and every document being controlled returned
+// sweep for a pool whose masternode was live and whose receipt was merely unpublished.
+ok("a LIVE pool is never debris, whatever its share table sums to",
+  planPoolSweep({ ...base, poolLive: true }).action === "skip-live");
+ok("the reviewer's exact case: aggregate 10001, all controlled, live -> skip not sweep",
+  planPoolSweep({ shareBpsSum: 10001, shareCount: 3, accrualCount: 0, receiptCount: 0,
+    ownerIds: [F1, F2, OP, OP], controlled: new Set([OP, F1, F2]),
+    receiptLedger: true, immutablePool: false, poolLive: true }).action === "skip-live");
+ok("the skip-live decision carries its reason",
+  /a node is live behind it|never debris/.test(planPoolSweep({ ...base, poolLive: true }).reason || ""));
+ok("liveness outranks a foreign document too (checked before the ownership preflight)",
+  planPoolSweep({ ...base, poolLive: true, ownerIds: [F1, "stranger"] }).action === "skip-live");
+ok("liveness outranks the count-based keep (a live pool with a complete table is kept as live)",
+  planPoolSweep({ ...base, poolLive: true, shareBpsSum: 10000, shareCount: 2 }).action === "skip-live");
+// but the lock and newcomer skips still outrank liveness (they are checked first, and both
+// mean the plan should not act at all)
+ok("regression pin: a held lock still outranks liveness",
+  planPoolSweep({ ...base, poolLive: true, lockHeld: true }).action === "skip-locked");
+ok("regression pin: poolLive false (the default) leaves the sweep decision unchanged",
+  planPoolSweep({ ...base }).action === "sweep");
+
+// poolIsLive, the caller's lifecycle read that feeds poolLive (pass 17, F1, and the
+// pre-commit check on its own fold). The DIRECT test the plan cases could not be: the
+// plan trusts the boolean, so the boolean's derivation is where the value-shape traps
+// live. Driven on a MUTABLE ledger (v8), where liveness exists.
+{
+  const prev = process.env.LEDGER;
+  process.env.LEDGER = "v8";
+  // require after setting LEDGER so hasImmutablePool reads it; the module is import-safe
+  // (its cleanup IIFE is gated on require.main)
+  delete require.cache[require.resolve("./cleanupDebris.cjs")];
+  const { poolIsLive } = require("./cleanupDebris.cjs");
+  const real = Buffer.alloc(32, 0xaa);
+  const forming = Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 7)]);
+  ok("poolIsLive: a real proTxHash Buffer is live", poolIsLive({ proTxHash: real }) === true);
+  ok("poolIsLive: a forming-namespace Buffer is NOT live", poolIsLive({ proTxHash: forming }) === false);
+  ok("poolIsLive: a Uint8Array real hash is live", poolIsLive({ proTxHash: new Uint8Array(real) }) === true);
+  // THE HEX-STRING TRAP: Buffer.from(hexString) defaults to UTF-8, so a naive read of a
+  // 64-char hex string gives 64 bytes and would wrongly report NOT live. The real hash
+  // as a hex string must still read live.
+  ok("poolIsLive: a real proTxHash as a HEX STRING is live (not UTF-8 misread)",
+    poolIsLive({ proTxHash: real.toString("hex") }) === true);
+  ok("poolIsLive: a forming hex string is NOT live", poolIsLive({ proTxHash: forming.toString("hex") }) === false);
+  ok("poolIsLive: an absent proTxHash is NOT live", poolIsLive({}) === false);
+  ok("poolIsLive: a non-hex string is NOT live (not silently coerced)",
+    poolIsLive({ proTxHash: "not a hash at all" }) === false);
+  ok("poolIsLive: a wrong-length hex string is NOT live", poolIsLive({ proTxHash: "aa" }) === false);
+  // on the immutable ledger there is no flip, so nothing is "live" in this sense
+  process.env.LEDGER = "v9";
+  delete require.cache[require.resolve("./cleanupDebris.cjs")];
+  const v9lib = require("./cleanupDebris.cjs");
+  ok("poolIsLive: on the immutable ledger a real hash is still NOT live (no flip there)",
+    v9lib.poolIsLive({ proTxHash: real }) === false);
+  if (prev === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev;
+  delete require.cache[require.resolve("./cleanupDebris.cjs")];
+}
+
+// a VANISHED pool short-circuits every other input (closing confirm-pass, minor: the
+// caller's missing-pool stop was the one skip decision outside this tested function).
+// Driven with otherwise-SWEEPABLE inputs, so the case fails if any other rule is
+// consulted first.
+{
+  const { planPoolSweep } = require("./debrisPlan.cjs");
+  const gone = planPoolSweep({ poolPresent: false,
+    shareBpsSum: 5000, shareCount: 1, accrualCount: 0, receiptCount: 0,
+    ownerIds: ["only-owner"], controlled: new Set(["only-owner"]),
+    receiptLedger: true, immutablePool: false });
+  ok("a vanished pool is skip-vanished, whatever the other inputs say",
+    gone.action === "skip-vanished" && /gone since planning/.test(gone.reason));
+  ok("...and the bare-minimum call (only poolPresent) decides without reading anything else",
+    planPoolSweep({ poolPresent: false }).action === "skip-vanished");
+}
+
+// a pool that ever SETTLED an exit or join is refused outright (confirm-pass round 11,
+// must-fix), same rule as accruals, driven with otherwise-sweepable inputs
+{
+  const { planPoolSweep } = require("./debrisPlan.cjs");
+  const settled = planPoolSweep({ shareBpsSum: 5000, shareCount: 1, accrualCount: 0,
+    settlementCount: 1, receiptCount: 0,
+    ownerIds: ["only-owner"], controlled: new Set(["only-owner"]),
+    receiptLedger: true, immutablePool: false });
+  ok("a pool with a settlement is skip-settlements, never swept",
+    settled.action === "skip-settlements" && /settled an exit or join/.test(settled.reason));
+}
+
+// a PERMANENT (v6) reservation refuses the whole pool (confirm-pass round 14, major: the
+// plan approved a sweep that would fail midway on the undeletable claim, leaving the
+// bookkeeping set partially applied), driven with otherwise-sweepable inputs
+{
+  const { planPoolSweep } = require("./debrisPlan.cjs");
+  const perm = planPoolSweep({ shareBpsSum: 5000, shareCount: 1, accrualCount: 0,
+    settlementCount: 0, permanentClaimCount: 1, receiptCount: 0,
+    ownerIds: ["only-owner"], controlled: new Set(["only-owner"]),
+    receiptLedger: true, immutablePool: false });
+  ok("a permanent reservation is skip-permanent-claims, never a partial sweep",
+    perm.action === "skip-permanent-claims" && /partially applied/.test(perm.reason));
+  ok("zero permanent claims changes nothing",
+    planPoolSweep({ shareBpsSum: 5000, shareCount: 1, accrualCount: 0, settlementCount: 0,
+      permanentClaimCount: 0, receiptCount: 0, ownerIds: ["only-owner"],
+      controlled: new Set(["only-owner"]), receiptLedger: true, immutablePool: false,
+    }).action === "sweep");
+}
 
 console.log(`cleanupDebrisPlanTest: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

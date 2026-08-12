@@ -160,7 +160,7 @@ const assertReceiptCorrect = (label, r) => {
 // the completion record must name exactly REAL_HASH (round-4: poolLive only checked
 // non-forming). On v8 the pool itself answers. On v9 the pool has NO equivalent and this
 // must not weaken to "a receipt exists": the v9 form is that ONE receipt exists, VERIFIES
-// against the pool through the shared five-duty check, and names exactly REAL_HASH
+// against the pool through the shared six-duty check, and names exactly REAL_HASH
 // (checking merely present is the round-4 mistake one document over).
 const poolLiveUnderRealHash = () => {
   const p = ledger().docs.find((d) => d.id === POOL);
@@ -289,6 +289,107 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       /creation restriction mode Owner Only/.test(threwWith({ type: "pool", ownerId: F1, data: poolData }) || ""));
     ok("mock accepts pool creation by the contract owner",
       threwWith({ type: "pool", ownerId: OP, data: poolData }) === null);
+    // A FIXTURE MISSING THE CONSTRAINT'S OWN INPUT IS A BROKEN FIXTURE, NEVER A SATISFIED
+    // CONSTRAINT (pass 11, F2). Both owner-only rows were gated on the contract owner
+    // being truthy, so a ledger carrying contractId and docs but no contractOwner admitted
+    // a create from any identity. Every seed here supplies it, which is exactly why the
+    // gap survived: the vacuous branch had no caller, so nothing observed it. These two
+    // cases are that observation, one per document type, since a repair to only one row
+    // would leave the other silent.
+    const ownerless = { ...seededLedger, contractOwner: undefined };
+    ok("mock REFUSES a pool create when the ledger carries no contractOwner",
+      /cannot be evaluated/.test((() => {
+        try { mock.assertCreateAllowed(ownerless, { type: "pool", ownerId: OP, data: poolData }); return ""; }
+        catch (e) { return e.message; }
+      })()));
+    ok("mock REFUSES a receipt create when the ledger carries no contractOwner",
+      /cannot be evaluated/.test((() => {
+        try {
+          mock.assertCreateAllowed(ownerless, { type: "completionReceipt", ownerId: OP,
+            data: { poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+              proTxHash: REAL_HASH, slotIndex: 0 } });
+          return "";
+        } catch (e) { return e.message; }
+      })()));
+    // A PLACEHOLDER STRING IS NOT AN IDENTITY (pre-commit check on the first draft). That
+    // draft only required contractOwner to be a nonempty string, so a ledger and a record
+    // both carrying a single space matched each other and passed the Owner Only
+    // constraint having established nothing.
+    const spaceOwner = { ...seededLedger, contractOwner: " " };
+    ok("mock REFUSES when contractOwner is a nonempty string that is not an identity",
+      /parses as an identity/.test((() => {
+        try { mock.assertCreateAllowed(spaceOwner, { type: "pool", ownerId: " ", data: poolData }); return ""; }
+        catch (e) { return e.message; }
+      })()));
+    // BOTH SIDES canonicalize, so an owner supplied as an Identifier OBJECT is the same
+    // owner as the base58 string (pre-commit re-check: parsing only the ledger's side
+    // would refuse this legitimately-matching record)
+    ok("mock accepts a pool create whose ownerId is an Identifier object for the same identity",
+      threwWith({ type: "pool", ownerId: Identifier.from(OP), data: poolData }) === null);
+
+    // THE PLEDGE SLOT WAS NOT MODELLED AT ALL (pass 12, F2). Its published schema bounds
+    // slotNo, forbids extra properties, and carries a UNIQUE bySlot index on
+    // (poolId, slotNo) that is what stops two members reserving one slot. The mock
+    // validated pool, receipt and share creates and let every pledgeSlot through, so a
+    // reservation-writer regression could pass this matrix green.
+    // the seed ALREADY holds slots 0 and 1 of POOL, so these cases run against real seeded
+    // data rather than a synthetic row. A first draft asserted that slot 0 was accepted,
+    // which the seed correctly refused: the fixture was wrong, not the code.
+    const slotPoolHex = Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex");
+    const slotScript = "76a914" + "11".repeat(20) + "88ac";
+    const slotAt = (poolHex, n) => ({ poolId: poolHex, slotNo: n, rewardScript: slotScript });
+    // the assertion checks the SEED IT NAMES before checking the refusal, because "a free
+    // slot of the seeded pool" said against an empty ledger is vacuously true (pre-commit
+    // item b: the earlier name was wider than its check)
+    ok("the seed this block reasons about actually holds slots 0 and 1 of POOL",
+      seededLedger.docs.filter((d) => d.type === "pledgeSlot"
+        && d.data.poolId === slotPoolHex).map((d) => d.data.slotNo).sort().join(",") === "0,1");
+    ok("mock accepts a pledgeSlot on a FREE slot of the seeded pool",
+      threwWith({ type: "pledgeSlot", ownerId: F1, data: slotAt(slotPoolHex, 5) }) === null);
+    // the unique index is OWNER-INDEPENDENT: a SECOND member colliding on a slot another
+    // member already holds is the case that must be refused, and using a different owner
+    // is what distinguishes this index from the per-owner share index above
+    ok("mock REFUSES a pledgeSlot on a (poolId, slotNo) another member already holds",
+      /duplicate unique index bySlot for pledgeSlot/.test((() => {
+        try { mock.assertCreateAllowed(seededLedger, { type: "pledgeSlot", ownerId: OP,
+          data: slotAt(slotPoolHex, 0) }); return ""; } catch (e) { return e.message; }
+      })()));
+    // HEX IS CASE-INSENSITIVE AS AN ENCODING, so uppercase hex for the same bytes is the
+    // same key and must also be refused (pre-commit item c: the canonicalizer passed
+    // strings through, so a direct caller could slip a duplicate past the index by
+    // changing case; the sweep found the same shape at the receipt's bySlot site)
+    ok("mock REFUSES the same (poolId, slotNo) written in UPPERCASE hex",
+      /duplicate unique index bySlot for pledgeSlot/.test((() => {
+        try { mock.assertCreateAllowed(seededLedger, { type: "pledgeSlot", ownerId: OP,
+          data: slotAt(slotPoolHex.toUpperCase(), 0) }); return ""; } catch (e) { return e.message; }
+      })()));
+    // and the index is keyed on the PAIR, not on slotNo alone: the same slot number of a
+    // DIFFERENT pool is a different key and must be admitted
+    const otherPoolHex = Buffer.from(Identifier.from(
+      Identifier.from(crypto.createHash("sha256").update("slot-other-pool").digest()).toString()
+    ).toBuffer()).toString("hex");
+    ok("mock ACCEPTS the same slotNo on a DIFFERENT pool (the key is the pair, not slotNo)",
+      threwWith({ type: "pledgeSlot", ownerId: OP, data: slotAt(otherPoolHex, 0) }) === null);
+    // the props validator, driven through the same exported surface as the others
+    const slotPropsThrew = (props) => {
+      try { mock.validateSlotProps(props); return ""; } catch (e) { return e.message; }
+    };
+    const slotProps = { poolId: Buffer.from(Identifier.from(POOL).toBuffer()),
+      slotNo: 0, rewardScript: Buffer.from("76a914" + "11".repeat(20) + "88ac", "hex") };
+    ok("mock pledgeSlot schema accepts a well-formed slot", slotPropsThrew(slotProps) === "");
+    ok("mock pledgeSlot schema rejects an unknown property",
+      /unknown property/.test(slotPropsThrew({ ...slotProps, surprise: 1 })));
+    ok("mock pledgeSlot schema rejects a missing rewardScript",
+      /missing required rewardScript/.test(slotPropsThrew({ poolId: slotProps.poolId, slotNo: 0 })));
+    // v9 tightened slotNo to 511 to match the slot-count ceiling. This whole block is
+    // inside the PARED gate, so only the v9 bound is reachable here and only it is
+    // asserted: writing the v8 branch as well would add an arm no run can take, which is
+    // the untestable-branch shape this round has twice deleted rather than kept. The
+    // validator reads the bound from the same ledger predicate the tree uses, so the v8
+    // ceiling is not hardcoded either.
+    ok("mock pledgeSlot schema bounds slotNo at the v9 ceiling of 511",
+      /slotNo out of 0\.\.511/.test(slotPropsThrew({ ...slotProps, slotNo: 512 })));
+    ok("...and admits the last legal slot", slotPropsThrew({ ...slotProps, slotNo: 511 }) === "");
     const receiptData = { poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
       proTxHash: REAL_HASH, slotIndex: 0 };
     ok("mock accepts the first receipt for a (proTxHash, slotIndex) pair",
@@ -388,23 +489,409 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     /unknown property/.test(tr({ sneaky: 1 }) || ""));
   ok("mock rejects a share replace walking shareBps out of range",
     tr({ shareBps: 20000 }) !== null);
-  // the key check ISOLATED. On `share` the value validator also refuses an unknown key,
-  // so the share cases above pass even with the key check severed (watched: the
-  // severing mutation failed nothing). A type with no value validator is where the key
-  // check is the only protection, so that is where it must be observed.
+  // THE KEY CHECK'S INDEPENDENT OBSERVATION: every listed type now carries a value
+  // validator (votePreference was the last, confirm-pass round 8), and none of the value
+  // branches reads unknown keys, so the unknown-property refusals below are what observe
+  // the key allowlist itself; severing it leaves every value case green and fails exactly
+  // these.
+  const voteRec = { type: "votePreference", data: { choice: "yes" } };
+  const trv = (pending) => {
+    try { mock.assertReplaceAllowed(voteRec, pending); return null; } catch (e) { return e.message; }
+  };
+  ok("mock accepts a legitimate votePreference replace", trv({ choice: "no" }) === null);
+  ok("mock rejects a votePreference replace introducing an unknown property (the key check's own observation)",
+    /unknown property sneaky/.test(trv({ sneaky: 1 }) || ""));
+  // votePreference replace VALUES are schema-bounded too (confirm-pass round 8, major:
+  // the documented key-check-only exception was not schema parity, and a governance
+  // writer regression walking choice outside the enum or shortening delegateTo passed)
+  ok("mock rejects a votePreference replace walking choice outside the enum",
+    /choice "not-a-choice" not in the enum/.test(trv({ choice: "not-a-choice" }) || ""));
+  ok("mock rejects a votePreference replace with a short delegateTo",
+    /delegateTo is not a 32-byte array/.test(trv({ delegateTo: Buffer.alloc(1) }) || ""));
+  ok("mock accepts a votePreference replace with a valid 32-byte delegateTo",
+    trv({ choice: "delegate", delegateTo: Buffer.alloc(32, 6) }) === null);
+  // membershipRequest replace VALUES are schema-bounded (closing confirm-pass, major:
+  // the key allowlist alone let status walk outside the enum, which the published
+  // contract refuses)
   const reqRec = { type: "membershipRequest", data: { status: "pending" } };
   const trq = (pending) => {
     try { mock.assertReplaceAllowed(reqRec, pending); return null; } catch (e) { return e.message; }
   };
   ok("mock accepts a legitimate membershipRequest replace", trq({ status: "matched" }) === null);
-  ok("mock rejects a membershipRequest replace introducing an unknown property (key check alone)",
+  ok("mock rejects a membershipRequest replace introducing an unknown property",
     /unknown property sneaky/.test(trq({ sneaky: 1 }) || ""));
+  ok("mock rejects a membershipRequest replace walking status outside the enum (the confirm-pass sequence)",
+    /status "not-a-status" not in the enum/.test(trq({ status: "not-a-status" }) || ""));
+  ok("mock rejects a membershipRequest replace walking amountDuffs negative",
+    /amountDuffs is not a nonnegative integer/.test(trq({ amountDuffs: -1 }) || ""));
+  // pledgeSlot replace VALUES are schema-bounded too (closing confirm-pass round 3,
+  // major: the type was listed in the allowlist while its merged values went unchecked,
+  // so a replace walking slotNo past the ledger ceiling or emptying the reward script
+  // persisted). The ceiling is ledger-dependent, read the same way the create validator
+  // reads it, so both harness ledgers pin their own bound.
+  const slotRec = { type: "pledgeSlot", data: { slotNo: 0, rewardScript: "76a914" + "11".repeat(20) + "88ac" } };
+  const trs = (pending) => {
+    try { mock.assertReplaceAllowed(slotRec, pending); return null; } catch (e) { return e.message; }
+  };
+  const slotCeil = PARED ? 511 : 9999;
+  ok("mock accepts a legitimate pledgeSlot replace", trs({ slotNo: 3 }) === null);
+  ok("mock rejects a pledgeSlot replace walking slotNo past the ledger ceiling",
+    new RegExp(`slotNo out of 0\\.\\.${slotCeil}`).test(trs({ slotNo: slotCeil + 1 }) || ""));
+  ok("mock rejects a pledgeSlot replace walking slotNo negative",
+    new RegExp(`slotNo out of 0\\.\\.${slotCeil}`).test(trs({ slotNo: -1 }) || ""));
+  ok("mock rejects a pledgeSlot replace emptying the reward script",
+    /rewardScript is not a 1\.\.34 byteArray/.test(trs({ rewardScript: Buffer.alloc(0) }) || ""));
+  ok("mock accepts a pledgeSlot replace with a valid byte reward script",
+    trs({ rewardScript: Buffer.from("76a914" + "22".repeat(20) + "88ac", "hex") }) === null);
+  // settlement and rewardAccrual replaces (confirm-pass round 11, major: both were absent
+  // from REPLACE_KEYS, so the matcher's real phase transition went unvalidated and any
+  // accrual replacement passed blind)
+  const setRec = { type: "settlement", data: { phase: "prepared" } };
+  const trt = (pending) => {
+    try { mock.assertReplaceAllowed(setRec, pending); return null; } catch (e) { return e.message; }
+  };
+  ok("mock accepts the matcher's real settlement phase walk", trt({ phase: "matched" }) === null);
+  ok("mock rejects a settlement replace walking phase outside the enum",
+    /phase "not-a-phase" not in the enum/.test(trt({ phase: "not-a-phase" }) || ""));
+  ok("mock rejects a settlement replace touching a creation-time field",
+    /unknown property exitId/.test(trt({ exitId: Buffer.alloc(32, 9) }) || ""));
+  const accRec = { type: "rewardAccrual", data: { amountDuffs: 5 } };
+  ok("mock rejects ANY rewardAccrual replacement (no legitimate one exists, stated scope)",
+    /unknown property amountDuffs/.test((() => { try {
+      mock.assertReplaceAllowed(accRec, { amountDuffs: -1 }); return ""; }
+      catch (e) { return e.message; } })()));
+  // ...and the CREATE validator enforces the same schema (the confirm-pass major's other
+  // half: create validated four types and omitted this one)
+  const goodReq = { poolId: Buffer.alloc(32, 5), kind: "join", amountDuffs: 50000000000,
+    status: "pending", provenance: "pledge", rewardScript: Buffer.alloc(25, 6) };
+  const vr = (p) => { try { mock.validateRequestProps(p); return null; } catch (e) { return e.message; } };
+  ok("request create: a well-formed request validates", vr(goodReq) === null);
+  ok("request create: a status outside the enum is refused",
+    /status not in the enum/.test(vr({ ...goodReq, status: "not-a-status" }) || ""));
+  ok("request create: a negative amountDuffs is refused",
+    /amountDuffs is not a nonnegative integer/.test(vr({ ...goodReq, amountDuffs: -1 }) || ""));
+  ok("request create: a hex-STRING poolId is refused (writer values are bytes)",
+    /poolId is not a 32-byte array/.test(vr({ ...goodReq, poolId: "05".repeat(32) }) || ""));
+  ok("request create: a provenance outside the enum is refused",
+    /provenance not in the enum/.test(vr({ ...goodReq, provenance: "stolen-valor" }) || ""));
+  ok("request create: an unknown property is refused",
+    /unknown property surprise/.test(vr({ ...goodReq, surprise: 1 }) || ""));
+  // EVERY validator's required loop demands OWN properties (confirm-pass round 6, E1:
+  // `p[k]` read the prototype chain, so Object.create over valid props passed all five
+  // validators with zero own fields, and create then stored a record holding only
+  // $createdAt, which real DPP refuses). Each is pinned with its own valid fixture
+  // accepted and its inherited-only bag refused.
+  {
+    const goodSlot = { poolId: Buffer.alloc(32, 7), slotNo: 0,
+      rewardScript: Buffer.from("76a914" + "33".repeat(20) + "88ac", "hex") };
+    const goodShare = { poolId: Buffer.alloc(32, 8), shareBps: 5000, contributionDuffs: 1 };
+    const goodReceipt = {
+      poolId: Buffer.from(Identifier.from(POOL).toBuffer()),
+      proTxHash: Buffer.from(EXPECTED.proTxHash, "hex"), slotIndex: 0, formatVersion: 1,
+      allocationRows: Buffer.from(EXPECTED.allocationRows, "hex"),
+      allocationHash: Buffer.from(EXPECTED.allocationHash, "hex"),
+      participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1,
+      ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    };
+    const goodPool = PARED
+      ? { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000,
+          slotDuffs: 50000000000, slotCount: 2 }
+      : { proTxHash: Buffer.alloc(32, 9), slotIndex: 0, nodeType: "regular", status: "forming",
+          operatorIdentityId: Buffer.alloc(32, 4), operatorFeeBps: 2000 };
+    const goodVote = { poolId: Buffer.alloc(32, 11), proposalHash: Buffer.alloc(32, 12),
+      choice: "delegate", delegateTo: Buffer.alloc(32, 13) };
+    for (const [label, validator, good] of [
+      ["pool", mock.validatePoolProps, goodPool],
+      ["pledgeSlot", mock.validateSlotProps, goodSlot],
+      ["share", mock.validateShareProps, goodShare],
+      ["completionReceipt", mock.validateReceiptProps, goodReceipt],
+      ["membershipRequest", mock.validateRequestProps, goodReq],
+      ["votePreference", mock.validateVoteProps, goodVote],
+      ["rewardAccrual", mock.validateAccrualProps,
+        { poolId: Buffer.alloc(32, 14), funderId: Buffer.alloc(32, 15), amountDuffs: 100,
+          epochHeight: 5, shareBps: 5000, kind: "reward" }],
+      ["settlement", mock.validateSettlementProps,
+        { poolId: Buffer.alloc(32, 16), exitId: Buffer.alloc(32, 17), joinId: Buffer.alloc(32, 18),
+          leaverId: Buffer.alloc(32, 19), joinerId: Buffer.alloc(32, 20), amountDuffs: 100,
+          shareBps: 5000, phase: "prepared" }],
+    ]) {
+      const v = (p) => { try { validator(p); return null; } catch (e) { return e.message; } };
+      ok(`${label} validator: the valid fixture is accepted`, v(good) === null);
+      ok(`${label} validator: an INHERITED-only property bag is refused (own properties, not the prototype)`,
+        /missing/.test(v(Object.create(good)) || ""));
+    }
+    // ...and OPTIONAL fields are judged by OWN presence only (confirm-pass round 7,
+    // minor, the false-refusal mirror): a v8 pool with every required field OWN and a
+    // slotCount reachable only through the prototype serializes as a valid BOOKLESS pool
+    // (create copies own entries), so refusing it as one-sided was stricter than the
+    // document the mock would actually store
+    if (!PARED) {
+      const inheritedBook = Object.assign(Object.create({ slotCount: 2 }), goodPool);
+      ok("pool validator: a prototype-only slotCount does not make an own bookless pool one-sided",
+        (() => { try { mock.validatePoolProps(inheritedBook); return true; } catch { return false; } })());
+    }
+  }
+  // ...and the CREATE PATH ITSELF routes through the validator (the first mutation run on
+  // this fold severed the create wiring and nothing failed, because every case above
+  // calls the validator directly; this child drives documents.create, the real path)
+  {
+    const wiredProbe = `
+      const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+      const c = new mock.Client({});
+      const id = { getId: () => ({ toString: () => "op" }) };
+      c.platform.documents.create("poolLedger.membershipRequest", id,
+        { poolId: Buffer.alloc(32, 5), kind: "join", amountDuffs: 1, status: "not-a-status" })
+        .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(3); });`;
+    const rw = (() => { try { return { code: 0, out: execFileSync("node", ["-e", wiredProbe],
+      { env: { ...process.env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+      catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
+    ok("the CREATE PATH routes membershipRequest through the validator (wiring, not only the function)",
+      rw.code === 3 && /status not in the enum/.test(rw.out));
+    // ...and votePreference's wiring is observed the same way (confirm-pass round 8: the
+    // severed-wiring mutation failed nothing until this probe existed, the same lesson as
+    // the request's probe above)
+    const voteProbe = `
+      const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+      const c = new mock.Client({});
+      const id = { getId: () => ({ toString: () => "op" }) };
+      c.platform.documents.create("poolLedger.votePreference", id,
+        { poolId: Buffer.alloc(32, 5), proposalHash: Buffer.alloc(32, 6), choice: "not-a-choice" })
+        .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(3); });`;
+    const rv = (() => { try { return { code: 0, out: execFileSync("node", ["-e", voteProbe],
+      { env: { ...process.env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+      catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
+    ok("the CREATE PATH routes votePreference through the validator (wiring, not only the function)",
+      rv.code === 3 && /choice not in the enum/.test(rv.out));
+    // the same wiring observation for the two types round 10 added, applied the day they
+    // arrived rather than a round later
+    const wiredCase = (type, propsJs) => {
+      const probe = `
+        const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+        const c = new mock.Client({});
+        const id = { getId: () => ({ toString: () => "op" }) };
+        c.platform.documents.create(${JSON.stringify(type)}, id, ${propsJs})
+          .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(3); });`;
+      try { return { code: 0, out: execFileSync("node", ["-e", probe],
+        { env: { ...process.env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+      catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; }
+    };
+    const ra = wiredCase("poolLedger.rewardAccrual",
+      '{ poolId: Buffer.alloc(32, 1), funderId: Buffer.alloc(32, 2), amountDuffs: 1, epochHeight: 1, shareBps: 1, kind: "not-a-kind" }');
+    ok("the CREATE PATH routes rewardAccrual through the validator (wiring)",
+      ra.code === 3 && /kind not in the enum/.test(ra.out));
+    const se = wiredCase("poolLedger.settlement",
+      '{ poolId: Buffer.alloc(32, 1), exitId: Buffer.alloc(32, 2), joinId: Buffer.alloc(32, 3), leaverId: Buffer.alloc(32, 4), joinerId: Buffer.alloc(32, 5), amountDuffs: 1, shareBps: 1, phase: "not-a-phase" }');
+    ok("the CREATE PATH routes settlement through the validator (wiring)",
+      se.code === 3 && /phase not in the enum/.test(se.out));
+    // the strict per-ledger TYPE model (confirm-pass round 12): a poolLedger type absent
+    // from the selected contract is refused like the real SDK refuses an undefined
+    // document type, never resolved as an empty page (the always-empty answer hid two
+    // capability-blind call sites across this round, reserve's and the debris sweep's)
+    const v1Probe = `
+      process.env.LEDGER = "v1";
+      const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+      const c = new mock.Client({});
+      c.platform.documents.get("poolLedger.settlement", {})
+        .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(3); });`;
+    const rt = (() => { try { return { code: 0, out: execFileSync("node", ["-e", v1Probe],
+      { env: { ...process.env, LEDGER: "v1" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+      catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
+    ok("mock refuses a query for a type the selected ledger does not define (v1 settlement)",
+      rt.code === 3 && /not defined by the selected ledger/.test(rt.out));
+    // PER-LEDGER PROPERTY SHAPES (confirm-pass round 13, major: the validators assumed
+    // the v8 shape everywhere, refusing valid base documents and accepting
+    // later-capability fields the earlier contracts refuse). Each case swaps the ledger
+    // env and re-requires the mock, the same pattern as the v8 create block.
+    {
+      const withMock = (ledgerV, fn) => {
+        const prev = process.env.LEDGER;
+        process.env.LEDGER = ledgerV;
+        delete require.cache[require.resolve("./envStore.cjs")];
+        delete require.cache[require.resolve("./formationMockDash.cjs")];
+        const m = require("./formationMockDash.cjs");
+        try { fn(m); } finally {
+          if (prev === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev;
+          delete require.cache[require.resolve("./envStore.cjs")];
+          delete require.cache[require.resolve("./formationMockDash.cjs")];
+        }
+      };
+      const tryV = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
+      const baseAcc = { poolId: Buffer.alloc(32, 21), funderId: Buffer.alloc(32, 22),
+        amountDuffs: 100, epochHeight: 5 };
+      withMock("v1", (m) => {
+        ok("v1: a valid BASE accrual (no shareBps, no kind) is accepted",
+          tryV(() => m.validateAccrualProps(baseAcc)) === null);
+        ok("v1: an accrual carrying the v3 shareBps is refused (additionalProperties)",
+          /unknown property shareBps/.test(tryV(() => m.validateAccrualProps({ ...baseAcc, shareBps: 5000 })) || ""));
+        ok("v1: a request carrying the v5 provenance is refused",
+          /unknown property provenance/.test(tryV(() => m.validateRequestProps({
+            poolId: Buffer.alloc(32, 23), kind: "join", amountDuffs: 1, status: "pending",
+            provenance: "pledge" })) || ""));
+        ok("v1: a vote carrying the v5 delegateTo is refused",
+          /unknown property delegateTo/.test(tryV(() => m.validateVoteProps({
+            poolId: Buffer.alloc(32, 24), proposalHash: Buffer.alloc(32, 25), choice: "delegate",
+            delegateTo: Buffer.alloc(32, 26) })) || ""));
+        ok("v1: a valid BASE pool (no status, no book) is accepted",
+          tryV(() => m.validatePoolProps({ proTxHash: Buffer.alloc(32, 27), slotIndex: 0,
+            nodeType: "regular" })) === null);
+        ok("v1: a pool carrying the v5 status is refused",
+          /unknown property status/.test(tryV(() => m.validatePoolProps({
+            proTxHash: Buffer.alloc(32, 27), slotIndex: 0, nodeType: "regular",
+            status: "forming" })) || ""));
+      });
+      withMock("v3", (m) => {
+        ok("v3: an accrual with shareBps and NO kind is accepted (kind is v4)",
+          tryV(() => m.validateAccrualProps({ ...baseAcc, shareBps: 5000 })) === null);
+        ok("v3: an accrual carrying the v4 kind is refused",
+          /unknown property kind/.test(tryV(() => m.validateAccrualProps({ ...baseAcc,
+            shareBps: 5000, kind: "reward" })) || ""));
+      });
+      withMock("v4", (m) => {
+        ok("v4: an accrual without kind is refused (required from its introduction)",
+          /missing kind/.test(tryV(() => m.validateAccrualProps({ ...baseAcc, shareBps: 5000 })) || ""));
+      });
+      // REPLACE allowlists are version-aware too (confirm-pass round 14: the static
+      // superset admitted v5/v7 fields into v1 replaces the earlier contracts refuse)
+      withMock("v1", (m) => {
+        const rep = (type, data, pending) => tryV(() => m.assertReplaceAllowed({ type, data }, pending));
+        ok("v1: a pool replace adding the v5 status is refused",
+          /unknown property status/.test(rep("pool", { proTxHash: "aa".repeat(32) }, { status: "live" }) || ""));
+        ok("v1: a pool replace adding the v7 slot book is refused",
+          /unknown property slot/.test(rep("pool", { proTxHash: "aa".repeat(32) },
+            { slotDuffs: 1, slotCount: 1 }) || ""));
+        ok("v1: a request replace adding the v5 provenance is refused",
+          /unknown property provenance/.test(rep("membershipRequest", { status: "pending" },
+            { provenance: "pledge" }) || ""));
+        ok("v1: a vote replace adding the v5 delegateTo is refused",
+          /unknown property delegateTo/.test(rep("votePreference", { choice: "yes" },
+            { delegateTo: Buffer.alloc(32, 6) }) || ""));
+        // the base accrual index is NOT unique (uniqueness begins at v3), so a valid v1
+        // duplicate must be accepted
+        const led14 = { docs: [{ type: "rewardAccrual", id: "seeded", ownerId: "op", data: {
+          poolId: "08".repeat(32), funderId: "09".repeat(32), epochHeight: 5, amountDuffs: 1 } }] };
+        ok("v1: a duplicate (pool, funder, epoch) accrual is ACCEPTED (the base index is not unique)",
+          tryV(() => m.assertCreateAllowed(led14, { type: "rewardAccrual", ownerId: "op", data: {
+            poolId: "08".repeat(32), funderId: "09".repeat(32), epochHeight: 5, amountDuffs: 2 } })) === null);
+      });
+      // the v7 book ceiling is the PUBLISHED contract's 10000, not the v8 source's 512
+      // (confirm-pass round 15, minor: the reviewer's 625-slot regular book is
+      // schema-valid on v7 and totals the tier exactly, and the mock refused it)
+      withMock("v7", (m) => {
+        ok("v7: a schema-valid 625-slot book is accepted (the published ceiling is 10000)",
+          tryV(() => m.validatePoolProps({ proTxHash: Buffer.alloc(32, 31), slotIndex: 0,
+            nodeType: "regular", status: "forming", slotDuffs: 160000000, slotCount: 625 })) === null);
+        ok("v7: a book above the published 10000 is refused",
+          /slotCount out of 1\.\.10000/.test(tryV(() => m.validatePoolProps({
+            proTxHash: Buffer.alloc(32, 31), slotIndex: 0, nodeType: "regular",
+            status: "forming", slotDuffs: 160000000, slotCount: 10001 })) || ""));
+      });
+      // the v6 reservation is SIZED, IMMUTABLE and UNDELETABLE
+      withMock("v6", (m) => {
+        const writerShaped = { poolId: Buffer.alloc(32, 30), slotNo: 0, slotDuffs: 50000000000,
+          rewardScript: Buffer.from("76a914" + "44".repeat(20) + "88ac", "hex") };
+        ok("v6: the writer-shaped SIZED claim is accepted (slotDuffs required there)",
+          tryV(() => m.validateSlotProps(writerShaped)) === null);
+        ok("v6: a v7-shaped sizeless claim is refused (missing slotDuffs)",
+          /missing required slotDuffs/.test(tryV(() => m.validateSlotProps({
+            poolId: Buffer.alloc(32, 30), slotNo: 0,
+            rewardScript: Buffer.from("76a914" + "44".repeat(20) + "88ac", "hex") })) || ""));
+        ok("v6: a claim replace is refused (immutable)",
+          /not mutable/.test(tryV(() => m.assertMutationAllowed("replace",
+            { type: "pledgeSlot", data: {} })) || ""));
+        ok("v6: a claim delete is refused (undeletable)",
+          /cannot be deleted/.test(tryV(() => m.assertMutationAllowed("delete",
+            { type: "pledgeSlot", data: {} })) || ""));
+      });
+      // ...and the v7+ claim stays mutable (the round-14 rule must not overreach)
+      withMock("v8", (m) => {
+        ok("v8: a claim replace stays allowed (sizeless mutable claims from v7)",
+          tryV(() => m.assertMutationAllowed("replace", { type: "pledgeSlot", data: {} })) === null);
+      });
+    }
+    // the UNIQUE byPoolOwnerProposal index at create (confirm-pass round 9, E-1): one
+    // owner, one preference per pool and proposal; the same owner's second vote on the
+    // same pair is refused, a different proposal or a different owner is not
+    const led9 = { docs: [{ type: "votePreference", id: "seeded-v", ownerId: "op",
+      data: { poolId: "05".repeat(32), proposalHash: "06".repeat(32), choice: "yes" } }] };
+    const cv = (ownerId, poolHex, propHex) => { try {
+      mock.assertCreateAllowed(led9, { type: "votePreference", ownerId,
+        data: { poolId: poolHex, proposalHash: propHex, choice: "no" } }); return null; }
+      catch (e) { return e.message; } };
+    ok("vote create: the same owner's second vote on the same pool and proposal is refused",
+      /duplicate unique index byPoolOwnerProposal/.test(cv("op", "05".repeat(32), "06".repeat(32)) || ""));
+    ok("vote create: the same owner on a DIFFERENT proposal is accepted",
+      cv("op", "05".repeat(32), "07".repeat(32)) === null);
+    ok("vote create: a DIFFERENT owner on the same pair is accepted",
+      cv("other", "05".repeat(32), "06".repeat(32)) === null);
+    // the two inherited types' unique indexes (confirm-pass round 10): one accrual per
+    // (pool, funder, epoch, kind), and each exit or join settles at most once
+    const led10 = { docs: [
+      { type: "rewardAccrual", id: "seeded-a", ownerId: "op", data: {
+        poolId: "08".repeat(32), funderId: "09".repeat(32), epochHeight: 5, kind: "reward",
+        amountDuffs: 100, shareBps: 5000 } },
+      { type: "settlement", id: "seeded-s", ownerId: "op", data: {
+        poolId: "08".repeat(32), exitId: "0a".repeat(32), joinId: "0b".repeat(32),
+        leaverId: "0c".repeat(32), joinerId: "0d".repeat(32), amountDuffs: 100,
+        shareBps: 5000, phase: "prepared" } } ] };
+    const ca = (data) => { try {
+      mock.assertCreateAllowed(led10, { type: "rewardAccrual", ownerId: "op", data }); return null; }
+      catch (e) { return e.message; } };
+    ok("accrual create: a duplicate (pool, funder, epoch, kind) is refused",
+      /duplicate unique index byPoolFunder/.test(ca({ poolId: "08".repeat(32), funderId: "09".repeat(32),
+        epochHeight: 5, kind: "reward", amountDuffs: 1, shareBps: 1 }) || ""));
+    ok("accrual create: the OTHER kind at the same epoch is accepted",
+      ca({ poolId: "08".repeat(32), funderId: "09".repeat(32), epochHeight: 5, kind: "principal",
+        amountDuffs: 1, shareBps: 1 }) === null);
+    const cs = (data) => { try {
+      mock.assertCreateAllowed(led10, { type: "settlement", ownerId: "op", data }); return null; }
+      catch (e) { return e.message; } };
+    ok("settlement create: a reused exitId is refused whatever the joinId",
+      /duplicate unique index byExit/.test(cs({ poolId: "08".repeat(32), exitId: "0a".repeat(32),
+        joinId: "0e".repeat(32), leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
+        amountDuffs: 1, shareBps: 1, phase: "prepared" }) || ""));
+    ok("settlement create: a reused joinId is refused whatever the exitId",
+      /duplicate unique index byJoin/.test(cs({ poolId: "08".repeat(32), exitId: "0f".repeat(32),
+        joinId: "0b".repeat(32), leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
+        amountDuffs: 1, shareBps: 1, phase: "prepared" }) || ""));
+    ok("settlement create: fresh exit and join ids are accepted",
+      cs({ poolId: "08".repeat(32), exitId: "0f".repeat(32), joinId: "0e".repeat(32),
+        leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
+        amountDuffs: 1, shareBps: 1, phase: "prepared" }) === null);
+    // THE v3 EXCEPTION (confirm-pass round 17, E-1): the registered v3 publish predates
+    // the byJoin index (registerV4.cjs is the first carrying it), so on v3 a second
+    // settlement against the same join is ACCEPTED by the published schema while a
+    // reused exit stays refused; env-swapped, ledgerVersion() reads dynamically
+    {
+      const prev = process.env.LEDGER;
+      process.env.LEDGER = "v3";
+      ok("settlement create on v3: a reused joinId is accepted (the registered v3 publish predates byJoin)",
+        cs({ poolId: "08".repeat(32), exitId: "1a".repeat(32), joinId: "0b".repeat(32),
+          leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
+          amountDuffs: 1, shareBps: 1, phase: "prepared" }) === null);
+      ok("settlement create on v3: a reused exitId is still refused (byExit is in the v3 publish)",
+        /duplicate unique index byExit/.test(cs({ poolId: "08".repeat(32), exitId: "0a".repeat(32),
+          joinId: "1e".repeat(32), leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
+          amountDuffs: 1, shareBps: 1, phase: "prepared" }) || ""));
+      // THE RANGE IS PINNED MEMBER BY MEMBER (round-17 checker, finding 1): the suite's
+      // default ledger exercises the gate at one point only, so a gate wrongly disabled
+      // on any single later ledger would stay green; every publish carrying byJoin is
+      // driven here explicitly
+      for (const v of ["v4", "v5", "v6", "v7", "v8", "v9"]) {
+        process.env.LEDGER = v;
+        ok(`settlement create on ${v}: a reused joinId is refused (this publish carries byJoin)`,
+          /duplicate unique index byJoin/.test(cs({ poolId: "08".repeat(32), exitId: "1b".repeat(32),
+            joinId: "0b".repeat(32), leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
+            amountDuffs: 1, shareBps: 1, phase: "prepared" }) || ""));
+      }
+      if (prev === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev;
+    }
+  }
   // THE MAP'S MEMBERSHIP IS PINNED FIRST (artifact re-check: a loop over the map cannot
   // notice a deleted row, because the row's test disappears with it), then every listed
   // type is exercised.
   ok("the replace whitelist covers exactly the expected types",
     Object.keys(mock.REPLACE_KEYS).sort().join(",")
-      === "membershipRequest,pledgeSlot,pool,share,votePreference");
+      === "membershipRequest,pledgeSlot,pool,rewardAccrual,settlement,share,votePreference");
   for (const [type, keys] of Object.entries(mock.REPLACE_KEYS)) {
     const r = { type, data: { poolId: Buffer.alloc(32, 1).toString("hex"),
       shareBps: 5000, contributionDuffs: 1 } };
@@ -413,13 +900,172 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     };
     ok(`replace whitelist covers ${type}: an unknown key is refused`,
       /unknown property/.test(attempt({ definitelyNotAField: 1 }) || ""));
-    ok(`replace whitelist covers ${type}: its own first key is accepted`,
-      attempt({ [keys[0]]: type === "share" ? 5000 : "x" }) === null
-      || type === "share"); // share also value-validates, covered by its own cases
+    // a VALID value per type, so the assertion examines the attempt for every type
+    // rather than OR-ing the value-validating ones away (the checker on this fold named
+    // the OR a definite vacuous pass; share keeps its historical exemption because its
+    // validator also demands the merged document's other fields, covered by its own cases).
+    // membershipRequest gained a value validator on the closing confirm-pass, so its
+    // first key (status) needs a schema-valid value here like pool's does.
+    // rewardAccrual's key list is EMPTY on purpose (no legitimate replacement), so the
+    // first-key acceptance case does not apply to it; its refusal-of-anything is pinned
+    // separately below. The POOL's first key (status) exists only on the mutable ledgers
+    // (round-14: the allowlist is capability-filtered, v9 subtracts poolStatus, and v9's
+    // pool replace is refused upstream as immutable anyway), so its acceptance case runs
+    // on the mutable pass only.
+    if (keys.length > 0 && !(type === "pool" && PARED)) {
+      ok(`replace whitelist covers ${type}: its own first key is accepted`,
+        attempt({ [keys[0]]: type === "share" ? 5000
+          : type === "pool" ? "live"
+          : type === "membershipRequest" ? "matched"
+          : type === "pledgeSlot" ? 3
+          : type === "settlement" ? "matched"
+          : type === "votePreference" ? "no" : "x" }) === null
+        || type === "share");
+    }
+  }
+  // POOL REPLACE VALUE BOUNDS (pass 16, F2): the flip invariants pinned status and
+  // proTxHash and nothing else, so a replace walking slotCount to 0, which the published
+  // schema refuses at minimum 1, passed the matrix. The merged document now validates.
+  // the flip's replace validator semantics are the MUTABLE ledgers' (round-14: on v9 the
+  // pool is immutable and its replace is refused upstream by assertMutationAllowed, which
+  // has its own cases; the capability filter correctly strips status there, so driving
+  // these value bounds under v9 would only observe the filter, not the bounds)
+  if (!PARED) {
+    const poolRec = { type: "pool", data: { status: "forming",
+      proTxHash: "00".repeat(16) + "11".repeat(16), slotDuffs: 50000000000, slotCount: 2 } };
+    const attemptP = (pending) => {
+      try { mock.assertReplaceAllowed(poolRec, pending); return null; } catch (e) { return e.message; }
+    };
+    ok("pool replace: the normal flip is accepted",
+      attemptP({ status: "live", proTxHash: Buffer.from("aa".repeat(32), "hex") }) === null);
+    // a PENDING (writer) value must be BYTES (closing wave, FA3): the schema types the
+    // field byteArray and real Platform rejects the string form, so a hex-string pending
+    // value is a writer defect the mock must refuse rather than hex-decode into passing.
+    // The STORED form staying hex is the mock's own serialization, covered above.
+    ok("pool replace: a hex-STRING pending proTxHash is refused (writer values must be bytes)",
+      /proTxHash is not a 32-byte array/.test(attemptP({ status: "live", proTxHash: "aa".repeat(32) }) || ""));
+    ok("pool replace: slotCount 0 is refused (the reviewer's exact false-green)",
+      /slotCount out of 1\.\.512/.test(attemptP({ slotDuffs: 50000000000, slotCount: 0 }) || ""));
+    ok("pool replace: slotCount 513 is refused",
+      /slotCount out of 1\.\.512/.test(attemptP({ slotDuffs: 50000000000, slotCount: 513 }) || ""));
+    // the one-sided case needs a BOOKLESS base record: the shared base above carries
+    // slotDuffs, so merging a slotCount onto it is two-sided. ACCEPTED as of round 18
+    // (finding 2): the published v7/v8 pool schemas carry no dependentRequired, so a
+    // one-sided merged result is schema-valid on the mutable ledgers and the earlier
+    // refusal was the mock being wider than the contract it models. The base is a
+    // COMPLETE v8 pool minus the book (round-18 checker, finding 1: the first draft
+    // carried only status and proTxHash, a record the schema cannot hold), and both
+    // one-sided directions are pinned (its finding 2)
+    const bookless = { type: "pool", data: { status: "forming",
+      proTxHash: "00".repeat(16) + "11".repeat(16), slotIndex: 0, nodeType: "regular",
+      operatorFeeBps: 2000 } };
+    const replaceAccepts = (pending) => { try { mock.assertReplaceAllowed(bookless, pending); return true; }
+      catch { return false; } };
+    ok("pool replace: a one-sided merged book (slotCount only) is accepted (no dependentRequired in the published v7/v8 schemas)",
+      replaceAccepts({ slotCount: 4 }));
+    ok("pool replace: the other direction (slotDuffs only) is accepted too",
+      replaceAccepts({ slotDuffs: 25000000000 }));
+    ok("pool replace: an out-of-enum status is refused",
+      /not in the enum/.test(attemptP({ status: "banana" }) || ""));
+    ok("pool replace: a short proTxHash byte value is refused",
+      /proTxHash is not a 32-byte array/.test(attemptP({ proTxHash: Buffer.from("aa".repeat(31), "hex") }) || ""));
+    // operatorIdentityId is a 32-byte identity field too, and was in the allowlist
+    // unchecked until pass 17, F2
+    ok("pool replace: a short operatorIdentityId is refused",
+      /operatorIdentityId is not a 32-byte array/.test(attemptP({ operatorIdentityId: Buffer.from("aa", "hex") }) || ""));
+    ok("pool replace: a full-length byte operatorIdentityId is accepted",
+      attemptP({ operatorIdentityId: Buffer.from("cc".repeat(32), "hex") }) === null);
+    ok("pool replace: a hex-STRING operatorIdentityId pending value is refused too",
+      /operatorIdentityId is not a 32-byte array/.test(attemptP({ operatorIdentityId: "cc".repeat(32) }) || ""));
+    // ...and a seeded-malformed STORED value still cannot ride through a replace unnoticed
+    // (the guarantee the old merged-level check provided, kept under the split)
+    const storedBad = (v) => (() => { try {
+      mock.assertReplaceAllowed({ type: "pool", data: { status: "forming", proTxHash: v } },
+        { status: "live" }); return ""; } catch (e) { return e.message; } })();
+    ok("pool replace: a malformed STORED proTxHash is still caught on an unrelated replace",
+      /proTxHash is not 32 bytes/.test(storedBad("zz")));
+    // node's hex decode is LENIENT and stops at the first invalid character (checker on
+    // this fold: the decode-then-measure form passed exactly this), so a hex-PREFIXED
+    // garbage stored value must be caught by the exact-form rule, not by the decode length
+    ok("pool replace: a hex-PREFIXED garbage STORED proTxHash is caught (lenient-decode trap)",
+      /proTxHash is not 32 bytes/.test(storedBad("aa".repeat(32) + "zzGARBAGE")));
+  }
+  // POOL CREATE VALIDATION AND UNIQUE INDEX (pass 18, F2). The v8 pool create was
+  // unvalidated (validatePoolProps returned early on non-immutable ledgers), and the
+  // unique byProTxHash index was enforced only on the flip replace, not on create. The
+  // harness SEEDS v8 pools rather than creating them, so these are direct-call cases like
+  // the replace ones above, not a live create path.
+  {
+    const prev = process.env.LEDGER;
+    process.env.LEDGER = "v8";
+    delete require.cache[require.resolve("./envStore.cjs")];
+    delete require.cache[require.resolve("./formationMockDash.cjs")];
+    const m8 = require("./formationMockDash.cjs");
+    // WRITER values are BYTES (closing wave, FA3): validatePoolProps runs on the raw
+    // create props before the mock's hex serialization, and the schema types these
+    // fields byteArray, so the well-formed fixture carries Buffers the way the real
+    // writer does, and the hex-string spelling is a refusal case rather than an
+    // alternate accepted form
+    const goodV8 = { proTxHash: Buffer.from("aa".repeat(32), "hex"), slotIndex: 0, nodeType: "regular",
+      operatorIdentityId: Buffer.from("bb".repeat(32), "hex"), operatorFeeBps: 2000, status: "forming" };
+    const vp = (p) => { try { m8.validatePoolProps(p); return null; } catch (e) { return e.message; } };
+    ok("v8 pool create: a well-formed pool validates", vp(goodV8) === null);
+    ok("v8 pool create: an empty pool is refused (was unvalidated before)",
+      /missing/.test(vp({}) || ""));
+    ok("v8 pool create: a short proTxHash is refused",
+      /proTxHash is not a 32-byte array/.test(vp({ ...goodV8, proTxHash: Buffer.from("aa", "hex") }) || ""));
+    ok("v8 pool create: a hex-STRING proTxHash is refused (real Platform rejects the string form)",
+      /proTxHash is not a 32-byte array/.test(vp({ ...goodV8, proTxHash: "aa".repeat(32) }) || ""));
+    ok("v8 pool create: a 32-CHARACTER string proTxHash is refused too (the coercion spelling)",
+      /proTxHash is not a 32-byte array/.test(vp({ ...goodV8, proTxHash: "A".repeat(32) }) || ""));
+    ok("v8 pool create: a hex-STRING operatorIdentityId is refused too",
+      /operatorIdentityId is not a 32-byte array/.test(vp({ ...goodV8, operatorIdentityId: "bb".repeat(32) }) || ""));
+    ok("v8 pool create: a Uint8Array proTxHash is accepted (both byte forms are writer-legal)",
+      vp({ ...goodV8, proTxHash: new Uint8Array(32).fill(0xaa) }) === null);
+    ok("v8 pool create: an out-of-enum status is refused",
+      /status not in the enum/.test(vp({ ...goodV8, status: "banana" }) || ""));
+    ok("v8 pool create: an unknown property is refused",
+      /unknown property/.test(vp({ ...goodV8, surprise: 1 }) || ""));
+    // an INVENTED $-field is refused too: additionalProperties:false allows Platform's
+    // KNOWN system fields, not any $-prefixed key (pass 18 checker on this fold)
+    ok("v8 pool create: an invented $-prefixed property is refused",
+      /unknown property/.test(vp({ ...goodV8, $surprise: 1 }) || ""));
+    ok("v8 pool create: a real system field ($createdAt) is allowed",
+      vp({ ...goodV8, $createdAt: 1 }) === null);
+    // one-sided ACCEPTED as of round 18 (finding 2): neither the v7 nor the v8
+    // published pool schema carries dependentRequired, so a one-sided book is
+    // schema-valid here; only the v9 contract refuses it (pinned in the immutable
+    // mock-schema block). Both directions, and the v7 selection too (round-18
+    // checker, finding 2: one direction alone leaves a direction-specific
+    // survivor)
+    ok("v8 pool create: a one-sided slot book (slotCount only) is accepted (the published schema has no dependentRequired)",
+      vp({ ...goodV8, slotCount: 2 }) === null);
+    ok("v8 pool create: the other direction (slotDuffs only) is accepted too",
+      vp({ ...goodV8, slotDuffs: 50000000000 }) === null);
+    {
+      const prev7 = process.env.LEDGER;
+      process.env.LEDGER = "v7";
+      ok("v7 pool create: a one-sided slot book is accepted (the v7 publish has no dependentRequired either)",
+        vp({ ...goodV8, slotDuffs: 50000000000 }) === null);
+      if (prev7 === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev7;
+    }
+    // the unique byProTxHash index on CREATE, against the other pools in the ledger
+    const led = { docs: [{ type: "pool", id: "seeded-A", data: { proTxHash: "aa".repeat(32) } }] };
+    const cr = (data) => { try { m8.assertCreateAllowed(led, { type: "pool", ownerId: "op", data }); return null; }
+      catch (e) { return e.message; } };
+    ok("v8 pool create: a SECOND pool with the same proTxHash is refused by the unique index",
+      /duplicate unique index byProTxHash for pool/.test(cr({ proTxHash: "aa".repeat(32) }) || ""));
+    ok("v8 pool create: the same hash in UPPERCASE is refused too (case-insensitive)",
+      /duplicate unique index byProTxHash for pool/.test(cr({ proTxHash: "AA".repeat(32) }) || ""));
+    ok("v8 pool create: a DIFFERENT proTxHash is accepted",
+      cr({ proTxHash: "cc".repeat(32) }) === null);
+    if (prev === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev;
+    delete require.cache[require.resolve("./envStore.cjs")];
+    delete require.cache[require.resolve("./formationMockDash.cjs")];
   }
 }
 
-// SIGNER-TO-OWNER AUTHORIZATION parity (pass-7 wave, review major 4): real Platform
+// SIGNER-TO-OWNER AUTHORIZATION parity (pass-7 wave, packet-review major 4): real Platform
 // refuses a transition whose signer is not the document's owner, and the mock accepted
 // any identity for any transition, so a future wrong-signer regression would pass the
 // crash matrix while the real ledger refuses it. Table-driven over all three kinds.
@@ -469,11 +1115,17 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
   const propsOfSeeded = (data) => Object.fromEntries(Object.entries(data)
     .filter(([k]) => k !== "$createdAt")
     .map(([k, v]) => [k, BYTES.has(k) ? Buffer.from(v, "hex") : v]));
+  // WRITER-PRODUCIBLE, not merely schema-producible (pass 14, F5): the earlier fixture
+  // carried empty rows and an unrelated all-03 hash, a pair the real writer cannot emit
+  // because it derives both fields from one validated draft. EXPECTED is this harness's
+  // independent reconstruction of exactly that derivation for POOL's real allocation, so
+  // using it makes the fixture a document the reference writer could have written.
   const probeReceipt = {
     poolId: Buffer.from(Identifier.from(POOL).toBuffer()), proTxHash: Buffer.from(REAL_HASH, "hex"),
     slotIndex: 0,
     ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
-    formatVersion: 1, allocationRows: Buffer.from("[]"), allocationHash: Buffer.alloc(32, 3),
+    formatVersion: 1, allocationRows: Buffer.from(EXPECTED.allocationRows, "hex"),
+    allocationHash: Buffer.from(EXPECTED.allocationHash, "hex"),
     participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1 };
   const hexed = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) =>
     [k, (Buffer.isBuffer(v) || v instanceof Uint8Array) ? Buffer.from(v).toString("hex") : v]));
@@ -515,6 +1167,92 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     r2.code === 3 && /cannot be deleted/.test(r2.out));
   ok("the refused receipt remains on the persisted ledger (refusal is atomic)",
     ledger().docs.some((d) => d.id === "receipt-delete-probe"));
+
+  // END-TO-END PLEDGE SLOT CREATES through the real client path, create then broadcast
+  // (pre-commit item a). The direct-helper cases earlier prove the exported functions;
+  // these prove the WIRING, because deleting the validateSlotProps line from create or
+  // the pledgeSlot arm from assertCreateAllowed would leave the direct cases green while
+  // real writes sailed through. Same child pattern as the deletes above, same reason.
+  if (PARED) {
+    const poolHexE2E = Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex");
+    const slotScriptE2E = "76a914" + "44".repeat(20) + "88ac";
+    const slotCreate = (fields, signer = F1) => `
+      const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+      const c = new mock.Client({});
+      const identity = { getId: () => ({ toString: () => ${JSON.stringify(signer)} }) };
+      c.platform.documents.create("poolLedger.pledgeSlot", identity, ${fields})
+        .then((doc) => c.platform.documents.broadcast({ create: [doc] }, identity))
+        .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(3); });`;
+    const goodFields = `{ poolId: Buffer.from(${JSON.stringify(poolHexE2E)}, "hex"), slotNo: 7,
+        rewardScript: Buffer.from(${JSON.stringify(slotScriptE2E)}, "hex") }`;
+    const e2eBefore = ledger().docs.filter((d) => d.type === "pledgeSlot").length;
+    const g = drive(slotCreate(goodFields));
+    ok("end-to-end: a well-formed pledgeSlot create lands through create+broadcast", g.code === 0);
+    ok("end-to-end: and it is durably on the persisted ledger",
+      ledger().docs.filter((d) => d.type === "pledgeSlot").length === e2eBefore + 1);
+    const dup = drive(slotCreate(goodFields, OP));
+    ok("end-to-end: a second create on the same (poolId, slotNo) is refused AT BROADCAST",
+      dup.code === 3 && /duplicate unique index bySlot for pledgeSlot/.test(dup.out));
+    const malformed = drive(slotCreate(`{ poolId: Buffer.from(${JSON.stringify(poolHexE2E)}, "hex"),
+        slotNo: 512, rewardScript: Buffer.from(${JSON.stringify(slotScriptE2E)}, "hex") }`));
+    ok("end-to-end: an out-of-bounds slotNo is refused AT CREATE by the schema",
+      malformed.code === 3 && /slotNo out of 0\.\.511/.test(malformed.out));
+    ok("end-to-end: neither refusal left a document behind",
+      ledger().docs.filter((d) => d.type === "pledgeSlot").length === e2eBefore + 1);
+    // THE bySlot INDEX ON REPLACE (confirm-pass round 24, major): the published
+    // pledgeSlot is unique on (poolId, slotNo) and slotNo is a replaceable key, so a
+    // replace moving a claim onto the occupied slot 7 must refuse AT BROADCAST, where
+    // the other claims are visible, exactly like the pass-17 pool-flip clash. A move
+    // to a free slot stays accepted, pinning that the refusal is the collision and not
+    // the replace itself.
+    const slotReplace = (docId, slotNo, signer = F1) => `
+      const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+      const c = new mock.Client({});
+      const identity = { getId: () => ({ toString: () => ${JSON.stringify(signer)} }) };
+      const doc = { __rec: { id: ${JSON.stringify(docId)} }, __pending: { slotNo: ${slotNo} } };
+      c.platform.documents.broadcast({ replace: [doc] }, identity)
+        .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(3); });`;
+    const mineFields = `{ poolId: Buffer.from(${JSON.stringify(poolHexE2E)}, "hex"), slotNo: 8,
+        rewardScript: Buffer.from(${JSON.stringify(slotScriptE2E)}, "hex") }`;
+    const g8 = drive(slotCreate(mineFields));
+    ok("end-to-end: the second claim lands on the free slot 8", g8.code === 0);
+    // selected by the COMPOSITE key, and required to exist (round-24 checker, finding
+    // 3: a slotNo-only pick could grab an older claim in another pool)
+    const claimAt = (poolHex, slotNo) => ledger().docs.find((d) => d.type === "pledgeSlot"
+      && String(d.data.poolId).toLowerCase() === poolHex && Number(d.data.slotNo) === slotNo);
+    const moved = claimAt(poolHexE2E, 8);
+    ok("end-to-end: the created claim is findable by its composite (poolId, slotNo) key", !!moved);
+    const movedId = (moved || {}).id;
+    // the refusal must be ATOMIC over the whole claim set (round-24 checker, finding 2:
+    // asserting only the moved claim would miss a mutation that deletes the occupant
+    // and then throws the expected message)
+    const slotSetBefore = JSON.stringify(ledger().docs.filter((d) => d.type === "pledgeSlot"));
+    const rClash = drive(slotReplace(movedId, 7));
+    ok("end-to-end: a replace moving the claim onto the OCCUPIED slot 7 is refused at broadcast",
+      rClash.code === 3 && /duplicate unique index bySlot for pledgeSlot/.test(rClash.out));
+    ok("end-to-end: the refused replace left the ENTIRE claim set byte-identical",
+      JSON.stringify(ledger().docs.filter((d) => d.type === "pledgeSlot")) === slotSetBefore);
+    // SELF-EXCLUSION (round-24 checker, finding 4): a claim rewriting its own current
+    // slot number must not clash with itself
+    const rSelf = drive(slotReplace(movedId, 8));
+    ok("end-to-end: a replace writing the claim's OWN slot number is accepted (no self-clash)",
+      rSelf.code === 0 && Number((claimAt(poolHexE2E, 8) || {}).data.slotNo) === 8);
+    const rFree = drive(slotReplace(movedId, 9));
+    ok("end-to-end: the same replace onto the FREE slot 9 is accepted (the refusal is the collision)",
+      rFree.code === 0 && !!claimAt(poolHexE2E, 9));
+    // THE KEY IS COMPOSITE (round-24 checker, finding 1: dropping the poolId comparison
+    // would make slotNo globally unique and every same-pool case would still pass): a
+    // claim in a DIFFERENT pool moves onto slot 7 freely, because pool A's occupied 7
+    // does not block pool B's
+    const poolBHex = crypto.createHash("sha256").update("slot-replace-pool-B").digest("hex");
+    const bFields = `{ poolId: Buffer.from(${JSON.stringify(poolBHex)}, "hex"), slotNo: 10,
+        rewardScript: Buffer.from(${JSON.stringify(slotScriptE2E)}, "hex") }`;
+    const gB = drive(slotCreate(bFields));
+    ok("end-to-end: a claim in a second pool lands", gB.code === 0);
+    const rCross = drive(slotReplace((claimAt(poolBHex, 10) || {}).id, 7));
+    ok("end-to-end: the second pool's claim moves onto ITS OWN slot 7 (the index is per pool, not global)",
+      rCross.code === 0 && !!claimAt(poolBHex, 7));
+  }
 }
 
 // ---- the clean run establishes the target end state and the boundary count ----
@@ -943,6 +1681,583 @@ if (!PARED) {
   // honest "no draft was archived" is supposed to take
   ok("an archive recording NO draft (null) still recovers, never refuses",
     r5.code === 0 && /matches the retained manifest/.test(r5.out) && !/DAMAGED/.test(r5.out));
+  // THE OUTER ENVELOPE ITSELF (pass 14, F2). Every case above malformed something INSIDE
+  // a parseable envelope, so the branch where the envelope's own JSON.parse throws was
+  // never exercised, and it failed open: the catch cleared the parsed values but left
+  // draftState at "unknown", which only the try body ever sets, so the damaged refusal
+  // never fired and recovery reported success WITHOUT the exact archived-draft
+  // comparison. The archive KEY EXISTING is the evidence that exact evidence belongs
+  // here; an envelope that does not parse is the same evidentiary state as a draft that
+  // does not parse.
+  // TWO malformation shapes, not one literal string (checker-constructed survival: a fix
+  // recognizing only the exact test bytes would pass a single case), and preservation is
+  // asserted on the BYTES, not on the pathname existing (a delete-and-recreate would
+  // satisfy existsSync while destroying the evidence). The real-envelope bytes come from
+  // the arch5 object still in scope, NOT from re-reading the file: the r5 recovery above
+  // SUCCEEDED, and success finalizes and clears the archive, so the file is gone here
+  // (the first draft of this case read the file and crashed on exactly that).
+  const goodEnvelope = JSON.stringify(arch5);
+  // JSON-VALID malformations included (pass 15, F1): JSON.parse("false") SUCCEEDS, as do
+  // "{}" and "[]" and a shape missing the writer's keys, so a throw-driven damage check
+  // missed every one of them, which is what the pass-14 fix turned out to be. The check
+  // is now positive (the writer's shape or damage), and each of these drives it.
+  for (const [label, poison] of [
+    ["invalid syntax", "{not valid json at the envelope level"],
+    ["a truncated real envelope", goodEnvelope.slice(0, Math.floor(goodEnvelope.length / 2))],
+    ["JSON false, which parses fine", "false"],
+    ["an empty object, no writer keys", "{}"],
+    ["an array", "[]"],
+    ["an envelope missing the draft key", JSON.stringify({ manifest: arch5.manifest })],
+    ["JSON zero", "0"],
+    ["both keys present, manifest value parsing to null (checker-constructed)",
+      JSON.stringify({ manifest: "null", draft: null })],
+  ]) {
+    fs.writeFileSync(ap, poison);
+    const r6 = runChild(["receipt", POOL]);
+    ok(`a MALFORMED OUTER envelope (${label}) refuses like any other damage, never succeeds`,
+      r6.code !== 0 && /DAMAGED/.test(r6.out));
+    ok(`...and the refusal preserves the archive BYTES for hands (${label})`,
+      fs.existsSync(ap) && fs.readFileSync(ap, "utf8") === poison);
+  }
+}
+
+// ---- independent case F3 (closing wave, folder-access reviewer): a DRAFT-ONLY abandon
+//      archive is a LEGITIMATE writer output, not damage. `abandon` on a pool with a frozen
+//      draft but NO committed manifest emits {manifest:null, draft:"<frozen draft>"} (the
+//      abandon writer: `manifest: hasManifest ? envHere[key] : null`, owners taken from the
+//      frozen rows one branch above it). DRIVEN END-TO-END here so the WRITER itself produces
+//      the manifest:null archive rather than the test hand-building it: complete to freeze both,
+//      remove the committed-manifest state file (a real manifest-loss the draft-only abandon
+//      path exists to handle; loadEnv keys off the .val files), then abandon. The reader's
+//      manifest-value gate required a non-empty string, so a literal null was mislabelled
+//      DAMAGED. The honest outcome is a REFUSAL that names the draft-only state, NEVER a DAMAGED
+//      claim, and it must fire BEFORE the finalize path so no receipt is finalized from a
+//      manifest-less archive (no a soundness-review finding regression: the manifest-less archive's frozen draft is
+//      not adopted as a finalize source). Both the old and new behaviour refuse, so no value
+//      moves; only the reason changes. ----
+{
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
+  // remove ONLY the committed-manifest .val, leaving the frozen draft, so the next abandon sees
+  // hasManifest false / hasDraft true (the draft-only precondition). The ABANDONED_ and DONE_
+  // keys are longer than FORMATION_<20hex> and are not matched.
+  for (const f of fs.readdirSync(STATE_DIR)) {
+    if (/^FORMATION_[0-9A-F]{20}\.val$/.test(f)) fs.rmSync(path.join(STATE_DIR, f));
+  }
+  const abF3 = runChild(["abandon", POOL]);
+  ok("draft-only setup: abandon succeeds on a pool with a draft but no manifest", abF3.code === 0);
+  const archiveFileF3 = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("FORMATION_ABANDONED_") && f.endsWith(".val"));
+  ok("draft-only setup: the abandon archive exists", archiveFileF3 !== undefined);
+  const apF3 = path.join(STATE_DIR, archiveFileF3);
+  const archF3 = JSON.parse(fs.readFileSync(apF3, "utf8"));
+  // THE WRITER PRODUCED manifest:null (not a hand-built fixture): this is the exact shape F3
+  // is about, emitted by the real abandon writer for a draft-only pool, beside the real draft.
+  ok("the WRITER emits manifest:null for a draft-only abandon, beside the real frozen draft",
+    archF3.manifest === null && typeof archF3.draft === "string");
+  const draftOnlyBytes = fs.readFileSync(apF3, "utf8");
+  // (a) no receipt on the ledger yet: recovery has nothing to publish and refuses HONESTLY,
+  // writing nothing to either the archive or the ledger
+  const ledgerBeforeAF3 = fs.readFileSync(LEDGER_PATH, "utf8");
+  const rF3 = runChild(["receipt", POOL]);
+  ok("a DRAFT-ONLY abandon archive is NOT reported as damaged",
+    rF3.code !== 0 && !/damaged|corrupt|unusable/i.test(rF3.out));
+  ok("a DRAFT-ONLY abandon archive refuses HONESTLY, naming the missing manifest",
+    rF3.code !== 0 && /draft-only/i.test(rF3.out) && /no.*manifest|manifest.*(committed|to publish)/i.test(rF3.out));
+  ok("the draft-only refusal preserves the archive bytes for hands",
+    fs.existsSync(apF3) && fs.readFileSync(apF3, "utf8") === draftOnlyBytes);
+  ok("the draft-only refusal (no receipt) writes nothing to the ledger",
+    fs.readFileSync(LEDGER_PATH, "utf8") === ledgerBeforeAF3);
+  // (b) a MATCHING receipt already on the ledger: the refusal must STILL fire before the
+  // finalize path (no a soundness-review finding regression), so the "verified" success line must never appear AND
+  // the archive BYTES must be untouched (a finalize would clear or rewrite the archive; a
+  // finalize-then-error mutation is caught by the byte check, not merely by exit code).
+  const lF3 = ledger();
+  lF3.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+    poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+    proTxHash: EXPECTED.proTxHash, slotIndex: 0, formatVersion: 1,
+    ...(PARED ? {} : { nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000 }),
+    allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+    participantCount: 2, l1Verification: "amount-reward-verified",
+    verificationMethodVersion: 1, $createdAt: 5 } });
+  if (!PARED) {
+    const p2 = lF3.docs.find((x) => x.id === POOL);
+    p2.data.proTxHash = REAL_HASH; p2.data.status = "live";
+  }
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(lF3, null, 1));
+  const ledgerBeforeF3 = fs.readFileSync(LEDGER_PATH, "utf8");
+  const r2F3 = runChild(["receipt", POOL]);
+  ok("a draft-only archive still refuses with a matching receipt present, never finalizes",
+    r2F3.code !== 0 && !/damaged/i.test(r2F3.out) && !/embedded allocation: canonical/.test(r2F3.out));
+  ok("the draft-only refusal leaves the archive BYTES untouched with a receipt present",
+    fs.existsSync(apF3) && fs.readFileSync(apF3, "utf8") === draftOnlyBytes);
+  // the LEDGER is also unchanged: the refusal throws before any finalize write, so a mutation
+  // that writes the receipt/ledger before refusing (archive left alone) is caught here, not
+  // only by the archive-byte check
+  ok("the draft-only refusal writes nothing to the ledger",
+    fs.readFileSync(LEDGER_PATH, "utf8") === ledgerBeforeF3);
+  // (c) manifest:null is the writer's draft-only shape ONLY beside a PRESENT draft. A null,
+  // empty, or unparseable companion draft is off the writer's contract (the draft-only abandon
+  // always archives a real frozen draft), so it stays DAMAGE, not a draft-only abandon. These
+  // shapes are hand-built because the writer cannot produce them, exactly like the other damage
+  // cases above.
+  for (const [label, badDraft] of [
+    ["a null companion draft", null],
+    ["an empty-string companion draft", ""],
+    ["an unparseable companion draft", "{not json"],
+    ["a JSON-null companion draft", "null"],
+  ]) {
+    fs.writeFileSync(apF3, JSON.stringify({ manifest: null, draft: badDraft, at: null }));
+    const rc = runChild(["receipt", POOL]);
+    ok(`manifest:null beside ${label} is DAMAGE, not a draft-only abandon`,
+      rc.code !== 0 && /damaged/i.test(rc.out) && !/draft-only/i.test(rc.out));
+  }
+}
+
+// ---- independent case CF1 (closing wave, second-model review): a REBUILT draft's fee
+//      provenance survives persist-crash-reload. The fee-comparability marker used to be a
+//      non-enumerable property, dropped by JSON.stringify, and reload stamped every
+//      live-key draft as completion-time evidence, so a draft REBUILT after a legitimate
+//      post-flip fee change, persisted, and reloaded had its present-day fee compared
+//      against the valid historical receipt and recovery refused it. The fact is now a
+//      required persisted field, decided at build time. The drafts, the crash, and the
+//      recovery run through the REAL writers; the historical receipt is a synthetic
+//      fixture inserted into the ledger, the same idiom as the archived-draft cases above.
+//      v8 only: the sequence needs a flip and a post-flip fee drift, neither of which
+//      exists on the immutable ledger. ----
+if (!PARED) {
+  // flipped pool, receipt not yet published, manifest retained, draft still frozen
+  writeSeed();
+  const halted = runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "flip" });
+  ok("CF1 setup: halted after the flip with in-flight evidence", halted.code === 0 && hasInFlightEvidence());
+  // the FIRST-RUN freeze was built pre-flip, when the current fee IS the completion-time
+  // fee, so the writer records it as comparable (the predicate's true half, pinned on the
+  // persisted record itself)
+  {
+    const df = fs.readdirSync(STATE_DIR).find((f) => /^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f));
+    ok("CF1: the first-run pre-flip freeze records its fee as completion-time evidence",
+      df !== undefined && JSON.parse(fs.readFileSync(path.join(STATE_DIR, df), "utf8")).feeIsCompletionTime === true);
+  }
+  // the draft is LOST (the state loss the rebuild path exists for), and the pool fee
+  // then drifts legitimately (the fee is mutable after completion, round-5)
+  for (const f of fs.readdirSync(STATE_DIR)) {
+    if (/^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f)) fs.rmSync(path.join(STATE_DIR, f));
+  }
+  {
+    const l = ledger();
+    const p = l.docs.find((d) => d.id === POOL);
+    p.data.operatorFeeBps = 2500; // seeded completion-time fee is 2000
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  }
+  snapshot();
+  // find the boundary where `receipt` has PERSISTED the rebuilt draft but NOT published:
+  // the persist-crash-reload window CF1 is about
+  let crashedK = null;
+  for (let k = 1; k <= 30 && crashedK === null; k++) {
+    restore(); clearOpLock();
+    const r = runChild(["receipt", POOL], k);
+    const draftPersisted = fs.readdirSync(STATE_DIR).some((f) => /^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f));
+    if (r.code === 97 && draftPersisted && receipts().length === 0) crashedK = k;
+  }
+  ok("CF1 setup: a crash boundary exists after the rebuild-persist and before publication", crashedK !== null);
+  if (crashedK !== null) {
+    restore(); clearOpLock();
+    runChild(["receipt", POOL], crashedK);
+    ok("CF1 setup: the rebuilt draft is persisted and no receipt is on the ledger",
+      fs.readdirSync(STATE_DIR).some((f) => /^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f)) && receipts().length === 0);
+    // the valid HISTORICAL receipt appears, recording the completion-time fee (2000),
+    // published from the original completion evidence
+    const l = ledger();
+    l.docs.push({ id: newId(), type: "completionReceipt", ownerId: OP, data: {
+      poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+      proTxHash: EXPECTED.proTxHash, slotIndex: 0, formatVersion: 1,
+      nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000,
+      allocationRows: EXPECTED.allocationRows, allocationHash: EXPECTED.allocationHash,
+      participantCount: 2, l1Verification: "demo-unverified",
+      verificationMethodVersion: 1, $createdAt: 5 } });
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+    // recovery resumes: the reloaded draft's fee is a PRESENT-DAY reading (2500), recorded
+    // as such, so it must NOT be compared against the historical receipt's 2000, and the
+    // reconcile must finalize rather than report a false contradiction
+    clearOpLock();
+    const resumed = runChild(["receipt", POOL]);
+    ok("CF1: recovery over a persisted REBUILT draft accepts the valid historical receipt",
+      resumed.code === 0 && !/CONTRADICTS/.test(resumed.out) && !/operatorFeeBps/.test(resumed.out));
+    ok("CF1: ...and finalizes the half-finalized completion",
+      /local completion state finalized/.test(resumed.out) && !hasInFlightEvidence());
+    ok("CF1: the historical receipt is untouched on the ledger", receipts().length === 1);
+  }
+  // COMPLETE's own rebuild site decides the same predicate (the sibling the receipt-path
+  // case cannot reach): resuming complete after the same draft loss on the flipped pool
+  // rebuilds from the manifest plus the CURRENT (drifted) fee, and the writer must record
+  // that fee as NOT completion-time evidence. Pinned on the persisted record, because the
+  // fee-skip behavior it drives is already covered above.
+  {
+    let completeK = null;
+    for (let k = 1; k <= 30 && completeK === null; k++) {
+      restore(); clearOpLock();
+      const r = runChild(["complete", POOL, REAL_HASH], k);
+      const df = fs.readdirSync(STATE_DIR).find((f) => /^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f));
+      if (r.code === 97 && df !== undefined) completeK = k;
+    }
+    ok("CF1 sibling setup: complete's rebuild persisted a draft before a later crash", completeK !== null);
+    if (completeK !== null) {
+      const df = fs.readdirSync(STATE_DIR).find((f) => /^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f));
+      ok("CF1 sibling: complete's post-flip rebuild records its fee as NOT completion-time",
+        JSON.parse(fs.readFileSync(path.join(STATE_DIR, df), "utf8")).feeIsCompletionTime === false);
+    }
+  }
+  // a LEGACY draft that never recorded its fee provenance is refused loudly, never
+  // guessed at (the field is REQUIRED; assuming comparable recreates the false
+  // contradiction, assuming not waves off a genuine one)
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "flip" });
+  const draftFile = fs.readdirSync(STATE_DIR).find((f) => /^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f));
+  ok("CF1 legacy setup: a frozen draft exists", draftFile !== undefined);
+  {
+    const dp = path.join(STATE_DIR, draftFile);
+    const d = JSON.parse(fs.readFileSync(dp, "utf8"));
+    delete d.feeIsCompletionTime;
+    fs.writeFileSync(dp, JSON.stringify(d));
+  }
+  const legacy = runChild(["receipt", POOL]);
+  ok("CF1: a draft without the fee-provenance field is refused loudly, not guessed at",
+    legacy.code !== 0 && /feeIsCompletionTime/.test(legacy.out));
+  // ...and the boolean is NOT a free opt-out (checker on this fold): where the pool state
+  // proves the fee cannot have drifted (still forming here), a draft claiming false is an
+  // incoherent record and refuses, so editing the persisted flag cannot skip the fee
+  // comparison the old code performed
+  writeSeed();
+  runChild(["complete", POOL, REAL_HASH], undefined, { FORMATION_HALT_AFTER: "commit" });
+  const preflipDraft = fs.readdirSync(STATE_DIR).find((f) => /^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f));
+  ok("CF1 opt-out setup: a pre-flip frozen draft exists", preflipDraft !== undefined);
+  {
+    const dp = path.join(STATE_DIR, preflipDraft);
+    const d = JSON.parse(fs.readFileSync(dp, "utf8"));
+    ok("CF1 opt-out setup: the pre-flip draft recorded true", d.feeIsCompletionTime === true);
+    d.feeIsCompletionTime = false;
+    fs.writeFileSync(dp, JSON.stringify(d));
+  }
+  const optOut = runChild(["complete", POOL, REAL_HASH]);
+  ok("CF1: a pre-flip draft claiming NOT-completion-time is refused as an incoherent record",
+    optOut.code !== 0 && /incoherent record/.test(optOut.out));
+}
+
+// ---- independent case DEBRIS CALLER ENUMERATION (confirm-pass round 11, must-fix):
+//      votePreference and settlement are poolId-referencing families the sweep never
+//      enumerated, so a sweep could delete a pool around a preference (orphaning it, its
+//      owner never consulted) and a settlement's member history protected nothing. Drives
+//      the REAL cleanupDebris.cjs through the dash-to-mock hook: a controlled preference
+//      is deleted WITH its pool, a FOREIGN preference skips the whole pool, and a
+//      settlement skips it outright. v8 only (the immutable ledger's receipt-less pools
+//      are skip-indeterminate before any of this applies). ----
+if (!PARED) {
+  // cleanupDebris guards its main loop on require.main === module, so the hook rides a
+  // --require preload and the script itself IS the main module (the audit and cast
+  // probes run unconditional IIFEs and could be required from -e; this one cannot)
+  const HOOKFILE = path.join(ROOT, "dashHook.cjs");
+  fs.writeFileSync(HOOKFILE, `
+    const Module = require("module");
+    const orig = Module._resolveFilename;
+    Module._resolveFilename = function (request, ...rest) {
+      if (request === "dash") return ${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))};
+      return orig.call(this, request, ...rest);
+    };`);
+  const runDebris = () => { try {
+    return { code: 0, out: execFileSync("node", ["--require", HOOKFILE,
+      path.join(__dirname, "cleanupDebris.cjs")],
+      { env: { ...process.env, TEGARA_ENV_PATH: ENV_PATH, TEGARA_MOCK_LEDGER: LEDGER_PATH,
+        LEDGER: HARNESS_LEDGER, NETWORK: "regtest" }, encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"] }) };
+  } catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } };
+  const seedSweepable = (extraDocs) => {
+    writeSeed();
+    const l = ledger();
+    const poolHex = Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex");
+    // one controlled share at 5000 bps: incomplete, nothing distributed, sweepable
+    l.docs.push({ id: newId(), type: "share", ownerId: F1, data: { poolId: poolHex,
+      shareBps: 5000, contributionDuffs: 1, l1RewardScript: "76a914" + "11".repeat(20) + "88ac", $createdAt: 1 } });
+    for (const d of extraDocs(poolHex)) l.docs.push(d);
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  };
+  // (a) a CONTROLLED preference is enumerated and deleted with its pool, never orphaned
+  seedSweepable((poolHex) => [{ id: newId(), type: "votePreference", ownerId: F2,
+    data: { poolId: poolHex, proposalHash: "66".repeat(32), choice: "yes", $createdAt: 2 } }]);
+  const rA = runDebris();
+  ok("debris caller: a controlled preference is deleted with its pool, not orphaned",
+    rA.code === 0 && ledger().docs.every((d) => d.type !== "votePreference" && d.id !== POOL));
+  // (b) a FOREIGN preference is in the whole-pool preflight and skips the pool intact
+  seedSweepable((poolHex) => [{ id: newId(), type: "votePreference", ownerId: newId(),
+    data: { poolId: poolHex, proposalHash: "66".repeat(32), choice: "yes", $createdAt: 2 } }]);
+  const rB = runDebris();
+  ok("debris caller: a FOREIGN preference skips the whole pool (owner consulted, pool intact)",
+    rB.code === 0 && /owned by identities this/.test(rB.out)
+    && ledger().docs.some((d) => d.id === POOL)
+    && ledger().docs.some((d) => d.type === "votePreference"));
+  // (c) a settlement's member history refuses the sweep outright
+  seedSweepable((poolHex) => [{ id: newId(), type: "settlement", ownerId: F1,
+    data: { poolId: poolHex, exitId: "0a".repeat(32), joinId: "0b".repeat(32),
+      leaverId: "0c".repeat(32), joinerId: "0d".repeat(32), amountDuffs: 1, shareBps: 5000,
+      phase: "prepared", $createdAt: 2 } }]);
+  const rC = runDebris();
+  ok("debris caller: a settlement skips the pool outright (member history is not debris)",
+    rC.code === 0 && /settled an exit or join/.test(rC.out)
+    && ledger().docs.some((d) => d.id === POOL)
+    && ledger().docs.some((d) => d.type === "settlement"));
+  // (d) the v1 LEDGER has no settlement type at all (confirm-pass round 12, major: the
+  // first draft queried it unconditionally, so on v1 the SDK refused the unknown type
+  // before the plan could run and the whole sweep wedged; the reserve fold was this exact
+  // shape). The strict mock now refuses absent types like the real SDK, so this drives
+  // the caller under LEDGER=v1 and requires it to REACH the plan and sweep.
+  {
+    writeSeed();
+    const l = ledger();
+    const poolHex = Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex");
+    // a v1-shaped pool (no slot book, no operatorIdentityId) with one incomplete share
+    const p = l.docs.find((d) => d.id === POOL);
+    p.data = { proTxHash: "00".repeat(16) + "11".repeat(16), slotIndex: 0, nodeType: "regular",
+      operatorFeeBps: 2000, status: "forming", $createdAt: 1 };
+    l.docs = l.docs.filter((d) => d.type === "pool");
+    l.docs.push({ id: newId(), type: "share", ownerId: F1, data: { poolId: poolHex,
+      shareBps: 5000, contributionDuffs: 1, l1RewardScript: "76a914" + "11".repeat(20) + "88ac", $createdAt: 1 } });
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+    const rV1 = (() => { try {
+      return { code: 0, out: execFileSync("node", ["--require", HOOKFILE,
+        path.join(__dirname, "cleanupDebris.cjs")],
+        { env: { ...process.env, TEGARA_ENV_PATH: ENV_PATH, TEGARA_MOCK_LEDGER: LEDGER_PATH,
+          LEDGER: "v1", NETWORK: "regtest" }, encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"] }) };
+    } catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
+    ok("debris caller: the v1 ledger reaches the plan and sweeps (no absent-type query wedge)",
+      rV1.code === 0 && /debris pool/.test(rV1.out) && !/not defined by the selected ledger/.test(rV1.out));
+  }
+}
+
+// ---- independent case PRE-V8 OWNER BINDING (confirm-pass round 16, must-fix): the M1
+//      owner binding was v8-gated while the final pool replacement is operator-signed on
+//      EVERY mutable ledger, so a v1-v7 completion of a foreign-owned pool mutated public
+//      records (shares created, requests settled) before dying at the replacement
+//      Platform refuses. The guard is unconditional now; this drives the real `complete`
+//      under LEDGER=v5 against a foreign-owned pool and requires the refusal BEFORE any
+//      ledger mutation. ----
+if (!PARED) {
+  writeSeed();
+  fs.appendFileSync(ENV_PATH, `CONTRACT_V5_ID=${CONTRACT}\n`);
+  {
+    const l = ledger();
+    const p = l.docs.find((d) => d.id === POOL);
+    // a v5-shaped pool (status, no slot fields) owned by F1, NOT the operator
+    p.ownerId = F1;
+    p.data = { proTxHash: "00".repeat(16) + "22".repeat(16), slotIndex: 0, nodeType: "regular",
+      operatorFeeBps: 2000, status: "forming", $createdAt: 1 };
+    l.docs = l.docs.filter((d) => d.type === "pool");
+    // MUTABLE INPUTS PRESENT (checker on this fold): two pending requests that exactly
+    // fill the pool, so the pre-fix flow would have settled them and created shares
+    // before dying at the replacement; the unchanged-bytes assertion below therefore
+    // observes the mutations the old ordering performed, not an empty ledger
+    const poolHex5 = Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex");
+    l.docs.push(
+      { id: newId(), type: "membershipRequest", ownerId: F1, data: { poolId: poolHex5,
+        kind: "join", amountDuffs: 50000000000, status: "pending", $createdAt: 2 } },
+      { id: newId(), type: "membershipRequest", ownerId: F2, data: { poolId: poolHex5,
+        kind: "join", amountDuffs: 50000000000, status: "pending", $createdAt: 3 } });
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+    const before = fs.readFileSync(LEDGER_PATH, "utf8");
+    const r5 = runChild(["complete", POOL, REAL_HASH], undefined, { LEDGER: "v5" });
+    ok("v5: completing a FOREIGN-owned pool refuses at the owner binding, before any mutation",
+      r5.code !== 0 && /is owned by .* not this/.test(r5.out) && /M1 owner binding/.test(r5.out));
+    ok("v5: the foreign-owner refusal mutates nothing on the ledger",
+      fs.readFileSync(LEDGER_PATH, "utf8") === before);
+  }
+}
+
+// ---- independent case LEGACY CAST READER DELEGATION (confirm-pass round 10, major):
+//      castReceipt.cjs built its own choice map and never read delegateTo, the exact
+//      divergence ledgerTally.cjs's header says the F6 fold existed to end, so a targeted
+//      delegation fell into the untargeted net and the legacy publisher computed a
+//      different tally, outcome and hash than the governor from the same ledger. The
+//      reviewer's scenario: A 5000 no, B 3000 delegating to C, C 2000 yes; targeted
+//      resolution is 5000/5000 with the tie rule selecting yes, while the broken map made
+//      it 2000/8000 no. Drives the REAL castReceipt.cjs verify path offline through the
+//      dash-to-mock hook; the tally prints before any L1 or cast-ledger fetch, so later
+//      environment failures cannot mask the assertion. v8 only for the pool shape. ----
+if (!PARED) {
+  writeSeed();
+  {
+    // the cast publisher needs its own contract id in env; the cast-ledger reads come
+    // after the tally print and resolve to empty against the mock
+    fs.appendFileSync(ENV_PATH, `CAST_CONTRACT_ID=${newId()}\n`);
+    const l = ledger();
+    const p = l.docs.find((d) => d.id === POOL);
+    p.data.proTxHash = REAL_HASH; p.data.status = "live";
+    l.docs = l.docs.filter((d) => d.type !== "share" && d.type !== "votePreference");
+    const propHex = "77".repeat(32);
+    const poolHex = Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex");
+    const scr = (b) => "76a914" + b.repeat(20) + "88ac";
+    const A = F1, B = F2, C = OP;
+    l.docs.push(
+      { id: newId(), type: "share", ownerId: A, data: { poolId: poolHex, shareBps: 5000, contributionDuffs: 1, l1RewardScript: scr("11"), $createdAt: 1 } },
+      { id: newId(), type: "share", ownerId: B, data: { poolId: poolHex, shareBps: 3000, contributionDuffs: 1, l1RewardScript: scr("22"), $createdAt: 2 } },
+      { id: newId(), type: "share", ownerId: C, data: { poolId: poolHex, shareBps: 2000, contributionDuffs: 1, l1RewardScript: scr("33"), $createdAt: 3 } },
+      { id: newId(), type: "votePreference", ownerId: A, data: { poolId: poolHex, proposalHash: propHex, choice: "no", $createdAt: 4 } },
+      { id: newId(), type: "votePreference", ownerId: B, data: { poolId: poolHex, proposalHash: propHex, choice: "delegate",
+        delegateTo: Buffer.from(Identifier.from(C).toBuffer()).toString("hex"), $createdAt: 5 } },
+      { id: newId(), type: "votePreference", ownerId: C, data: { poolId: poolHex, proposalHash: propHex, choice: "yes", $createdAt: 6 } });
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+    const castProbe = `
+      const path = require("path");
+      const Module = require("module");
+      const MOCK = ${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))};
+      const orig = Module._resolveFilename;
+      Module._resolveFilename = function (request, ...rest) {
+        if (request === "dash") return MOCK;
+        return orig.call(this, request, ...rest);
+      };
+      process.argv = [process.argv[0], "castReceipt.cjs", "verify", ${JSON.stringify(POOL)}, ${JSON.stringify(propHex)}];
+      require(${JSON.stringify(path.join(__dirname, "castReceipt.cjs"))});`;
+    const rc = (() => { try { return { code: 0, out: execFileSync("node", ["-e", castProbe],
+      { env: { ...process.env, TEGARA_ENV_PATH: ENV_PATH, TEGARA_MOCK_LEDGER: LEDGER_PATH,
+        LEDGER: HARNESS_LEDGER, NETWORK: "regtest", FORK_RPC_URL: "http://offline.invalid:1" },
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+      catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
+    ok("legacy cast reader resolves TARGETED delegation (5000/5000, tie rule yes), never 2000/8000",
+      /yes 5000 \/ no 5000/.test(rc.out) && /outcome "yes"/.test(rc.out));
+  }
+}
+
+// ---- independent case AUDIT RECEIPT CONTRADICTION (closing confirm-pass round 4,
+//      major): the ledger audit collapsed "no receipt" and "a receipt exists but does
+//      not verify" into one node-unknown state, so a ledger holding a contradicting
+//      receipt could report AUDIT OK with exit 0 against the script's own header. A
+//      present non-verifying receipt now FAILS the audit, with exactly one recognized
+//      exception, the documented P6 probe artifact the canonical publish record lists
+//      precisely so a later audit recognizes it. This drives the REAL ledgerAudit.cjs
+//      offline through the same dash-to-mock module hook the crash child uses. ----
+if (PARED) {
+  writeSeed();
+  const nonVerifying = (id) => {
+    const l = ledger();
+    l.docs.push({ id, type: "completionReceipt", ownerId: OP, data: {
+      poolId: Buffer.from(Identifier.from(POOL).toBuffer()).toString("hex"),
+      proTxHash: "ab".repeat(32), slotIndex: 0, formatVersion: 1,
+      allocationRows: Buffer.from("placeholder-not-a-real-allocation", "utf8").toString("hex"),
+      allocationHash: "cd".repeat(32),
+      participantCount: 2, l1Verification: "demo-unverified", verificationMethodVersion: 1,
+      $createdAt: 5 } });
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+  };
+  const auditProbe = `
+    const path = require("path");
+    const Module = require("module");
+    const MOCK = ${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))};
+    const orig = Module._resolveFilename;
+    Module._resolveFilename = function (request, ...rest) {
+      if (request === "dash") return MOCK;
+      return orig.call(this, request, ...rest);
+    };
+    require(${JSON.stringify(path.join(__dirname, "ledgerAudit.cjs"))});`;
+  const runAudit = () => { try {
+    return { code: 0, out: execFileSync("node", ["-e", auditProbe],
+      { env: { ...process.env, TEGARA_ENV_PATH: ENV_PATH, TEGARA_MOCK_LEDGER: LEDGER_PATH,
+        LEDGER: HARNESS_LEDGER, NETWORK: "regtest" }, encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"] }) };
+  } catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } };
+  nonVerifying(newId());
+  const rAudit = runAudit();
+  ok("audit: a present receipt that does NOT verify fails the audit, never OK",
+    rAudit.code !== 0 && /does NOT verify against it/.test(rAudit.out) && !/LEDGER AUDIT OK/.test(rAudit.out));
+  writeSeed();
+  nonVerifying("2DWKsvWdFvRZWScvT5zXFWhDDVX8garJB7XP4tHC6M8Z");
+  const rProbeArt = runAudit();
+  ok("audit: the documented P6 probe artifact is recognized by name, not an inconsistency",
+    rProbeArt.code === 0 && /DOCUMENTED P6 probe artifact/.test(rProbeArt.out)
+    && !/INCONSISTENT/.test(rProbeArt.out));
+}
+
+  // THE UNIQUE byProTxHash INDEX on a pool flip (pass 17, F2), enforced at broadcast where
+  // the other pools are visible. Two forming pools; flip A to hash H; a replace flipping B
+  // to the same H must be refused, while flipping B to a DIFFERENT hash succeeds.
+  {
+    // a local child runner and env (both `drive` and `childEnv` above are block-scoped to
+    // the delete-probe block; the globals they are built from are module-level)
+    const childEnvP = { ...process.env, TEGARA_ENV_PATH: ENV_PATH,
+      TEGARA_MOCK_LEDGER: LEDGER_PATH, LEDGER: HARNESS_LEDGER, NETWORK: "regtest" };
+    const driveP = (script) => {
+      try { return { code: 0, out: execFileSync("node", ["-e", script],
+        { env: childEnvP, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+      catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; }
+    };
+    const P2 = Identifier.from(crypto.createHash("sha256").update("second-pool-flip").digest()).toString();
+    const seedTwo = () => {
+      writeSeed();
+      const l = ledger();
+      l.docs.push({ id: P2, type: "pool", ownerId: OP, data: PARED
+        ? { slotIndex: 1, nodeType: "regular", operatorFeeBps: 2000, targetDuffs: 100000000000,
+            slotDuffs: 50000000000, slotCount: 2, $createdAt: 1 }
+        : { proTxHash: "00".repeat(16) + crypto.randomBytes(16).toString("hex"), slotIndex: 1,
+            nodeType: "regular", operatorIdentityId: Buffer.from(Identifier.from(OP).toBuffer()).toString("hex"),
+            operatorFeeBps: 2000, status: "forming", slotDuffs: 50000000000, slotCount: 2, $createdAt: 1 } });
+      fs.writeFileSync(LEDGER_PATH, JSON.stringify(l, null, 1));
+    };
+    if (!PARED) {
+      const flip = (poolPk, hashHex) => `
+        const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+        const c = new mock.Client({});
+        const id = { getId: () => ({ toString: () => ${JSON.stringify(OP)} }) };
+        (async () => {
+          // the probe models the REAL writer, which flips with a Buffer (closing wave,
+          // FA3: a pending hex string is now refused as the schema-forbidden string form)
+          const doc = { __rec: { id: ${JSON.stringify(poolPk)} }, __pending: { status: "live", proTxHash: Buffer.from(${JSON.stringify(hashHex)}, "hex") } };
+          await c.platform.documents.broadcast({ replace: [doc] }, id);
+          process.exit(0);
+        })().catch((e) => { console.error(e.message); process.exit(3); });`;
+      seedTwo();
+      const H = "aa".repeat(32);
+      const a = driveP(flip(POOL, H));
+      ok("pool flip A to H succeeds", a.code === 0);
+      const bClash = driveP(flip(P2, H));
+      ok("pool flip B to the SAME H is refused by the unique byProTxHash index",
+        bClash.code === 3 && /duplicate unique index byProTxHash for pool/.test(bClash.out));
+      const bOk = driveP(flip(P2, "bb".repeat(32)));
+      ok("pool flip B to a DIFFERENT hash succeeds", bOk.code === 0);
+    }
+  }
+
+// ---- independent case LOADED-MANIFEST RANGE (pass 16, F1): the fresh claim reader
+//      refuses slotNo >= slotCount, and the stored-manifest validator on the RESUME path
+//      checked non-negativity and slotCount EQUALITY while never asking the claims to sit
+//      inside it, so a snapshot and a ledger claim that were EQUALLY out of range agreed
+//      through the preflight and settled. This drives a LOADED manifest, which is the
+//      reader the fresh-path test cannot reach. ----
+{
+  // BOTH ledgers: the validator is shared, and the checker on this fold noted a
+  // PARED-only case leaves the other ledger's manifest reader uncovered
+  writeSeed();
+  const halted = runChild(["complete", POOL, REAL_HASH], undefined,
+    { FORMATION_HALT_AFTER: PARED ? "shares" : "flip" });
+  ok("manifest-range setup: halted with in-flight evidence", halted.code === 0 && hasInFlightEvidence());
+  const mFile = fs.readdirSync(STATE_DIR).find((f) => f.startsWith("FORMATION_")
+    && !f.startsWith("FORMATION_ABANDONED_") && !f.startsWith("FORMATION_DONE_") && f.endsWith(".val"));
+  ok("manifest-range setup: an active manifest exists", mFile !== undefined);
+  const mPath = path.join(STATE_DIR, mFile);
+  const mObj = JSON.parse(fs.readFileSync(mPath, "utf8"));
+  ok("manifest-range setup: the manifest carries claim snapshots", Array.isArray(mObj.claims) && mObj.claims.length > 0);
+  // push the FIRST claim out of range in BOTH places, the snapshot and the ledger claim,
+  // so the mutation-detecting preflight agrees with itself (the reviewer's exact pair)
+  const edited = mObj.claims[0];
+  const oldSlot = edited.slotNo;
+  // the TIGHTEST bound, slotNo === slotCount, one past the last legal slot (the checker
+  // noted 511 leaves the exact boundary untested)
+  edited.slotNo = mObj.slotCount;
+  fs.writeFileSync(mPath, JSON.stringify(mObj));
+  const led = ledger();
+  const lClaim = led.docs.find((d) => d.type === "pledgeSlot" && Number(d.data.slotNo) === Number(oldSlot));
+  ok("manifest-range setup: the matching ledger claim exists", lClaim !== undefined);
+  if (lClaim) { lClaim.data.slotNo = mObj.slotCount; fs.writeFileSync(LEDGER_PATH, JSON.stringify(led, null, 1)); }
+  clearOpLock();
+  const r = runChild(["complete", POOL, REAL_HASH]);
+  ok("a LOADED manifest with an out-of-range claim snapshot REFUSES, never settles",
+    r.code !== 0 && /outside the committed book/.test(r.out));
+  ok("...and the refusal names the committed range", /0\.\.1/.test(r.out));
 }
 
 // ---- independent case LIVE DRAFT DAMAGE (pass 10, F1): the LIVE draft key gets the
@@ -1172,7 +2487,7 @@ const plantForeignShare = () => {
   ok("status on a completed pool reads COMPLETED", st.code === 0 && /COMPLETED/.test(st.out));
   ok("status on a completed pool reaches the ESTABLISHED-node branch",
     /L1 check skipped \(no FORK_RPC_URL\)/.test(st.out));
-  // the SHARE CROSS-CHECK (pass-7 wave, review minor 5): status is the documented
+  // the SHARE CROSS-CHECK (pass-7 wave, packet-review minor 5): status is the documented
   // place the receipt allocation meets the live shares, and it now actually compares
   ok("status cross-checks the live shares against the receipt allocation",
     /share\(s\) match the receipt allocation exactly/.test(st.out));

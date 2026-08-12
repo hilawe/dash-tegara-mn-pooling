@@ -69,15 +69,29 @@ ok("the refusal is specifically about the binding, not an unrelated duty",
   /owner binding/.test(checkReceiptAgainstPool(bare).reason || ""));
 ok("a caller supplying only one owner is refused",
   checkReceiptAgainstPool({ ...bare, receiptOwnerId: A }).ok === false);
-ok("MISMATCHED owners are refused before any other duty can mask it",
-  /owned by/.test(checkReceiptAgainstPool({ ...bare, receiptOwnerId: A, poolOwnerId: B }).reason || ""));
+// the fixture pair passes every other duty (asserted above), so a refusal here can only be
+// duty 6; the reason must carry BOTH identifiers, which is what an operator needs, rather
+// than a fixed phrase that changes whenever the wording does
+{
+  const mism = checkReceiptAgainstPool({ ...bare, receiptOwnerId: A, poolOwnerId: B });
+  ok("MISMATCHED owners are refused before any other duty can mask it", mism.ok === false);
+  ok("and the refusal names both supplied owners",
+    (mism.reason || "").includes(A) && (mism.reason || "").includes(B));
+}
 
-// ---- 2. the DECLARATION path is explicit and self-reporting ----
+// ---- 2. there is NO declaration path any more (pass 11, F1) ----
+// The escape existed for two passes: a caller could declare it was unable to bind and
+// still receive ok, with a field recording that the binding had not happened. No
+// production caller ever took it, but the exported function offered it and this suite
+// pinned the affirmative result, so the published five-duty contract and the code
+// disagreed. The parameter is gone. What follows asserts the ABSENCE, using the same pair
+// that passes every other duty, so a refusal here can only be duty 6.
 const declared = checkReceiptAgainstPool({ ...bare, ownerBindingUnavailable: "stub" });
-ok("a declared-unavailable caller is not refused for the binding",
-  !/owner binding/.test(declared.reason || ""));
-ok("a declared-unavailable result reports the binding as UNCHECKED",
-  declared.ownerBindingChecked !== true);
+ok("a declaration parameter no longer produces an affirmative result", declared.ok === false);
+ok("and the refusal is still specifically the binding", /owner binding/.test(declared.reason || ""));
+ok("no affirmative result carries a binding-was-skipped field",
+  checkReceiptAgainstPool({ ...bare, receiptOwnerId: A, poolOwnerId: A })
+    .ownerBindingChecked === undefined);
 
 // ---- 3. every real call site is exercised for its DECISION, not its source text ----
 // Each entry drives the module and asserts the module's own conclusion changes with the
@@ -107,8 +121,11 @@ const lifecycle = require("./poolLifecycle.cjs");
   const pool = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
     targetDuffs: Number(REGULAR) };
   const noOwners = lifecycle.classifyPool({ contractId: GC, pool, poolId: GP, receipt: goodReceipt });
-  ok("classifyPool WITHOUT owners does not report a definite completed verdict",
-    noOwners.state !== "completed");
+  // the EXACT state, not merely "not completed" (artifact check): a mutation returning
+  // FORMING or IN_FLIGHT with the same reason would satisfy a not-equal assertion while
+  // still handing out a definite lifecycle verdict over an unchecked binding
+  ok("classifyPool WITHOUT owners returns UNDETERMINED specifically",
+    noOwners.state === "undetermined");
   ok("...and says the binding is why", /owner binding/i.test(noOwners.reason || ""));
   ok("classifyPool WITHOUT owners reports the receipt as NOT verified",
     noOwners.receiptOk !== true);

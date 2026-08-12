@@ -22,7 +22,11 @@
  *   P9 non-owner receipt create REFUSED (carried v8 owner-only creation).
  *
  * Run (scratch env mounted as .env.local, v9 already published there):
- *   PROBE_CONFIRM=leave-probe-evidence node src/scripts/probeV9.cjs
+ *   LEDGER=v9 PROBE_CONFIRM=leave-probe-evidence node src/scripts/probeV9.cjs
+ * LEDGER=v9 is REQUIRED, checked ahead of the probe's own environment load and client
+ * construction (confirm-pass round 25): the shared reader P6 verifies through selects
+ * its receipt shape from the global LEDGER, so an unset selector wrote the permanent
+ * evidence and then wrongly failed its own verification against the v1 shape.
  * The second identity is registered on first run and persisted as PROBE_SECOND_ID.
  */
 const crypto = require("crypto");
@@ -57,6 +61,18 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       "immediately after its publish, where the adoption checklist mandates these probes " +
       "against the artifact actually published. It is never run casually against a namespace " +
       "whose documents readers already consume.");
+    process.exit(2);
+  }
+  // AHEAD OF THE PROBE'S OWN ENV LOAD AND CLIENT CONSTRUCTION (confirm-pass round 25,
+  // the round's one finding; this check precedes the loadEnv call and everything after
+  // it): this suite writes permanent v9 evidence and then verifies it through the
+  // PROFILE-SELECTED shared reader, so the selector must name v9 or P6 refuses a valid
+  // pared receipt AFTER the permanent records exist. Exact version is intentional for
+  // this probe, which targets one published artifact.
+  if (!require("./envStore.cjs").ledgerIsExactly("v9")) {
+    console.error("this probe verifies through the LEDGER-selected reader profile and " +
+      "writes permanent evidence first, so run it with LEDGER=v9 explicitly " +
+      `(current selector: ${process.env.LEDGER || "(unset, resolves to v1)"})`);
     process.exit(2);
   }
   const env = loadEnv();
@@ -126,7 +142,12 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       await client.platform.documents.broadcast({ replace: [fresh] }, owner);
       result("P3 pool replace refused", false, "ACCEPTED, pool is mutable");
     } catch (e) {
-      result("P3 pool replace refused", isImmutable(e) || isSchema(e), msgOf(e).slice(0, 160));
+      // the RIGHT refusal only (exit wave, review minor): a schema error does not
+      // establish that the refusal was FOR immutability (it can arise from envelope
+      // validation or another schema layer while pools have become mutable), so
+      // accepting isSchema could pass this probe vacuously; a wrong-reason refusal now
+      // FAILS the probe, which errs toward investigation, never toward a false pass
+      result("P3 pool replace refused", isImmutable(e), msgOf(e).slice(0, 160));
     }
 
     // ---- P4: delete refused ----
@@ -137,7 +158,10 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       await client.platform.documents.broadcast({ delete: [fresh] }, owner);
       result("P4 pool delete refused", false, "ACCEPTED, pool is deletable");
     } catch (e) {
-      result("P4 pool delete refused", isUndeletable(e) || isImmutable(e) || isSchema(e), msgOf(e).slice(0, 160));
+      // same rule: the canonical publish recorded TryingToDeleteImmutableDocumentError
+      // exactly, which isUndeletable matches; the wider alternatives could bless a
+      // deletion refused for an unrelated schema reason
+      result("P4 pool delete refused", isUndeletable(e), msgOf(e).slice(0, 160));
     }
 
     // ---- P5: non-owner pool create refused ----
@@ -181,17 +205,36 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       const verdict = checkReceiptAgainstPool({ contractId: env.CONTRACT_V9_ID,
         receipt: receiptProps(pool.getId().toBuffer(), proTx, 0),
         pool: basePool, poolId: pool.getId().toString(),
-        // DISPOSITION: EXEMPT, stated explicitly rather than by silence (Request 3).
-        // This is a deployment probe, outside the release profile's boundary by that
-        // profile's own terms, and it verifies receipt PROPS it is about to create, so
-        // no receipt document exists yet to read an owner from. The property the binding
-        // would establish is covered here by a different probe: P5 confirms the contract
-        // itself refuses a non-owner receipt creation at consensus. Nothing downstream
-        // consumes this verdict as a completion claim.
-        ownerBindingUnavailable: "EXEMPT: probe verifies props before the receipt document " +
-          "exists; owner-only creation is covered by probe P5 at consensus" });
+        // DISPOSITION: SUPPLY, corrected from EXEMPT (Request 3 artifact check). The
+        // exemption was WRONG here and its own stated reason was the giveaway: it said
+        // no receipt document exists yet, but this verdict is taken AFTER the create
+        // broadcast above, so `doc` is a real document with a real owner. Reporting
+        // VERIFIES over a binding that was declared unchecked is precisely the
+        // affirmative-result-on-an-unchecked-binding this duty exists to prevent, and a
+        // probe that leaves permanent evidence is the last place to claim more than was
+        // checked.
+        receiptOwnerId: doc.getOwnerId().toString(),
+        poolOwnerId: pool.getOwnerId().toString() });
+      // the companion `ownerBindingChecked` field is GONE (pass 11 F1). It existed to
+      // distinguish a checked binding from a declared-away one, and with the declaration
+      // removed it could only ever read true, which makes asserting it a proxy for a
+      // constant rather than an observation. What replaces it is stronger and is asserted
+      // on the line below: the same call WITHOUT the owners must be refused, so this
+      // probe's affirmative result cannot have come from an unbound path.
+      const unbound = checkReceiptAgainstPool({ contractId: env.CONTRACT_V9_ID,
+        receipt: receiptProps(pool.getId().toBuffer(), proTx, 0),
+        pool: basePool, poolId: pool.getId().toString() });
+      // the refusal must be THE BINDING's, not merely any refusal: an unbound call that
+      // failed some unrelated duty would satisfy `ok === false` while telling us nothing
+      // about duty 6 (pre-commit check, proxy assertion)
+      const unboundOnBinding = unbound.ok === false && /owner binding/.test(unbound.reason || "");
       result("P6 receipt VERIFIES through the shared receipt-to-pool check",
-        verdict.ok === true, verdict.ok ? "five duties pass" : verdict.reason);
+        verdict.ok === true && unboundOnBinding,
+        verdict.ok
+          ? (unboundOnBinding
+            ? "every duty passes, and the same pair without owners is refused ON THE BINDING"
+            : `UNSOUND or unproven: the same pair without owners did not refuse on duty 6 (${unbound.reason || "it verified"})`)
+          : verdict.reason);
     }
     try {
       const doc = await client.platform.documents.create("poolLedger.completionReceipt", owner,

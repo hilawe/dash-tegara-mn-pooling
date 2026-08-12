@@ -33,14 +33,22 @@
  *     empty the cross-document surface: the allocationRows PREIMAGE BYTES themselves
  *     embed the manifest's poolId and target (formationCore.allocationPreimage), so a
  *     receipt can still carry an embedded target that contradicts its pool. The ONE
- *     SHARED receipt-to-pool check every consumer routes through therefore owes FIVE
+ *     SHARED receipt-to-pool check every consumer routes through therefore owes SIX
  *     duties (round four of the review demonstrated an internally-valid receipt
  *     embedding a wrong target passing the allocation verifier alone): (1) verify the
  *     allocation with top-level poolId and participantCount correspondence, (2)
  *     compare the preimage's embedded target against pool.targetDuffs, (3) check
  *     pool.targetDuffs against the nodeType's target and the slot-book product, (4)
  *     check receipt.slotIndex against pool.slotIndex, (5) check receipt.proTxHash is
- *     outside the RESERVED FORMING NAMESPACE (a soundness review).
+ *     outside the RESERVED FORMING NAMESPACE (a soundness review), (6) check
+ *     the SUPPLIED receipt and pool owners are identifiers and are equal, which on v8 is
+ *     the difference between a receipt written by the pool's own operator and one written
+ *     by the contract owner against someone else's pool. Duty 6's inputs are the caller's:
+ *     the shared module compares what it is given and does not establish where those values
+ *     came from, so reading each owner off its own document is the call site's obligation.
+ *     (Duty 6 was enforced in code for two passes while this list said FIVE, and pass 11
+ *     found that an implementation built from the published contract would accept the pair
+ *     the reference reader refuses.)
  *     Raw receipt presence, and the
  *     allocation verifier alone, are never predicates by themselves.
  *   - THE TEMPORAL CLAIMS, stated honestly. Completed, currently-active, and
@@ -76,7 +84,7 @@
  * contract owner; pool constants immutable; at most one receipt per pool; no two
  * receipts per (node, covenant share); the slot bounds. Everything else is stated
  * protocol, owed by clients and verifiers:
- *   - the shared receipt-to-pool check with its FIVE duties above
+ *   - the shared receipt-to-pool check with its SIX duties above
  *   - slotDuffs * slotCount == targetDuffs; targetDuffs matches the nodeType's target
  *   - the orthogonal completed / currently-active / in-flight determinations above,
  *     including the named anomalous outcome and the fail-closed admission rule
@@ -110,7 +118,7 @@
  *     predicates (hasSlotBook, hasCompletionReceipt, hasImmutablePool) driven by one
  *     version table. clientContext.cjs and the funder client must accept v9 (both
  *     reject unknown ledgers today).
- *   - ONE SHARED receipt-to-pool verifier module carrying the FIVE duties above;
+ *   - ONE SHARED receipt-to-pool verifier module carrying the SIX duties above;
  *     every liveness/node consumer routes through it, never through raw receipt
  *     presence, and the standalone allocation verifier is subsumed by (or explicitly
  *     defers to) it. When resolving many receipts to their pools, batch the pool
@@ -139,10 +147,12 @@
  *     `pools`, `pledge`, `reserve`, `cancel` commands. The executable admission rule
  *     for the funder client, which cannot see the operator's recovery state and so
  *     cannot tell open from in-flight from abandoned on Platform data alone:
- *     `pledge` and `reserve` FAIL CLOSED on a receipt-less pool EXCEPT under the
- *     operator's explicit coordination (the advertised participate instruction, the
- *     round's named alternative authority; autonomous admission against a merely
- *     discovered pool is refused); `cancel` follows the commit-gate discipline,
+ *     `reserve` FAILS CLOSED on a receipt-less pool EXCEPT under the operator's
+ *     explicit coordination (the advertised participate instruction, the round's
+ *     named alternative authority; autonomous admission against a merely discovered
+ *     pool is refused), and `reserve` is the SOLE member entry point here, because
+ *     `pledge` refuses every slot-book ledger outright before any admission
+ *     reasoning (pass 14, F3); `cancel` follows the commit-gate discipline,
  *     exit is never gated on receipt state.
  *   - cleanupDebris.cjs must refuse (or skip) pool deletion on immutable-pool ledgers.
  *   - The flip step becomes receipt publication only; the L1 handoff is unchanged;
@@ -206,7 +216,7 @@ function buildV9(poolLedgerContract) {
   // ---- the pared completion record: the receipt-plus-its-pool pair is the evidence ----
   // The fields the immutable pool already pins are REMOVED (their duplication was the
   // round-three contradiction surface); slotIndex stays because the unique bySlot index
-  // needs it, and its pool-match is one of the shared check's FIVE duties (see header).
+  // needs it, and its pool-match is one of the shared check's SIX duties (see header).
   const r = v9.completionReceipt;
   delete r.properties.nodeType;
   delete r.properties.operatorFeeBps;

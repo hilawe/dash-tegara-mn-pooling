@@ -154,9 +154,11 @@ ok("v1 resolves to the original namespace with no register requirement",
 // 3b. exact-version identity, for the sites that genuinely mean one version
 // ---------------------------------------------------------------------------
 // Aliasing isV8 (an exact match before the table) onto a capability that v9 also has
-// would have silently admitted v9 to two places written against the v8 shape: the v8
-// squatting probe, and formation.cjs, whose own migration is phases C to E. Both now use
-// ledgerIsExactly, and these cases pin that distinction.
+// would have silently admitted v9 to places written against the v8 shape. The v8
+// squatting probe uses ledgerIsExactly for that reason; formation.cjs, whose migration
+// (phases C to E) made it capability-correct, deliberately uses the completion-receipt
+// capability so its receipt command serves v9 too (round 21 corrected this comment,
+// which said both used ledgerIsExactly). These cases pin the exactness distinction.
 ok("ledgerIsExactly is exact where the capability is not",
   withLedger("v9", () => S.hasCompletionReceipt() === true && S.ledgerIsExactly("v8") === false));
 ok("ledgerIsExactly('v8') on v8", withLedger("v8", () => S.ledgerIsExactly("v8")) === true);
