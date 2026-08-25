@@ -1,7 +1,7 @@
 /**
  * Design A reader-verification: given a DECODED L1 transfer transaction and the expected terms,
  * confirm it is a valid atomic membership transfer. This is the property that makes design A
- * reader-safe where the L2 supersede design was not (a soundness review): the payment is on L1 and a reader
+ * reader-safe where the L2 supersede design was not (a soundness-review finding): the payment is on L1 and a reader
  * can cold-verify it. Pure, no network, so it is unit-testable over sample decoded transactions
  * (the live two-party transaction CONSTRUCTION is the separate fresh-session custody build).
  *

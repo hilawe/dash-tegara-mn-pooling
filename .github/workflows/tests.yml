@@ -1,0 +1,46 @@
+name: tests
+
+# What this proves, and what it does not.
+#
+# The exporter that builds this repository already installs the tree clean and
+# runs this suite before a push, so a green run here is not the first check. It
+# is the DIFFERENT check: the exporter proves the tree works on the maintainer's
+# machine, and this proves it works for somebody who clones it, which is the
+# only claim a published repository actually makes.
+#
+# SCOPE, stated rather than implied. package.json declares node >= 20. This
+# workflow exercises 20 and 22: 20 because a declared floor nobody runs is not a
+# floor, and 22 as the current long-term-support line. Nothing here exercises a
+# network, a Dash node or a live Platform endpoint, so this is the offline
+# suite only, and a green run says nothing about behaviour against a real chain.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      # every declared version is reported, rather than stopping at the first
+      # failure and leaving the others unknown
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: platform/package-lock.json
+      # --ignore-scripts matches what the exporter's own gate runs, so a green
+      # run here and a green gate there mean the same thing
+      - name: install
+        working-directory: platform
+        run: npm ci --ignore-scripts
+      - name: test
+        working-directory: platform
+        run: npm test

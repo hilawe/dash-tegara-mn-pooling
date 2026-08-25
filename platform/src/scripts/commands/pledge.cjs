@@ -151,6 +151,32 @@ module.exports = async (ctx) => {
         distinctOwnersAfterClaim: ownersAfterPledge,
         bookFullAfterClaim: pledged + amountBig === target,
       });
+      // a soundness-review finding: the fill-completing pledge is the last admission this path performs
+      // before the book reads full, so it is refused unless EVERY resulting aggregate
+      // (not only the pledger's) meets the covenant's
+      // per-share floor (where the tier defines one, regular today, evo undefined
+      // upstream). A sub-floor pledge into a pool with space left stays admissible,
+      // because that owner can still top up or cancel; what strands the pool is locking
+      // a sub-floor aggregate in at the fill, when completion would refuse the
+      // allocation and L1 would refuse the registration (bad-protx-share-amount).
+      const pledgeShareFloor = core.shareFloorForTarget(target);
+      if (pledgeShareFloor !== undefined && pledged + amountBig === target) {
+        const agg = new Map();
+        for (const d of joins) {
+          const o = d.getOwnerId().toString();
+          agg.set(o, (agg.get(o) || 0n) + journal.toBig(d.toObject().amountDuffs, "pledge"));
+        }
+        agg.set(myId, (agg.get(myId) || 0n) + amountBig);
+        for (const [o, amount] of agg) {
+          if (amount < pledgeShareFloor) {
+            throw new Error(`this pledge fills the pool while owner ${o} holds ` +
+              `${DASHfmt(amount)} DASH, below the covenant's ` +
+              `${DASHfmt(pledgeShareFloor)} DASH minimum share (a soundness-review finding); completion would ` +
+              "refuse the allocation and L1 would refuse the registration, so the fill " +
+              "is refused. That owner must top up (or cancel) before the pool can fill.");
+          }
+        }
+      }
       // the member may supply their OWN reward address, so formation never derives
       // a script for them (the review's member-supplied-script note, closed). Gated on
       // the field's own capability, not isV5, the same class as major 1 of the final
@@ -175,5 +201,16 @@ module.exports = async (ctx) => {
         `(request ${doc.getId().toString()}, cancellable until completion)`);
       console.log(`fill now: ${DASHfmt(after)} / ${DASHfmt(target)} DASH` +
         (after === target ? "  <- FULL, the operator can complete" : ""));
+      // a soundness-review finding advisory (packet review, argued down from a refusal to a note): a
+      // remainder below the covenant floor is a REPAIRABLE state, not a stranded one
+      // (no funds move at pledge time and every pledge is cancellable), so admission
+      // does not refuse it, but the fill can then only complete through an existing
+      // owner topping up, and saying so here beats discovering it at the fill refusal
+      if (pledgeShareFloor !== undefined && after < target && target - after < pledgeShareFloor) {
+        console.log(`NOTE: the remaining ${DASHfmt(target - after)} DASH is below the ` +
+          `${DASHfmt(pledgeShareFloor)} DASH minimum share, so no NEW member can take it ` +
+          "alone; an existing owner must top up (or a pledge must be cancelled) before " +
+          "the pool can fill");
+      }
       return;
 };

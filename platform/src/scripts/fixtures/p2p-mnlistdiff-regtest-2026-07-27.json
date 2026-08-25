@@ -6,7 +6,7 @@
  "byteLength": 3645,
  "capturedBy": "src/scripts/captureP2PMnListDiffProbe.cjs",
  "chain": "regtest",
- "layoutNote": "at 70229 and above nVersion is FIRST; at 70230 and above quorumsCLSigs is appended. The layout is version-dependent, so this field is part of the capture rather than an aside (a soundness review).",
+ "layoutNote": "at 70229 and above nVersion is FIRST; at 70230 and above quorumsCLSigs is appended. The layout is version-dependent, so this field is part of the capture rather than an aside (a soundness-review finding).",
  "messagesSeen": [
   "version",
   "sendaddrv2",

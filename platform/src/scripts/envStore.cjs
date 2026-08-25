@@ -58,6 +58,20 @@ const readOwnedFiles = () => {
   }
   return out;
 };
+// write the COMPLETE buffer before any fsync or rename: writeSync may
+// return a short count, and a short tmp file renamed into place corrupts a
+// committed value (the same shape as the journal store's frame write)
+const writeAllSync = (fd, text) => {
+  const buf = Buffer.from(text, "utf8");
+  let written = 0;
+  while (written < buf.length) {
+    const n = fs.writeSync(fd, buf, written, buf.length - written);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(`envStore: the write stalled at byte ${written} of ${buf.length}; refusing`);
+    }
+    written += n;
+  }
+};
 const writeOwnedFile = (key, value) => {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const file = stateFileOf(key);
@@ -67,7 +81,7 @@ const writeOwnedFile = (key, value) => {
   }
   const tmp = `${file}.tmp`;
   const fd = fs.openSync(tmp, "w");
-  try { fs.writeSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  try { writeAllSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.prev`);
   fs.renameSync(tmp, file);
 };
@@ -238,7 +252,7 @@ const writeEnvFile = (out) => {
   const tmp = `${ENV_PATH}.tmp`;
   const fd = fs.openSync(tmp, "w");
   try {
-    fs.writeSync(fd, body);
+    writeAllSync(fd, body);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
@@ -261,7 +275,19 @@ const writeEnvFile = (out) => {
 // journals RAIL_STATE/MATCH_STATE, holistic-round F2), which every FOREIGN saveEnv
 // preserves from disk instead of its own possibly-stale copy. Owners write through
 // updateEnvKey (or pass journalOwner while already holding the lock).
-const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIPT_DRAFT_"];
+// E2_START_EPOCH_ is the per-pool configured-start family (E2 build spec, the
+// operator-configured writer start): one key per pool, suffix the pool's 64-char
+// hex id in UPPERCASE (an implementation-forced correction to the spec's
+// lowercase wording, folded back per the freeze rule: this store's env-file key
+// grammar is [A-Z0-9_]+, so a lowercase suffix could never round-trip through
+// the file; hex case is presentational and the pool id itself is unchanged),
+// value a canonical decimal u32 string. Owned so a stale foreign
+// saveEnv cannot clobber a configured start; deliberately NOT write-once, because
+// a soundness-review finding journal binding (immutable once any journal record for the pool exists,
+// enforced by the run and audit against the journaled value) is the immutability
+// authority, and the key stays operator-mutable before that first record.
+const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIPT_DRAFT_",
+  "E2_START_EPOCH_"];
 // CONTRACT_V8_PENDING and CONTRACT_V8_ID are OWNED (round-7 re-check P1, tightened in the
 // second re-check): the register publish-intent marker AND the resulting contract id must
 // both survive a concurrent foreign saveEnv from a process that loaded state before they
@@ -271,9 +297,24 @@ const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIP
 // The v9 pair is owned for the same reason (and since 2026-08-03 v9 is published
 // canonically): its publish flow writes them, and an unprotected pending marker re-opens
 // the exact silent-republish window the v8 pair closes (v9 draft review, finding 3).
+// The v11 pair is owned for the same silent-republish reason as v8's and v9's.
+// E2_EXPECTED_CHAIN_ID (the composite chain-id pin, one JCS value carrying chainId
+// and source) and E2_GATE_CAPTURE (the canonical-gate artifact) are owned AND
+// WRITE-ONCE (below): the E2 spec makes both immutable once any capture or journal
+// record exists, and owned-key survival alone protects only against foreign saves,
+// not against updateEnvKey itself (spec round 31, finding 4).
 const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE", "CONTRACT_V8_PENDING", "CONTRACT_V8_ID",
-  "CONTRACT_V9_PENDING", "CONTRACT_V9_ID"];
+  "CONTRACT_V9_PENDING", "CONTRACT_V9_ID",
+  "CONTRACT_V11_PENDING", "CONTRACT_V11_ID",
+  "E2_EXPECTED_CHAIN_ID", "E2_GATE_CAPTURE"];
 const isOwnedKey = (k) => OWNED_KEYS.includes(k) || OWNED_PREFIXES.some((p) => k.startsWith(p));
+
+// THE WRITE-ONCE CLASS (E2 spec rounds 31 and 32): set when absent; a rewrite with
+// the EXACT SAME value is an idempotent no-op; a DIFFERING update or ANY deletion
+// REFUSES. Value-agnostic on purpose: the composite pin's shape validation belongs
+// to its reader (readChainIdPin below), so this gate cannot rot into a format
+// checker whose refusal message drifts from the format.
+const E2_WRITE_ONCE_KEYS = ["E2_EXPECTED_CHAIN_ID", "E2_GATE_CAPTURE"];
 
 // The shared writer-side gate (review finding R4): any write that puts owned state into
 // the state dir first requires the dir to ALREADY exist (the run recipe creates it on
@@ -406,9 +447,19 @@ const saveEnv = (env, opts = {}) => {
       if (inFamily(k) && !(k in owned)) writeOwnedFile(k, undefined);
     }
     // non-family owned keys that were only ever in the env file (pre-migration) still
-    // migrate to their own files rather than being dropped from the plain write below
+    // migrate to their own files rather than being dropped from the plain write below,
+    // and they migrate FROM DISK, never from the caller's snapshot (checker finding 2:
+    // a stale journal-owner snapshot carrying a different plain-seeded E2 pin could
+    // otherwise replace the seed through this loop, routing around the write-once class;
+    // the fresh read happens under the lock this caller already holds)
+    const diskEnv = {};
+    if (fs.existsSync(ENV_PATH)) for (const l of fs.readFileSync(ENV_PATH, "utf8").split("\n")) {
+      const m = l.match(/^([A-Z0-9_]+)=(.*)$/); if (m) diskEnv[m[1]] = m[2];
+    }
     for (const [k, v] of Object.entries(owned)) {
-      if (!inFamily(k) && !(k in existing)) writeOwnedFile(k, v);
+      if (!inFamily(k) && !(k in existing)) {
+        writeOwnedFile(k, diskEnv[k] !== undefined ? diskEnv[k] : v);
+      }
     }
     writeEnvFile(plain);
     return;
@@ -441,6 +492,28 @@ const updateEnvKey = (key, value) => {
   lockEnv();
   try {
     const fileEnv = migrateOwnedLocked();
+    if (E2_WRITE_ONCE_KEYS.includes(key)) {
+      // ANY deletion refuses, absent key included (the spec's rule has no
+      // nothing-to-delete carve-out; the unit-2 checker reproduced the earlier
+      // silent success), and refusal happens before any store bookkeeping so a
+      // deletion attempt can never repair state as a side effect
+      if (value === undefined) {
+        throw new Error(`${key} is write-once and cannot be deleted; ` +
+          "a change to an E2 pin is a deliberate spec revision, never configuration drift");
+      }
+      const current = readOwnedFiles()[key];
+      if (current !== undefined && value !== current) {
+        throw new Error(`${key} is write-once and already holds a different value; ` +
+          "refusing the update (a change to an E2 pin is a deliberate spec revision)");
+      }
+      // set-when-absent and the compare-equal rewrite both FALL THROUGH to the
+      // owned branch below: the equal rewrite skips nothing but the redundant
+      // byte write (writeOwnedFile is idempotent for an equal value), so the
+      // store-identifier check and the migration-marker repair run on every
+      // path, where the earlier early returns skipped them (checker finding 1: an
+      // interrupted first write left the marker unrepaired and an equal retry
+      // never completed it)
+    }
     if (isOwnedKey(key)) {
       const storeId = requireStateDirLocked(fileEnv.STATE_STORE_ID,
         fileEnv.STATE_MIGRATED === "1" && !fileEnv.STATE_STORE_ID);
@@ -534,6 +607,14 @@ const LEDGER_VERSIONS = {
   // axes that isV5 conflated. Gating delegateTo on isV5 refused a field the published
   // v9 contract accepts (2026-08-03 round, convergence-2 pass, major B).
   v9: { idKey: "CONTRACT_V9_ID", register: "registerV9.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, delegateTarget: true, joinProvenance: true, memberRewardScript: true, pledgeSlot: true, slotBook: true, completionReceipt: true, immutablePool: true, paredReceipt: true } },
+  // v11 is v9's REGISTERED five-type E2 sibling (contractV11.cjs; v10's source-only
+  // path is documented and rejected for v11 in the E2 build spec's adoption table,
+  // because eligibility requires pools FORMED on the published contract). Its caps
+  // are WRITTEN OUT IN FULL, v9's set plus hasE2Records, never inherited: the
+  // table's own design rule, since v9 subtracts a capability, and a spread would
+  // hide exactly the subtraction the table exists to show. v11 stays OUTSIDE
+  // PROFILES.release.operative until the E2 production-distribution gates pass.
+  v11: { idKey: "CONTRACT_V11_ID", register: "registerV11.cjs", caps: { reconstructibleAccruals: true, accrualKindInKey: true, delegateTarget: true, joinProvenance: true, memberRewardScript: true, pledgeSlot: true, slotBook: true, completionReceipt: true, immutablePool: true, paredReceipt: true, e2Records: true } },
 };
 
 const SUPPORTED_LEDGERS = Object.keys(LEDGER_VERSIONS);
@@ -610,6 +691,68 @@ const hasPledgeSlot = () => ledgerCap("pledgeSlot");
 const hasSlotBook = () => ledgerCap("slotBook");
 const hasCompletionReceipt = () => ledgerCap("completionReceipt");
 const hasImmutablePool = () => ledgerCap("immutablePool");
+// the E2 record types (the five-type v11 addition); the spec names this helper
+// hasE2Records, and the cap KEY follows the table's noun convention (e2Records)
+const hasE2Records = () => ledgerCap("e2Records");
+
+// THE COMPOSITE CHAIN-ID PIN'S ONE READER (E2 spec rounds 29 through 33): the owned
+// write-once key E2_EXPECTED_CHAIN_ID holds ONE JCS object with members exactly
+// `chainId` (the exact chain identifier string, required equal to the target
+// network's Tenderdash genesis document at pin time) and `source` (an object with
+// members exactly `path`, a nonempty string of at most 512 UTF-8 bytes, and
+// `retrievedAt`, a calendar-valid YYYY-MM-DD string). Every E2 consumer (D1's
+// bound, registration, the audit's report member, the carrier-conformance and
+// balance refusals) is REQUIRED by the spec to read THIS function and no other
+// source; that exclusivity is stated intent until the E2 consumers land, at
+// which point a source-level check in their suite enforces it (checker finding
+// 5: a property no code enforces yet is named as intent, not claimed). A
+// malformed value REFUSES at every read rather than degrading.
+const readChainIdPin = () => {
+  const raw = loadEnv().E2_EXPECTED_CHAIN_ID;
+  if (raw === undefined) {
+    throw new Error("E2_EXPECTED_CHAIN_ID is not set; pin the expected chain identifier " +
+      "(from the target network's Tenderdash genesis document) before any E2 capture or registration");
+  }
+  return parseChainIdPin(raw);
+};
+// the pure validator, split out so the malformed-composite cases are testable
+// without mutating the write-once key that holds the real pin. The stored value
+// must be ONE JCS value (the spec's composite-pin rule), so beyond the shape
+// checks the raw bytes must EQUAL the canonical serialization of what they
+// parse to: a reordered-member, whitespace-padded or escape-variant encoding
+// refuses (checker finding 3), which keeps every consumer's byte-length and
+// equality reasoning anchored to one representation.
+const { canonicalString } = require("./canonicalJson.cjs");
+const parseChainIdPin = (raw) => {
+  let v;
+  try { v = JSON.parse(raw); } catch {
+    throw new Error("E2_EXPECTED_CHAIN_ID is not valid JSON; the pin is one two-member object, refusing");
+  }
+  const bad = (why) => new Error(`E2_EXPECTED_CHAIN_ID is malformed (${why}); refusing every E2 read of the pin`);
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw bad("not an object");
+  const keys = Object.keys(v).sort();
+  if (keys.join(",") !== "chainId,source") throw bad("members must be exactly chainId and source");
+  if (typeof v.chainId !== "string" || v.chainId.length === 0) throw bad("chainId must be a nonempty string");
+  const s = v.source;
+  if (!s || typeof s !== "object" || Array.isArray(s)) throw bad("source must be an object");
+  const sKeys = Object.keys(s).sort();
+  if (sKeys.join(",") !== "path,retrievedAt") throw bad("source members must be exactly path and retrievedAt");
+  if (typeof s.path !== "string" || s.path.length === 0 || Buffer.byteLength(s.path, "utf8") > 512) {
+    throw bad("source.path must be a nonempty string of at most 512 UTF-8 bytes");
+  }
+  if (typeof s.retrievedAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s.retrievedAt)) {
+    throw bad("source.retrievedAt must be a YYYY-MM-DD string");
+  }
+  const [yy, mm, dd] = s.retrievedAt.split("-").map(Number);
+  const d = new Date(Date.UTC(yy, mm - 1, dd));
+  if (d.getUTCFullYear() !== yy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) {
+    throw bad("source.retrievedAt is not a calendar-valid date");
+  }
+  if (canonicalString(v) !== raw) {
+    throw bad("the stored bytes are not the canonical JCS serialization of their own value");
+  }
+  return v;
+};
 const hasParedReceipt = () => ledgerCap("paredReceipt");
 const hasDelegateTarget = () => ledgerCap("delegateTarget");
 const hasJoinProvenance = () => ledgerCap("joinProvenance");
@@ -647,4 +790,5 @@ module.exports = { ENV_PATH, STATE_DIR, loadEnv, saveEnv, updateEnvKey, reserveA
   LEDGER_VERSIONS, SUPPORTED_LEDGERS, ledgerVersion, assertSupportedLedger, assertProfile, PROFILES, ledgerCap,
   hasReconstructibleAccruals, hasAccrualKindInKey, hasPoolStatus, hasPledgeSlot, hasSlotBook,
   hasCompletionReceipt, hasImmutablePool, hasParedReceipt, hasDelegateTarget,
-  hasJoinProvenance, hasMemberRewardScript, ledgerIsExactly };
+  hasJoinProvenance, hasMemberRewardScript, ledgerIsExactly,
+  hasE2Records, readChainIdPin, parseChainIdPin };

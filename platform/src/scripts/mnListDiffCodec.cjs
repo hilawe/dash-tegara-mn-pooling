@@ -4,7 +4,7 @@
  * WHY OURS. The audit format requires `coverage.listWalk[].protxDiffRaw` in the P2P
  * serialization (`dash-p2p-mnlistdiff-v1`), and @dashevo/dashcore-lib cannot parse that form: on
  * a real 3645-byte capture it misaligns rather than refusing, because each ENTRY carries its own
- * version on the wire while the library gates entry fields on the DIFF's version (a soundness review). This
+ * version on the wire while the library gates entry fields on the DIFF's version (a soundness-review finding). This
  * module models the version rules the way the source does.
  *
  * THE LAYOUT IS PROTOCOL-VERSION DEPENDENT, which is the whole difficulty and the subject of
@@ -319,7 +319,7 @@ function parseMnListDiff(payload, { protocolVersion } = {}) {
   if (protocolVersion < PROTO.MNLISTDIFF_CHAINLOCKS || protocolVersion > PROTO.CURRENT) {
     fail(`protocol ${protocolVersion} is outside the supported range ` +
          `${PROTO.MNLISTDIFF_CHAINLOCKS}..${PROTO.CURRENT}; the wire layout differs outside it ` +
-         "and this module refuses rather than guessing (a soundness review)");
+         "and this module refuses rather than guessing (a soundness-review finding)");
   }
   const r = new Reader(payload);
   const out = {};

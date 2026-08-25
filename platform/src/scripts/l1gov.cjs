@@ -129,7 +129,14 @@ const fetchL1Vote = async (proTxHex, proposalHex) => {
     const time = Number(timeStr);
     if (!Number.isSafeInteger(time) || time <= 0) throw new Error(`unexpected vote timestamp: ${timeStr}`);
     if (!/^\d+$/.test(weightStr)) throw new Error(`unexpected vote weight: ${weightStr}`);
-    funding.push({ voteHash: voteHash.toLowerCase(), collateral: outpoint, time, outcome, signal });
+    const weight = Number(weightStr);
+    if (!Number.isSafeInteger(weight) || weight < 1) throw new Error(`unexpected vote weight: ${weightStr}`);
+    // CARRIED, not discarded (EvoNodes E1-8, gap G8): an evonode's governance weight is
+    // 4 and survives MN reward reallocation, so a reader that drops it misdescribes the
+    // vote's force. The published observation document does NOT yet carry it (a schema
+    // change is a versioned decision, recorded in the plan); the in-memory object and
+    // the watcher's own report do.
+    funding.push({ voteHash: voteHash.toLowerCase(), collateral: outpoint, time, outcome, signal, weight });
   }
   if (funding.length > 1) {
     throw new Error(`Core reports ${funding.length} current funding votes for one masternode; expected at most 1`);

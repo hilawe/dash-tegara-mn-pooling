@@ -40,7 +40,7 @@
  *     compare the preimage's embedded target against pool.targetDuffs, (3) check
  *     pool.targetDuffs against the nodeType's target and the slot-book product, (4)
  *     check receipt.slotIndex against pool.slotIndex, (5) check receipt.proTxHash is
- *     outside the RESERVED FORMING NAMESPACE (a soundness review), (6) check
+ *     outside the RESERVED FORMING NAMESPACE (a soundness-review finding), (6) check
  *     the SUPPLIED receipt and pool owners are identifiers and are equal, which on v8 is
  *     the difference between a receipt written by the pool's own operator and one written
  *     by the contract owner against someone else's pool. Duty 6's inputs are the caller's:

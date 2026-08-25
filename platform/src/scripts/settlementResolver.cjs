@@ -37,7 +37,7 @@ function resolveActiveMember(base, intents, claims, paymentVerified) {
     // Platform this is false for an L2 transfer, so the base owner stands.
     if (!paymentVerified(intent, claim)) {
       return { activeOwner: base.ownerId, rewardScriptHex: base.rewardScriptHex, superseded: false,
-        reason: "claim present but payment not reader-verifiable (a soundness review); base owner stands" };
+        reason: "claim present but payment not reader-verifiable (a soundness-review finding); base owner stands" };
     }
     return { activeOwner: claim.joinerId, rewardScriptHex: claim.rewardScriptHex, superseded: true,
       reason: "superseded: valid claim with a reader-verified payment" };
@@ -47,7 +47,7 @@ function resolveActiveMember(base, intents, claims, paymentVerified) {
 }
 
 // The safe payment verifier for CURRENT Platform: an L2 credit transfer is not
-// cold-verifiable, so a reader can never confirm it. Always false, on purpose (a soundness review).
+// cold-verifiable, so a reader can never confirm it. Always false, on purpose (a soundness-review finding).
 const NO_L2_PAYMENT_PROOF = () => false;
 
 /**
@@ -55,7 +55,7 @@ const NO_L2_PAYMENT_PROOF = () => false;
  * baseOwner, superseded }]. When no settlement contract is configured, or with the safe
  * current-Platform verifier, this returns the RAW share membership unchanged (the readers'
  * existing behavior). The supersede overlay activates only when a reader-verifiable payment
- * predicate is supplied, which current Platform cannot satisfy for L2 transfers (a soundness review).
+ * predicate is supplied, which current Platform cannot satisfy for L2 transfers (a soundness-review finding).
  */
 async function readActiveMembership(client, poolId, opts) {
   const { Identifier, fetchAll, settlementContractId, paymentVerified = NO_L2_PAYMENT_PROOF } = opts;

@@ -98,6 +98,9 @@ module.exports = async (ctx) => {
     slotDuffs = BigInt(process.env.SLOT_DUFFS || "10000000000"); // 100 DASH
     if (target % slotDuffs !== 0n) throw new Error(`slot size ${slotDuffs} does not divide the target ${target}`);
     slotCount = Number(target / slotDuffs);
+    // a soundness-review finding: the v6 client-convention branch gets the same shared guard the v7+ path
+    // has, which now also refuses a slot below the covenant's per-share floor
+    core.requireCoherentSlotEconomics({ nodeType: po.nodeType, slotDuffs, slotCount });
   }
 
   // A BOOK WIDER THAN COMPLETION'S CLAIM SCAN CAN NEVER COMPLETE (confirm-pass round 16,
@@ -121,6 +124,15 @@ const claimed = new Map(claims.map((d) => [Number(d.toObject().slotNo), d.getOwn
     console.log(`pool ${poolIdStr}: ${stateLabel} (${po.nodeType}), ` +
       `${slotCount} slots of ${DASHfmt(slotDuffs)} DASH`);
     console.log(`claimed: ${claimed.size} / ${slotCount}` + (claimed.size === slotCount ? "  <- FULL" : ""));
+    // a soundness-review finding: show the remaining collateral before anyone reserves, so the fill state is
+    // legible in money rather than only in slots. Count only IN-RANGE claimed slots, so
+    // a stray out-of-range claim document cannot make the display understate what is
+    // free (external artifact check on this commit: the raw claim count assumed
+    // validity this display never established)
+    const claimedInRange = [...claimed.keys()]
+      .filter((n) => Number.isInteger(n) && n >= 0 && n < slotCount).length;
+    const freeSlots = slotCount - claimedInRange;
+    console.log(`remaining: ${DASHfmt(slotDuffs * BigInt(freeSlots))} DASH in ${freeSlots} free slot(s)`);
     for (let n = 0; n < slotCount; n++) {
       const owner = claimed.get(n);
       console.log(`  slot ${n}: ${owner ? `${owner}${owner === myId ? "  <- mine" : ""}` : "free"}`);

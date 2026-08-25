@@ -6,9 +6,9 @@
  * load-bearing and must not be overstated. (1) It moves Platform SHARE OWNERSHIP only: a join
  * carries an amount but no payment, asset lock, or transaction reference, and settlement changes
  * no L1 owner key, refund script, or collateral, so no value is exchanged between the two members
- * (a soundness review). (2) It signs BOTH members' transitions from ONE wallet (the run's own MNEMONIC), so it
+ * (a soundness-review finding). (2) It signs BOTH members' transitions from ONE wallet (the run's own MNEMONIC), so it
  * can only settle members whose identities derive from that single wallet; it cannot settle
- * members holding unrelated keys (a soundness review). A real member-signed value settlement across unrelated
+ * members holding unrelated keys (a soundness-review finding). A real member-signed value settlement across unrelated
  * wallets is unresolved design work (a future design round). Do not describe the output
  * below as a self-sovereign or complete membership handover.
  *

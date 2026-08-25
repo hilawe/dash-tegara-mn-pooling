@@ -78,6 +78,7 @@ const rail = require("./railState.cjs");
 const { ASSET_LOCK_FEE_DUFFS, validateObservation, validateDissolution } = require("./observation.cjs");
 const { fetchAll } = require("./query.cjs");
 const { installConsumedFilter } = require("./walletGuard.cjs");
+const core = require("./formationCore.cjs");
 const { loadEnv, saveEnv, activeContractId, isV3, isV4, isV5, hasImmutablePool } = require("./envStore.cjs");
 const { resolveNodeToPools } = require("./receiptPoolCheck.cjs");
 
@@ -851,6 +852,23 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
         throw new Error(`observation is for slot ${obs.slotIndex} but the pool records slot ` +
           `${Number(poolObj.slotIndex)}; refusing to distribute another slot's funds here`);
       }
+      // the observation's collateral names the node type, and the recorded pool must
+      // agree (EvoNodes E1-1, checker finding 4: a pool misrecorded before the type
+      // was derived would otherwise be reused silently). Same override pattern as the
+      // scale mismatch below, because the same legacy demo pools predate the rule.
+      if (obs && String(poolObj.nodeType) !== core.nodeTypeForCollateral(obs.collateralDuffs)) {
+        const observedType = core.nodeTypeForCollateral(obs.collateralDuffs);
+        if (process.env.RAIL_ALLOW_TYPE_MISMATCH === "1") {
+          console.log(`WARNING: the pool records nodeType ${poolObj.nodeType} but the observed ` +
+            `collateral names ${observedType}; proceeding ONLY because ` +
+            "RAIL_ALLOW_TYPE_MISMATCH=1 (legacy demo pool)");
+        } else {
+          throw new Error(`the pool records nodeType "${poolObj.nodeType}" but the observed ` +
+            `collateral (${obs.collateralDuffs} duffs) names "${observedType}"; refusing to ` +
+            "distribute under a misrecorded type (set RAIL_ALLOW_TYPE_MISMATCH=1 only for a " +
+            "legacy demo pool)");
+        }
+      }
       poolId = pool.getId();
       poolFeeBps = Number(poolObj.operatorFeeBps || 0);
       const byOwner = Object.fromEntries(funders.map((f) =>
@@ -909,10 +927,19 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
           "which only a formation round can produce. Form the pool with formation.cjs first, then " +
           "re-run this observation.");
       }
+      // THE NODE TYPE IS DERIVED, NOT ASSUMED (EvoNodes E1-1, G1: this site wrote
+      // "regular" literally). A Track C observation carries the node's collateral, and
+      // the collateral names the type (nodeTypeForCollateral refuses an unrecognized
+      // amount rather than defaulting). A wallet-funded run observes nothing, so it
+      // takes RAIL_NODE_TYPE, validated against the same table, default regular.
+      const railNodeType = core.nodeTypeForRail({
+        collateralDuffs: obs ? obs.collateralDuffs : undefined,
+        declaredType: process.env.RAIL_NODE_TYPE,
+      });
       const poolDoc = await client.platform.documents.create("poolLedger.pool", operator, {
         proTxHash: obs ? Buffer.from(obs.proTxHash, "hex") : crypto.randomBytes(32),
         slotIndex: obs ? obs.slotIndex : 0,
-        nodeType: "regular",
+        nodeType: railNodeType,
         operatorIdentityId: operator.getId().toBuffer(),
         operatorFeeBps: OPERATOR_FEE_BPS,
         // v5 requires the lifecycle field; these pools back nodes, hence live (F5)
@@ -920,7 +947,8 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
       });
       await client.platform.documents.broadcast({ create: [poolDoc] }, operator);
       poolId = poolDoc.getId();
-      console.log("pool created:", poolId.toString(), `(operator fee ${OPERATOR_FEE_BPS} bps)`);
+      console.log("pool created:", poolId.toString(),
+        `(${railNodeType}, operator fee ${OPERATOR_FEE_BPS} bps)`);
 
       const specBps = (process.env.RAIL_SHARE_SPEC || "6000,4000").split(",").map((s) => parseInt(s, 10));
       if (specBps.length !== funders.length || specBps.some((b) => !Number.isInteger(b) || b <= 0)
@@ -929,9 +957,17 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
           `(got "${process.env.RAIL_SHARE_SPEC || "6000,4000"}" for ${funders.length} funders; ` +
           "set RAIL_FUNDERS to match)");
       }
+      // the recorded contribution is the member's share of the TYPE'S collateral, so
+      // the stored values sum to the target the shares notionally back (EvoNodes E1-1,
+      // G1). The old literal (bps * 100000) summed to 10 DASH whatever the type, while
+      // its own comment claimed the 1000-DASH scale. Of the readers the E1-1 sweep
+      // found, the handover matcher compares stored values only to each other, and the
+      // dissolution check above refuses a scale mismatch loudly, so the magnitude
+      // change is visible there rather than silent.
       shareSpec = specBps.map((bps, i) => ({
         identity: funders[i].identity, label: funders[i].label,
-        shareBps: bps, contributionDuffs: bps * 100000, // 10000 bps = 1000 DASH scale, as before
+        shareBps: bps,
+        contributionDuffs: Number(core.TARGETS[railNodeType] * BigInt(bps) / 10000n),
       }));
       for (const s of shareSpec) {
         const doc = await client.platform.documents.create("poolLedger.share", s.identity, {

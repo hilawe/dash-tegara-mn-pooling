@@ -13,9 +13,9 @@
  * a bare boolean.
  *
  * NARROWED CLAIMS carried from the review cycle: the schedule (and with it the owner
- * vector's SOURCE SELECTION) is structurally TRUSTED_SOURCE (a soundness review); what this module
+ * vector's SOURCE SELECTION) is structurally TRUSTED_SOURCE (a soundness-review finding); what this module
  * computes over it is the authenticated half: consuming owner-first matching and the
- * arithmetic relative to the trusted vector (a soundness review).
+ * arithmetic relative to the trusted vector (a soundness-review finding).
  */
 "use strict";
 
@@ -137,7 +137,7 @@ function deriveEligibility({ stateAtHMinus1, listRoot, hMinus1, journal, base })
 }
 
 /**
- * OWNER-FIRST CONSUMING attribution (a soundness review): match the trusted expected owner vector
+ * OWNER-FIRST CONSUMING attribution (a soundness-review finding): match the trusted expected owner vector
  * against the actual coinbase outputs, consuming by ascending outputIndex; every
  * unconsumed actual output is the complete unexplained remainder (revision 25), any
  * script. Returns { matchedOutputs, unexplainedOutputs }.

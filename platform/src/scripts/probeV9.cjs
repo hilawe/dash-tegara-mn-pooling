@@ -142,7 +142,7 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       await client.platform.documents.broadcast({ replace: [fresh] }, owner);
       result("P3 pool replace refused", false, "ACCEPTED, pool is mutable");
     } catch (e) {
-      // the RIGHT refusal only (exit wave, review minor): a schema error does not
+      // the RIGHT refusal only (exit-wave review, minor): a schema error does not
       // establish that the refusal was FOR immutability (it can arise from envelope
       // validation or another schema layer while pools have become mutable), so
       // accepting isSchema could pass this probe vacuously; a wrong-reason refusal now

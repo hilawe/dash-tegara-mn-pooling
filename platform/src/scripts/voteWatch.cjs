@@ -107,7 +107,7 @@ const { fetchL1Vote } = require("./l1gov.cjs");
     const l1 = await fetchL1Vote(proTxHex, proposalHex.toLowerCase());
     if (!l1) { console.log("no current funding vote to observe"); return; }
     console.log(`current vote by ${proTxHex.slice(0, 16)}...: ${l1.outcome} (${l1.signal}) at ${l1.time}, ` +
-      `vote hash ${l1.voteHash.slice(0, 16)}...`);
+      `weight ${l1.weight}, vote hash ${l1.voteHash.slice(0, 16)}...`);
 
     const identity = await client.platform.identities.get(myId);
     const doc = await client.platform.documents.create("voteObs.observation", identity, {

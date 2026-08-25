@@ -438,7 +438,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     installConsumedFilter(await client.getWalletAccount());
     const operator = await client.platform.identities.get(env.IDENTITY_ID);
 
-    // CONTRACT-OWNER BINDING (a soundness review): the receipt document type is creation-restricted to the
+    // CONTRACT-OWNER BINDING (a soundness-review finding): the receipt document type is creation-restricted to the
     // CONTRACT owner (creationRestrictionMode:1), a restriction Platform enforces only at
     // receipt broadcast, AFTER shares settle and the pool flips. If the executing operator
     // is not the contract owner, completion would irreversibly flip a live pool it can then
@@ -469,6 +469,15 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // level ("amount-reward-verified" | "node-existence-only" | "demo-unverified"), which
     // is why it is a function: `complete` calls it at preflight and `receipt` calls it
     // when rebuilding a lost draft from the retained manifest (spec FU-2 recovery).
+    // THE EVO VERIFICATION CEILING, recorded (EvoNodes E1-6, gap G5): this decider
+    // never branches on nodeType, and it does not need to, but its TOP LEVEL is
+    // unreachable for an evo pool today: amount-reward-verified requires a #187 share
+    // table, and the covenant prototype refuses shared evo registrations at consensus
+    // (bad-protx-shared-type, the proposal's regular-only scope), so no evo share
+    // table can exist to verify against. An evo pool therefore reaches
+    // node-existence-only or demo-unverified at most, until the covenant's scope
+    // changes upstream. Stated here so the ceiling is a recorded fact rather than a
+    // silent collapse.
     const decideL1Verification = async (proTxHex, manifest, target, poolIdStr) => {
       if (process.env.FORK_RPC_URL) {
         const { fetchCollateral, fetchShareTable } = require("./l1gov.cjs");
@@ -519,7 +528,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         // each owner's reward script where the manifest did not already record one
         const net = process.env.NETWORK === "regtest" ? "testnet" : (process.env.NETWORK || "testnet");
         const toAddr = (o) => {
-          // ALWAYS derive from rewardScriptHex, the field the RECEIPT commits to (a soundness review): the
+          // ALWAYS derive from rewardScriptHex, the field the RECEIPT commits to (a soundness-review finding): the
           // stored rewardAddress is display-only and unvalidated, so trusting it could verify
           // an L1 destination different from the reward script the receipt embeds, stamping
           // amount-reward-verified on bytes that were never checked against Core.
@@ -999,6 +1008,24 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         if (slotCount > MAX_SLOT_COUNT) {
           throw new Error(`slot size ${slotDuffs} yields ${slotCount} slots, above the ${MAX_SLOT_COUNT} ` +
             "ceiling; use a larger slot size (fewer, bigger slots).");
+        }
+        // a soundness-review finding: route creation through the shared slot-economics guard, which now also
+        // refuses a slot below the covenant's per-share floor (a one-slot owner would be
+        // refused at registration with bad-protx-share-amount), so THIS creation path
+        // refuses a stranding book rather than merely leaving it un-reservable
+        core.requireCoherentSlotEconomics({ nodeType, slotDuffs, slotCount });
+        // A BOOK WIDER THAN THE OWNER TIER IS LEGAL AND SURPRISING (EvoNodes E1-3, the
+        // plan's G2): completion aggregates claims BY OWNER into 1..8 participants, so
+        // a book wider than 8 slots means members must hold several slots each. The
+        // 100-DASH default derives 10 slots on regular and 40 on evo, so an operator
+        // who never chose SLOT_DUFFS gets a wide book silently; say it loudly and name
+        // the one-slot-per-owner size, without refusing (multi-slot ownership is a
+        // supported shape and the by-owner aggregation exists for it).
+        if (slotCount > core.ALLOC_MAX_OWNERS) {
+          console.log(`NOTE: ${slotCount} slots against a tier of at most ` +
+            `${core.ALLOC_MAX_OWNERS} co-owners, so at least one member must hold ` +
+            "multiple slots (completion aggregates claims by owner). One slot per " +
+            `owner needs SLOT_DUFFS >= ${core.TARGETS[nodeType] / BigInt(core.ALLOC_MAX_OWNERS)}.`);
         }
         slotFields = {
           slotDuffs: journal.toSafeNumber(slotDuffs, "slot size"),
@@ -1555,7 +1582,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         }
       }
 
-      // readback BEFORE the flip, SCOPED TO THE MANIFEST PARTICIPANTS (a soundness review): query EACH
+      // readback BEFORE the flip, SCOPED TO THE MANIFEST PARTICIPANTS (a soundness-review finding): query EACH
       // manifest owner's share by (poolId, $ownerId) and verify it field-by-field. Summing
       // ALL pool shares and requiring the total to be exactly 10000 (the old check) let ANY
       // funded identity plant one foreign share on the pool and wedge the flip forever, a
@@ -2313,12 +2340,12 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // the extraction would otherwise fall into the draft parser and throw on absent state)
       if (!hasManifest && !hasDraft) { console.log("no committed manifest for this pool"); return; }
 
-      // the OWNERS this manifest/draft explains (a soundness review): a crash during SETTLE leaves
+      // the OWNERS this manifest/draft explains (a soundness-review finding): a crash during SETTLE leaves
       // PARTICIPANT shares on a still-forming pool, and the manifest is their only
       // explanation, so abandon must refuse then. But a FOREIGN share (any identity can
       // plant one) is not explained by the manifest and must NOT block abandon, or it
       // becomes a permanent wedge. Scope the share check to the participants only.
-      // FAIL CLOSED on a damaged source (a soundness review): a parse failure here must NOT
+      // FAIL CLOSED on a damaged source (a soundness-review finding): a parse failure here must NOT
       // yield an empty participant list, or abandon would clear state without checking any
       // participant share, destroying a manifest that may explain settled shares (and on
       // v1-v7 there is no archive to recover from). Refuse instead.
@@ -2381,7 +2408,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             "abandoning now would orphan its recovery inputs. Run `receipt` to reconcile instead. Kept.");
         }
       }
-      const settledNow = await participantSharesOnLedger(); // participant-scoped (a soundness review), like the early check
+      const settledNow = await participantSharesOnLedger(); // participant-scoped (a soundness-review finding), like the early check
       if (settledNow.length > 0) {
         throw new Error(`${settledNow.length} PARTICIPANT share(s) appeared on this forming pool since this ` +
           "run started; the manifest is their only explanation, refusing to delete it. Kept.");

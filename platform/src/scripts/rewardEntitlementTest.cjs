@@ -77,7 +77,7 @@ eq("matched in ascending index", ent.coinbaseEvidence.matchedOutputs, [o1, o2]);
 eq("complete remainder: the operator output lands in unexplained, any script",
    ent.coinbaseEvidence.unexplainedOutputs, [opOut]);
 
-// same-script same-amount collision: owner-first CONSUMING attribution (a soundness review)
+// same-script same-amount collision: owner-first CONSUMING attribution (a soundness-review finding)
 const twin = OUT(o1.script, o1.amountDuffs, 3);
 ent = classifyEntitlement({
   height: 1000, chainlockHeight: 1000, eligibility: ELIG("PRESENT_VALID"),
