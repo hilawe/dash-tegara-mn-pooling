@@ -13,7 +13,68 @@
 const crypto = require("crypto");
 const { toBig } = require("./compoundJournal.cjs");
 
-const TARGETS = { regular: 100000000000n, evo: 400000000000n }; // 1000 / 4000 DASH
+const TARGETS = Object.freeze({ regular: 100000000000n, evo: 400000000000n }); // 1000 / 4000 DASH
+
+/** a soundness-review finding: the covenant's per-share floor, per node type, read from the shared-collateral
+ *  prototype rather than invented here. MIN_SHARE_AMOUNT{100 * COIN} with MIN_SHARES{2}
+ *  and MAX_SHARES{8} (tegara-187-prototype at 1c220063b,
+ *  src/evo/sharedcollateral.h:46-48), and validation refuses any smaller share with
+ *  bad-protx-share-amount (src/evo/sharedcollateral.cpp:77-79). Before this table the
+ *  only Platform-side floor was one basis point (0.1 DASH regular), so a small-slot pool
+ *  could COMPLETE on the ledger and then be refused at registration, which strands the
+ *  pool after members funded. EVO IS DELIBERATELY ABSENT: shared evo registrations are
+ *  refused at consensus (bad-protx-shared-type) and no upstream amendment has defined
+ *  their share floor, so the checks below apply NO floor there rather than guess one.
+ *  When the amendment lands, its floor goes here and every check picks it up. */
+// frozen: the table is exported, and a mutable export would be an unrecorded opt-out
+// from every floor check (external artifact check on this commit)
+const MIN_SHARE_DUFFS = Object.freeze({ regular: 10000000000n }); // 100 DASH, sharedcollateral.h:47
+
+/** The share floor for a target amount, or undefined where none is defined (evo, and
+ *  the toy targets offline tests use, which requireCoherentSlotEconomics keeps off any
+ *  real pool because a pool's target must equal its tier's TARGETS entry). */
+const shareFloorForTarget = (target) => {
+  for (const type of Object.keys(TARGETS)) {
+    if (TARGETS[type] === target) return MIN_SHARE_DUFFS[type];
+  }
+  return undefined;
+};
+
+// THE COLLATERAL NAMES THE TYPE (EvoNodes E1-1): Core admits exactly the two TARGETS
+// amounts as masternode collateral (the fork's dmn_types table, IsCollateralAmount), so
+// an observed collateral either names one node type or names none. Fail closed on none:
+// a caller recording a pool for an unrecognized collateral has observed something this
+// table does not describe, and defaulting it to regular would misrecord the node.
+// Accepts number, string or bigint duffs; refuses anything that does not convert.
+const nodeTypeForCollateral = (collateralDuffs) => {
+  const asBig = toBig(collateralDuffs, "collateral");
+  const hit = Object.entries(TARGETS).find(([, target]) => target === asBig);
+  if (!hit) {
+    throw new Error(`collateral ${asBig} duffs matches no known node type ` +
+      `(${Object.entries(TARGETS).map(([t, d]) => `${t}=${d}`).join(", ")}); ` +
+      "refusing to record a pool of unknown type");
+  }
+  return hit[0];
+};
+
+// THE RAIL'S CREATION-TIME TYPE DECISION (EvoNodes E1-1): an observation's collateral
+// names the type and wins; without an observation the declared type is validated
+// against the table by OWN-property membership (the round-6 own-property rule: a
+// bracket lookup walks the prototype chain, so a declared "toString" passed an
+// undefined-check while naming no type at all), defaulting to regular when undeclared.
+const nodeTypeForRail = ({ collateralDuffs, declaredType }) => {
+  if (collateralDuffs !== undefined && collateralDuffs !== null) {
+    return nodeTypeForCollateral(collateralDuffs);
+  }
+  // nullish, not falsy: only an OMITTED declaration defaults (checker finding 2), so
+  // a set-but-empty declaration is validated and refused rather than silently regular
+  const t = declaredType ?? "regular";
+  if (!Object.hasOwn(TARGETS, t)) {
+    throw new Error(`declared node type "${t}" is not in the table ` +
+      `(${Object.keys(TARGETS).join(", ")})`);
+  }
+  return t;
+};
 const FORMING_PREFIX_BYTES = 16;
 
 const isFormingHash = (buf) => {
@@ -48,6 +109,17 @@ const allocateBps = (owners, target) => {
   }
   if (owners.some((o) => o.amount * 10000n < target)) {
     throw new Error("an aggregate below one basis point of the target cannot carry a share");
+  }
+  // a soundness-review finding: the covenant's per-share floor, where the tier defines one. Refuse loudly at
+  // build time rather than let L1 refuse the finished registration.
+  const shareFloor = shareFloorForTarget(target);
+  if (shareFloor !== undefined) {
+    const below = owners.find((o) => o.amount < shareFloor);
+    if (below) {
+      throw new Error(`owner aggregate ${below.amount} duffs is below the covenant's ` +
+        `${shareFloor}-duff minimum share (a soundness-review finding); L1 refuses such a registration ` +
+        "with bad-protx-share-amount, so completion must not build it");
+    }
   }
   const alloc = owners.map((o) => ({
     ...o,
@@ -193,6 +265,9 @@ const toId32 = (v) => {
  *  [{amount: base-10 string, bps: integer}]; `target` is a base-10 string >= 1. */
 const allocationConsistencyError = (entries, target) => {
   const T = BigInt(target);
+  // a soundness-review finding: the covenant's per-share floor, where the tier defines one; undefined for evo
+  // (no upstream floor exists) and for toy targets, which match no tier
+  const shareFloor = shareFloorForTarget(T);
   let amtSum = 0n, bpsSum = 0;
   let minIncRem = null;   // smallest remainder among the rounded-up (floor+1) rows
   let maxFloorRem = null; // largest remainder among the floor rows
@@ -202,6 +277,10 @@ const allocationConsistencyError = (entries, target) => {
     const floor = scaled / T;
     const rem = scaled % T;
     if (floor < 1n) return "an owner below one basis point of the target cannot carry a share";
+    if (shareFloor !== undefined && a < shareFloor) {
+      return `owner amount ${a} duffs is below the covenant's ${shareFloor}-duff ` +
+        "minimum share (a soundness-review finding)";
+    }
     const b = BigInt(bps);
     if (b === floor) { if (maxFloorRem === null || rem > maxFloorRem) maxFloorRem = rem; }
     else if (b === floor + 1n) { if (minIncRem === null || rem < minIncRem) minIncRem = rem; }
@@ -393,6 +472,23 @@ const requireCoherentSlotEconomics = ({ nodeType, targetDuffs, slotDuffs, slotCo
     throw new Error(`the pool's slot economics are inconsistent: ${slotCount} x ${slotDuffs} ` +
       `duffs does not equal the ${nodeType} target ${target}; do not reserve on this pool`);
   }
+  // a soundness-review finding: a slot below the covenant's per-share floor lets a one-slot owner sit below
+  // it, and a FULL book with such an owner can never complete (the allocation checks
+  // refuse it) and can never register (L1 refuses bad-protx-share-amount), so the pool
+  // is refused up front, at creation and admission alike. This deliberately forecloses
+  // sub-floor slot sizes even where every owner might aggregate above the floor, because
+  // the fixed-slot model's value is that validity is structural rather than dependent on
+  // who happens to take how many slots. The sizes THIS floor admits on regular are 100,
+  // 125, 200, 250, 500 and 1000 DASH; the other guards (capacity, owner counts) still
+  // apply on top. Evo has no defined floor (the table says why) so no slot floor
+  // applies there.
+  const slotShareFloor = MIN_SHARE_DUFFS[nodeType];
+  if (slotShareFloor !== undefined && slotDuffs < slotShareFloor) {
+    throw new Error(`slot size ${slotDuffs} duffs is below the covenant's ` +
+      `${slotShareFloor}-duff minimum share (a soundness-review finding): an owner holding one slot would be ` +
+      "refused at registration with bad-protx-share-amount, so do not create or " +
+      "reserve on this pool");
+  }
   if (targetDuffs !== undefined && targetDuffs !== target) {
     throw new Error(`the pool's own targetDuffs (${targetDuffs}) does not equal the ${nodeType} ` +
       `target ${target}; this pool cannot complete as a ${nodeType} pool, do not reserve on it`);
@@ -494,8 +590,9 @@ const requireCompletableOwnerCount = ({ distinctOwnersAfterClaim, bookFullAfterC
 const MAX_SLOT_COUNT = 512;
 const MAX_PLEDGE_CLAIMS = MAX_SLOT_COUNT + 128;
 
-module.exports = { TARGETS, isFormingHash, aggregateByOwner, allocateBps, verifyRegistration,
+module.exports = { TARGETS, nodeTypeForCollateral, nodeTypeForRail, isFormingHash, aggregateByOwner, allocateBps, verifyRegistration,
   MAX_SLOT_COUNT, MAX_PLEDGE_CLAIMS,
+  MIN_SHARE_DUFFS, shareFloorForTarget, allocationConsistencyError, // a soundness-review finding
   requireCoherentSlotEconomics, requireOwnerCapacity, requireTierOwnerCount,
   requireCompletableOwnerCount,
   decodeId32, toId32, buildAllocationArray, allocationPreimage, allocationHash, verifyReceiptAllocation,

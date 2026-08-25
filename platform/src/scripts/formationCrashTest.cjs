@@ -2324,7 +2324,7 @@ if (PARED) {
     fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_DONE_") && f.endsWith(".val")));
 }
 
-// ---- independent case J: abandon FAILS CLOSED on a damaged manifest (a soundness review): a
+// ---- independent case J: abandon FAILS CLOSED on a damaged manifest (a soundness-review finding): a
 //      parse failure must refuse, never fall open to an empty participant list and clear state ----
 {
   writeSeed();
@@ -2416,7 +2416,7 @@ if (PARED) {
 }
 
 // ---- independent case I: a FOREIGN share (any identity, not a participant) must NOT wedge
-//      completion or abandon (a soundness review). Before the fix, one planted share broke the flip readback
+//      completion or abandon (a soundness-review finding). Before the fix, one planted share broke the flip readback
 //      (bpsSum != 10000) and the abandon guard (any share blocks), stranding the pool. ----
 const plantForeignShare = () => {
   const l = ledger();
@@ -2429,7 +2429,7 @@ const plantForeignShare = () => {
   writeSeed();
   plantForeignShare();
   const r = runChild(["complete", POOL, REAL_HASH]);
-  ok("a foreign share does NOT wedge completion (a soundness review)", r.code === 0 && receipts().length === 1);
+  ok("a foreign share does NOT wedge completion (a soundness-review finding)", r.code === 0 && receipts().length === 1);
   assertReceiptCorrect("foreign-share-present receipt", receipts()[0]);
 }
 {
@@ -2438,7 +2438,7 @@ const plantForeignShare = () => {
   ok("foreign-abandon setup: manifest committed, forming", halted.code === 0 && !poolLiveUnderRealHash());
   plantForeignShare(); // a foreign share on a forming pool with only the manifest committed
   const ab = runChild(["abandon", POOL]);
-  ok("a foreign share does NOT block abandon (a soundness review)", ab.code === 0 && /CLEARED/.test(ab.out));
+  ok("a foreign share does NOT block abandon (a soundness-review finding)", ab.code === 0 && /CLEARED/.test(ab.out));
 }
 
 // ---- independent case M: `create` emits the shape of the ledger under test (the matrix
@@ -2571,7 +2571,7 @@ const plantForeignShare = () => {
   }
 }
 
-// ---- independent case P (a soundness review): a RESUMED completion compares an
+// ---- independent case P (a soundness-review finding): a RESUMED completion compares an
 //      existing receipt with the frozen draft BEFORE settlement, so a contradicting
 //      receipt stops the run with ZERO participant shares created, not after them ----
 {
@@ -2629,6 +2629,136 @@ if (PARED) {
   ok("HALT=flip is refused loudly on the immutable-pool ledger",
     r.code !== 0 && /does not exist on an[\s\S]*immutable-pool ledger/.test(r.out));
   ok("the refused run wrote nothing", receipts().length === 0 && !hasInFlightEvidence());
+}
+
+// ---- THE DRIVEN EVO ROUND (EvoNodes E1-2): the real create and complete commands,
+// driven once at the evo target on this ledger, with the two claims SEEDED DIRECTLY
+// between them (the reservation step is not driven here; the admission suite covers
+// it). Until this block, evo appeared in the offline suites almost solely as the value
+// that must be refused (the plan's gap ledger). The receipt is verified against an
+// INDEPENDENT evo oracle, rebuilt from the canonical spec exactly like EXPECTED above
+// and sharing no helper with the code under test.
+// SLOT_DUFFS is 2000 DASH so the book is 2 x 2000 (the two-member shape at four times
+// the regular scale); the 100-DASH default would derive a 40-slot book against the
+// 8-owner tier, the plan's G2 friction, which E1-3 addresses separately.
+{
+  // THE WIDE-BOOK NOTE (EvoNodes E1-3, the plan's G2): the 100-DASH default derives a
+  // 40-slot evo book against the 8-owner tier. That shape is LEGAL (members may hold
+  // several slots; completion aggregates by owner) and must stay accepted, but the
+  // operator who never chose SLOT_DUFFS hears about it loudly, with the
+  // one-slot-per-owner size named.
+  writeSeed();
+  const wideSeed = ledger();
+  wideSeed.docs = wideSeed.docs.filter((d) => d.type !== "pool" && d.type !== "pledgeSlot");
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(wideSeed, null, 1));
+  const rWide = runChild(["create", "evo", "2000"]); // default SLOT_DUFFS
+  ok("evo wide book: the default-slot create still succeeds (a note, not a refusal)",
+    rWide.code === 0);
+  ok("evo wide book: exactly one pool exists and it carries the 40-slot book",
+    ledger().docs.filter((d) => d.type === "pool").length === 1
+    && Number(ledger().docs.find((d) => d.type === "pool").data.slotCount) === 40);
+  ok("evo wide book: the create names the tier, the aggregation, and the one-slot-per-owner size",
+    /NOTE: 40 slots against a tier of at most 8 co-owners/.test(rWide.out)
+    && /completion aggregates claims by owner/.test(rWide.out)
+    && /SLOT_DUFFS >= 50000000000/.test(rWide.out));
+
+  writeSeed();
+  const bare = ledger();
+  bare.docs = bare.docs.filter((d) => d.type !== "pool" && d.type !== "pledgeSlot");
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(bare, null, 1));
+  const rc = runChild(["create", "evo", "2000"], undefined, { SLOT_DUFFS: "200000000000" });
+  ok("evo round: the real create opens an evo pool", rc.code === 0);
+  ok("evo round: a two-slot book draws no wide-book note",
+    !/NOTE: .* slots against a tier/.test(rc.out));
+  // exact cardinality (checker on this fold): the .find below must be finding THE pool,
+  // not the first of several
+  ok("evo round: exactly one pool exists after create",
+    ledger().docs.filter((d) => d.type === "pool").length === 1);
+  const evoPool = ledger().docs.find((d) => d.type === "pool");
+  ok("evo round: the created pool records nodeType evo",
+    !!evoPool && evoPool.data.nodeType === "evo");
+  ok("evo round: the book is 2 slots of 2000 DASH",
+    !!evoPool && Number(evoPool.data.slotCount) === 2
+    && Number(evoPool.data.slotDuffs) === 200000000000);
+  if (PARED) {
+    ok("evo round: the immutable pool pins the evo target",
+      Number(evoPool.data.targetDuffs) === 400000000000);
+  } else {
+    ok("evo round: the mutable pool opens in the forming namespace",
+      /^0{32}[0-9a-f]{32}$/.test(String(evoPool.data.proTxHash))
+      && evoPool.data.status === "forming");
+  }
+  const EPOOL = evoPool.id;
+  const led1 = ledger();
+  led1.docs.push(
+    { id: newId(), type: "pledgeSlot", ownerId: F1, data: {
+      poolId: Buffer.from(Identifier.from(EPOOL).toBuffer()).toString("hex"),
+      slotNo: 0, rewardScript: SCRIPT_A, $createdAt: 10 } },
+    { id: newId(), type: "pledgeSlot", ownerId: F2, data: {
+      poolId: Buffer.from(Identifier.from(EPOOL).toBuffer()).toString("hex"),
+      slotNo: 1, rewardScript: SCRIPT_B, $createdAt: 20 } });
+  fs.writeFileSync(LEDGER_PATH, JSON.stringify(led1, null, 1));
+  const done = runChild(["complete", EPOOL, REAL_HASH]);
+  ok("evo round: the real complete finishes the evo pool",
+    done.code === 0 && /FORMATION COMPLETE/.test(done.out));
+  // the INDEPENDENT evo oracle, same construction discipline as EXPECTED
+  const EVO_EXPECTED = (() => {
+    const owners = [
+      { owner: F1, amountDuffs: "200000000000", bps: 5000, script: SCRIPT_A },
+      { owner: F2, amountDuffs: "200000000000", bps: 5000, script: SCRIPT_B },
+    ].sort((a, b) => Buffer.compare(
+      Buffer.from(Identifier.from(a.owner).toBuffer()), Buffer.from(Identifier.from(b.owner).toBuffer())));
+    const arr = ["tegara-completion-allocation", 1, CONTRACT, EPOOL, "400000000000",
+      owners.map((o) => [o.owner, o.amountDuffs, o.bps, o.script])];
+    const rowsBytes = Buffer.from(JSON.stringify(arr), "utf8");
+    return { allocationRows: rowsBytes.toString("hex"),
+      allocationHash: crypto.createHash("sha256").update(rowsBytes).digest("hex") };
+  })();
+  const evoReceipts = receipts().filter((d) =>
+    Identifier.from(Buffer.from(d.data.poolId, "hex")).toString() === EPOOL);
+  ok("evo round: exactly one receipt exists for the evo pool", evoReceipts.length === 1);
+  const er = evoReceipts[0];
+  if (er) {
+    ok("evo round: the receipt's allocation rows match the independent evo oracle",
+      er.data.allocationRows === EVO_EXPECTED.allocationRows);
+    ok("evo round: the receipt's allocation hash matches the independent evo oracle",
+      er.data.allocationHash === EVO_EXPECTED.allocationHash);
+    ok("evo round: the receipt names REAL_HASH", er.data.proTxHash === REAL_HASH);
+    if (PARED) {
+      ok("evo round: the pared receipt carries no nodeType (the pool pins evo)",
+        er.data.nodeType === undefined);
+      const p = ledger().docs.find((d) => d.id === EPOOL);
+      const verdict = checkReceiptAgainstPool({
+        contractId: CONTRACT,
+        receipt: {
+          poolId: Buffer.from(er.data.poolId, "hex"), proTxHash: Buffer.from(er.data.proTxHash, "hex"),
+          slotIndex: Number(er.data.slotIndex), formatVersion: Number(er.data.formatVersion),
+          allocationRows: Buffer.from(er.data.allocationRows, "hex"),
+          allocationHash: Buffer.from(er.data.allocationHash, "hex"),
+          participantCount: Number(er.data.participantCount),
+          l1Verification: er.data.l1Verification,
+          verificationMethodVersion: Number(er.data.verificationMethodVersion),
+        },
+        pool: p.data, poolId: EPOOL,
+        receiptOwnerId: er.ownerId, poolOwnerId: p.ownerId,
+      });
+      ok("evo round: the shared receipt-to-pool check returns ok for the evo pair",
+        verdict.ok === true);
+    } else {
+      ok("evo round: the receipt carries nodeType evo and the evo target",
+        er.data.nodeType === "evo" && Number(er.data.targetDuffs) === 400000000000);
+      const p = ledger().docs.find((d) => d.id === EPOOL);
+      ok("evo round: the pool flipped live under REAL_HASH",
+        p.data.status === "live" && p.data.proTxHash === REAL_HASH);
+    }
+  }
+  // one share PER MEMBER (checker on this fold): count-two-at-5000 alone would pass
+  // two shares issued to one owner
+  const evoShareOwners = ledger().docs.filter((d) => d.type === "share"
+    && Identifier.from(Buffer.from(d.data.poolId, "hex")).toString() === EPOOL
+    && Number(d.data.shareBps) === 5000).map((d) => d.ownerId).sort();
+  ok("evo round: one 5000-bps share each for F1 and F2",
+    evoShareOwners.join(",") === [F1, F2].sort().join(","));
 }
 
 fs.rmSync(ROOT, { recursive: true, force: true });

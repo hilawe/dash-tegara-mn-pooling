@@ -118,7 +118,7 @@ performs the pinned byte-reversal, so the conversion rule is exercised by the ve
 - `verifyOwnership`: a position-indexed map from the decode decisions; every hop bound
   to the exact transaction at its position (hash, document, slot, anchor, inner index);
   creation-first chains with seller and buyer continuity, the CREATION MINTED BY THE
-  SIGNED BOOK'S OPERATOR (a soundness review); the closing block re-derived
+  SIGNED BOOK'S OPERATOR (a soundness-review finding); the closing block re-derived
   as the FIRST Platform row reaching H; the snapshot as the last eligible position; the
   owner as its buyer (or the signed book's operator for pre-creation).
 - `verifyDecoderSelection`: per-row greatest-fromHeight-not-exceeding; the derived

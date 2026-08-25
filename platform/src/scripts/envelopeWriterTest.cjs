@@ -48,7 +48,7 @@ badAnchor.coverage.platformLedger[2].coreChainLockedHeight = 1;
 // now refused EARLIER than the gate: the closing-block search asserts its own
 // precondition, so the failure names the actual problem instead of a downstream symptom
 throws("anchor regression is refused", () => writeEnvelope(badAnchor), /anchors regress|NOT conformant/);
-// cross-ledger disagreement at a shared height (a soundness review)
+// cross-ledger disagreement at a shared height (a soundness-review finding)
 const badJoin = evidenceOf(clone(positive));
 badJoin.coverage.coreLedger[0].blockHash = "11".repeat(32);
 throws("cross-ledger disagreement is refused", () => writeEnvelope(badJoin), /NOT conformant/);

@@ -122,7 +122,7 @@ const BAD = (reason) => ({ ran: true, ok: false, reason });
 const BLOCKED = (blockedOn) => ({ ran: false, ok: false, blockedOn });
 
 /**
- * The DERIVED Core chain identity (a soundness review), never serialized: the label, a one-byte
+ * The DERIVED Core chain identity (a soundness-review finding), never serialized: the label, a one-byte
  * network code, the height-zero genesis bytes, and either the devnet height-one genesis
  * or 32 zero bytes. Hash fields are RPC-display hex decoded LEFT TO RIGHT with no
  * reversal (the pinned byte convention).
@@ -215,7 +215,7 @@ function verifyTransitionHashes(env) {
  * must equal that same digest; and the payload's EMBEDDED domain tag (bytes 4..36) must
  * equal the tag re-derived from the ENVELOPE's own network fields. The last check is what
  * makes a checkpoint copied from another chain, or from another devnet sharing a base
- * genesis, fail here rather than pass as evidence (a soundness review).
+ * genesis, fail here rather than pass as evidence (a soundness-review finding).
  *
  * THE DEVNET HEIGHT-ONE BLOCK duty IS PERFORMED when a Core node is supplied (round 5, MINOR:
  * this header still said the duty was blocked after the implementation landed, which is the
@@ -644,7 +644,7 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
  *     listRoot evidence rather than a claim, and it is anchored to a value Dash Core wrote;
  *   the coinbase bytes the row retains are the SAME bytes the diff carries;
  *   where the coreLedger covers the same height, its blockHash agrees and its coinbase outputs
- *     are DERIVED from txRaw rather than trusted (a soundness review).
+ *     are DERIVED from txRaw rather than trusted (a soundness-review finding).
  * Plus the interval equation over already-validated integers.
  *
  * WHAT IT DOES NOT DO, and why the component stays blocked. The endpoint ChainLock signature must
@@ -946,7 +946,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
             script: o.script, amountDuffs: o.amountDuffs, outputIndex: o.outputIndex,
           }));
           if (JSON.stringify(derived) !== JSON.stringify(asserted)) {
-            // no internal finding tag in a RUNTIME MESSAGE. This read "(a soundness review)", and the fixture
+            // no internal finding tag in a RUNTIME MESSAGE. This read "(a soundness-review finding)", and the fixture
             // matched on that tag, so the two were coupled through a private tracking number.
             // The public export genericizes such tags, and it rewrites a parenthesized tag and a
             // bare one differently, so the message and the fixture's pattern drifted apart and

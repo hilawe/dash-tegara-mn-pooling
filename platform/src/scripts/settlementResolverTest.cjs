@@ -16,7 +16,7 @@ const claim = { claimId: "c1", intentId: "i1", joinerId: "joiner", rewardScriptH
 //    not reader-verifiable, so the gate is closed and the base owner (leaver) must stand.
 {
   const r = resolveActiveMember(base, [intent], [claim], NO_L2_PAYMENT_PROOF);
-  ok("unpaid claim does NOT supersede (a soundness review)", r.superseded === false && r.activeOwner === "leaver");
+  ok("unpaid claim does NOT supersede (a soundness-review finding)", r.superseded === false && r.activeOwner === "leaver");
   ok("reward stays the base owner's script", r.rewardScriptHex === "aa");
 }
 

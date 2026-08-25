@@ -93,7 +93,7 @@ DECODER_ID = "decoder-sha256-" + ("dd" * 32)[:16]
 EVBYTES = "de" * 40
 SIGNER_PUB = bytes([0x42]) * 32
 
-# Core chain identity (a soundness review). Well-known genesis hashes in RPC display
+# Core chain identity (a soundness-review finding). Well-known genesis hashes in RPC display
 # form (merged commit 8c9f166a3, src/chainparams.cpp: MAIN line 242, TESTNET line 438,
 # DEVNET line 614, REGTEST line 854). mainnet/testnet bind two ways (name <-> genesis).
 # regtest and devnet SHARE the height-ZERO base genesis (000008ca...), so regtest binds
@@ -119,7 +119,7 @@ DEVNET_GENESIS_H1 = bytes([0x22]) * 32
 CORE_NETWORK_CODE = {"mainnet": 0, "testnet": 1, "devnet": 2, "regtest": 3}
 
 def core_chain_identity_hash(core_network, genesis_bytes, devnet_h1_bytes):
-    # The derived (never serialized) Core chain identity (a soundness review): it feeds
+    # The derived (never serialized) Core chain identity (a soundness-review finding): it feeds
     # domain separation wherever the bare height-zero genesis previously did, so two
     # devnets sharing the base genesis derive DIFFERENT identities and a checkpoint
     # signed for one cannot be copied to the other. Non-devnet networks contribute 32
@@ -138,7 +138,7 @@ CHAIN_IDENTITY = core_chain_identity_hash("devnet", GENESIS, DEVNET_GENESIS_H1)
 V2_LABEL = b"tegara-fixedslot-checkpoint-v2"
 
 def v2_domain_tag(chain_identity, signer_pub):
-    # Revision 17 (a soundness review): the tag folds in the DERIVED chain identity, not the bare
+    # Revision 17 (a soundness-review finding): the tag folds in the DERIVED chain identity, not the bare
     # height-zero genesis, so two devnets sharing the base genesis produce different
     # tags and a signed checkpoint cannot be copied between them.
     return hashlib.sha256(V2_LABEL + chain_identity + signer_pub).digest()
@@ -274,7 +274,7 @@ def build_positive(end_exclusive=1601, observed=1001):
     return {
         "envelopeVersion": "1",
         "proofCodecProfile": "tegara-proof-codecs-v1",
-        # Revision 26 (a soundness review): the envelope COMMITS the deployment's proof-verifier
+        # Revision 26 (a soundness-review finding): the envelope COMMITS the deployment's proof-verifier
         # bundle digest, so the envelope bytes identify which codec interpretation
         # applies (the bundle itself is a BUILD artifact; hashing/retrieval is a runtime
         # duty, and this vector carries a placeholder like other runtime evidence).
@@ -1102,7 +1102,7 @@ def check_semantics(env):
                         else "COINBASE_MISMATCH")
                 require(all(a["code"] == code for a in ent["anomalies"]),
                         "anomaly code does not match the derived disagreement")
-                # code-specific evidence targets (round-9 review major 5): an anomaly
+                # code-specific evidence targets (round-9 review, major 5): an anomaly
                 # must cite BOTH sides of its disagreement, not any two resolving refs.
                 hpath = "/coverage/coreLedger/%d" % core_rows.index(row)
                 epath = "/rewards/%d/entitlement/eligibility" % env["rewards"].index(rec)
@@ -1553,7 +1553,7 @@ def negatives(pos):
         # the contiguous-0..n-1 rule. The genuine two-transaction permutation is the
         # separate platform-two-txs-swapped negative (revision 19); a coherently
         # RENUMBERED permutation passes offline BY DESIGN and is caught by the
-        # proof-position equality at runtime (a soundness review).
+        # proof-position equality at runtime (a soundness-review finding).
         e["coverage"]["platformLedger"][0]["txs"][0]["txIndex"] = 1
     def redundant_lineage_split(e):
         # a soundness-review finding (revision 18): the same decoder history serialized as a redundant
@@ -1631,7 +1631,7 @@ def negatives(pos):
             r["targetNodeEntry"] = None
         e["lifecycle"]["transitions"] = []
     def pre_dml_range_start_at_activation(e):
-        # review no-access variant (revision 23): a pre-DML audit starting AT the
+        # the no-access review variant (revision 23): a pre-DML audit starting AT the
         # activation height (the first height with a list root at H-1 is
         # activation+1, so fromHeight == activationHeight must reject).
         e["basePackage"] = {"kind": "pre-dml", "coreNetwork": "devnet",
@@ -2054,7 +2054,7 @@ def main():
     except SemanticError as e:
         print("FAIL: first-appearance acceptance envelope rejected by the semantic layer:", e)
         return 1
-    print("first-appearance acceptance: schema PASS, semantic PASS (a soundness review)")
+    print("first-appearance acceptance: schema PASS, semantic PASS (a soundness-review finding)")
 
     ee = build_empty_epoch()
     eerrs = list(validator.iter_errors(ee))
@@ -2082,7 +2082,7 @@ def main():
     except SemanticError as e:
         print("FAIL: owner-vector acceptance envelope rejected by the semantic layer:", e)
         return 1
-    print("owner-vector acceptance: schema PASS, semantic PASS (a soundness review)")
+    print("owner-vector acceptance: schema PASS, semantic PASS (a soundness-review finding)")
 
     canon = canonical_bytes(pos)
     canon_hash = hashlib.sha256(canon).hexdigest()

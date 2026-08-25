@@ -17,7 +17,25 @@ const rail = require("./railState.cjs");
 const { loadEnv } = require("./envStore.cjs");
 
 const consumedNow = () => {
-  try { return rail.load(loadEnv()).consumed; } catch { return []; }
+  // a soundness-review finding: a state error must SURFACE, never read as "nothing consumed". The old catch
+  // here returned [] on any failure, which defeated railState's deliberate corruption
+  // refusals: a malformed or unreadable state made every consumed outpoint reappear in
+  // the wallet view, exactly the unchecked-never-means-passed shape the global rule
+  // names. A legitimately EMPTY environment does not throw (rail.load returns the
+  // fresh idle state with consumed []), so refusing on throw refuses only real errors.
+  try {
+    return rail.load(loadEnv()).consumed;
+  } catch (e) {
+    // reading e.message can itself throw (a broken or misbehaving getter); the refusal must
+    // survive that too, wrapped rather than escaping unwrapped (external artifact check)
+    let underlying;
+    try { underlying = (e && e.message) || String(e); } catch { underlying = "(unprintable error)"; }
+    const err = new Error("the consumed-output state cannot be read, so the wallet's " +
+      "UTXO view cannot be trusted and no transaction should be built over it " +
+      `(a soundness-review finding). Underlying: ${underlying}`);
+    err.cause = e;
+    throw err;
+  }
 };
 
 const installConsumedFilter = (account) => {

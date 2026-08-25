@@ -68,6 +68,16 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
   ok("reserve passes a coherent pool through to the claims fetch (sentinel reached)",
     r2.includes(SENTINEL));
 
+  // the POSITIVE EVO row (EvoNodes E1-2): a coherent evo pool, 2 x 2000 DASH against
+  // the evo target, REACHES THE CLAIMS FETCH through the same command (the sentinel is
+  // what this observes; persistence is the harness's driven round's subject); until
+  // this row evo appeared in this suite only as the value that must be refused
+  const coherentEvo = { slotIndex: 0, nodeType: "evo", operatorFeeBps: 2000,
+    targetDuffs: 400000000000, slotDuffs: 200000000000, slotCount: 2 };
+  const rEvo = await run(coherentEvo);
+  ok("reserve passes a coherent EVO pool through to the claims fetch",
+    rEvo.includes(SENTINEL));
+
   // the distinct-owner bound at the COMMAND level (final pass, major 2): a ten-slot
   // coherent pool with eight distinct owners on slots 0-7; a ninth identity's claim is
   // refused AT the capacity guard, while an existing owner's second claim passes the
@@ -374,30 +384,42 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     const prevWidth = process.env.LEDGER;
     process.env.LEDGER = "v7";
     const forming7 = () => Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 7)]);
-    const wide7 = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+    // a soundness-review finding moved these capacity fixtures to the EVO tier: on regular, the covenant's
+    // 100 DASH share floor now refuses every book wider than 10 slots BEFORE the
+    // capacity rule can speak, so evo (whose floor is deliberately undefined upstream)
+    // is the only tier where the capacity boundary still has a live surface.
+    const wide7 = { slotIndex: 0, nodeType: "evo", operatorFeeBps: 2000,
       status: "forming", proTxHash: forming7(),
-      slotDuffs: 100000000, slotCount: 1000 };
+      slotDuffs: 400000000, slotCount: 1000 };
     const rWide = await run(wide7);
     ok("a coherent 1000-slot v7 book is refused at the capacity rule (completion cannot scan it)",
       /wider than the 640-claim scan/.test(rWide) && !rWide.includes(SENTINEL));
-    const ok625 = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+    // a soundness-review finding on the admission surface: the old 625-slot REGULAR fixture (1.6 DASH slots)
+    // is now the floor-refusal case, and the refusal names the share floor, not capacity
+    const subFloor7 = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
       status: "forming", proTxHash: forming7(),
       slotDuffs: 160000000, slotCount: 625 };
+    const rSubFloor = await run(subFloor7);
+    ok("a soundness-review finding: a sub-floor regular book is refused at the share floor",
+      /minimum share/.test(rSubFloor) && !rSubFloor.includes(SENTINEL));
+    const ok625 = { slotIndex: 0, nodeType: "evo", operatorFeeBps: 2000,
+      status: "forming", proTxHash: forming7(),
+      slotDuffs: 640000000, slotCount: 625 };
     const r625 = await run(ok625);
     ok("the 625-slot book inside the scan window is still admitted past the capacity rule",
       r625.includes(SENTINEL));
     // the BOUNDARY (checker on this fold): 640 is the last enumerable width and is
-    // admitted; 641 exactly is arithmetically unconstructible as a coherent regular book
+    // admitted; 641 exactly is arithmetically unconstructible as a coherent book
     // (prime, does not divide the tier), so the nearest reachable wider book, 800, pins
     // the refusal side of the boundary
-    const at640 = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+    const at640 = { slotIndex: 0, nodeType: "evo", operatorFeeBps: 2000,
       status: "forming", proTxHash: forming7(),
-      slotDuffs: 156250000, slotCount: 640 };
+      slotDuffs: 625000000, slotCount: 640 };
     const r640 = await run(at640);
     ok("a 640-slot book, exactly the scan ceiling, is admitted", r640.includes(SENTINEL));
-    const at800 = { slotIndex: 0, nodeType: "regular", operatorFeeBps: 2000,
+    const at800 = { slotIndex: 0, nodeType: "evo", operatorFeeBps: 2000,
       status: "forming", proTxHash: forming7(),
-      slotDuffs: 125000000, slotCount: 800 };
+      slotDuffs: 500000000, slotCount: 800 };
     const r800 = await run(at800);
     ok("an 800-slot book, the nearest coherent width past the ceiling, is refused",
       /wider than the 640-claim scan/.test(r800) && !r800.includes(SENTINEL));
@@ -417,8 +439,8 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     const prev = process.env.LEDGER;
     process.env.LEDGER = "v6";
     const prevSlot = process.env.SLOT_DUFFS;
-    process.env.SLOT_DUFFS = "100000000"; // 1 DASH derives a 1000-slot book
-    const v6pool = { nodeType: "regular", status: "forming",
+    process.env.SLOT_DUFFS = "400000000"; // 4 DASH derives a 1000-slot EVO book (a soundness-review finding)
+    const v6pool = { nodeType: "evo", status: "forming",
       proTxHash: Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 9)]), operatorFeeBps: 2000 };
     const rV6 = await (async () => { try {
       await reserve({ ...mkCtx(v6pool, []), isV7: () => false,
@@ -429,6 +451,21 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
       return "returned"; } catch (e) { return e.message; } })();
     ok("v6: a SLOT_DUFFS deriving a 1000-slot book is refused at the same capacity rule",
       /wider than the 640-claim scan/.test(rV6) && /SLOT_DUFFS/.test(rV6) && !rV6.includes(WALLET_SENTINEL));
+    // a soundness-review finding through the v6 CALL SITE (external artifact check, finding 1): the unit
+    // tests of the shared guard cannot show this branch invokes it, so drive it. A
+    // 50 DASH SLOT_DUFFS on a REGULAR v6 pool is refused at the share floor.
+    process.env.SLOT_DUFFS = "5000000000"; // 50 DASH, below the regular floor
+    const v6floorPool = { nodeType: "regular", status: "forming",
+      proTxHash: Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 9)]), operatorFeeBps: 2000 };
+    const rV6floor = await (async () => { try {
+      await reserve({ ...mkCtx(v6floorPool, []), isV7: () => false,
+        client: { platform: {
+          documents: { get: async (type) => { throw new Error(`no such document type ${type}`); } },
+          contracts: { get: async () => ({ getOwnerId: () => ({ toString: () => "operator" }) }) },
+        }, getWalletAccount: async () => { throw new Error(WALLET_SENTINEL); } } });
+      return "returned"; } catch (e) { return e.message; } })();
+    ok("a soundness-review finding: the v6 branch refuses a sub-floor SLOT_DUFFS at the share floor",
+      /minimum share/.test(rV6floor) && !rV6floor.includes(WALLET_SENTINEL));
     if (prevSlot === undefined) delete process.env.SLOT_DUFFS; else process.env.SLOT_DUFFS = prevSlot;
     if (prev === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev;
     if (prevWidth === undefined) delete process.env.LEDGER; else process.env.LEDGER = prevWidth;

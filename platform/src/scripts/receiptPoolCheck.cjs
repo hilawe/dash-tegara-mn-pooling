@@ -26,7 +26,7 @@
  *   4. THE RECEIPT'S slotIndex MATCHES THE POOL'S. slotIndex necessarily stays on the v9
  *      receipt because the unique bySlot index needs it, so it is the one duplicated field
  *      left and therefore the one that can still contradict.
- *   5. THE NODE HASH IS OUTSIDE THE RESERVED FORMING NAMESPACE (a soundness review). The published
+ *   5. THE NODE HASH IS OUTSIDE THE RESERVED FORMING NAMESPACE (a soundness-review finding). The published
  *      schema can bound only the LENGTH of proTxHash, and the completion writer refuses a
  *      reserved-prefix value, so without this duty a schema-valid receipt naming a
  *      placeholder node passes every other duty and classifies as COMPLETED. The rule is
@@ -311,7 +311,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
     const carriedTarget = toDuffs(pared ? pool.targetDuffs : receipt.targetDuffs);
     if (carriedTarget === null) return bad(`${carrier} targetDuffs is not a duff amount`);
 
-    // ---- the NODE-DOMAIN duty (a soundness review): the receipt's proTxHash must be a real node
+    // ---- the NODE-DOMAIN duty (a soundness-review finding): the receipt's proTxHash must be a real node
     // identifier, meaning 32 bytes OUTSIDE the reserved forming namespace (16 leading
     // zero bytes, formationCore's application convention). The writer refuses this value
     // and validateReceiptDraft repeats the refusal, but the published schema bounds only

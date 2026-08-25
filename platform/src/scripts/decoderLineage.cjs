@@ -2,8 +2,8 @@
  * decoderLineage - build-order item 5 of the REVIEW-COMPLETE design (revision 27): the
  * lineage builder/validator plus THE PRODUCTION BUNDLE MANIFEST SCHEMA.
  *
- * The lineage records CHANGE POINTS, not deployments (a soundness review). Nothing in an entry is
- * producer-labelled (a soundness review): `decoderId` is DERIVED from the artifact digest,
+ * The lineage records CHANGE POINTS, not deployments (a soundness-review finding). Nothing in an entry is
+ * producer-labelled (a soundness-review finding): `decoderId` is DERIVED from the artifact digest,
  * `artifactRef` is one closed content-addressed grammar embedding that same digest, the
  * execution descriptor is a closed vocabulary, and the environment is a leaf OCI
  * image-manifest digest. The retained extent is EXACT over the Platform audit interval.

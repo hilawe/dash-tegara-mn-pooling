@@ -176,6 +176,49 @@ ok("contract id keys are unique", new Set(Object.values(S.LEDGER_VERSIONS).map((
   === Object.keys(S.LEDGER_VERSIONS).length);
 ok("v9 is selectable", S.SUPPORTED_LEDGERS.includes("v9"));
 
+// ---------------------------------------------------------------------------
+// 5. v11, the registered E2 sibling (E2 build spec adoption table)
+// ---------------------------------------------------------------------------
+// v11's caps are v9's set plus e2Records, WRITTEN OUT rather than inherited, so
+// this pin compares the two rows member-for-member: exactly one addition, no
+// silent re-additions (poolStatus stays absent) and no subtraction.
+{
+  const v9caps = S.LEDGER_VERSIONS.v9.caps, v11caps = S.LEDGER_VERSIONS.v11.caps;
+  const v9k = Object.keys(v9caps).sort(), v11k = Object.keys(v11caps).sort();
+  ok("v11 caps are exactly v9's plus e2Records",
+    JSON.stringify(v11k) === JSON.stringify([...v9k, "e2Records"].sort())
+    && v9k.every((k) => v11caps[k] === v9caps[k]) && v11caps.e2Records === true);
+  ok("poolStatus stays absent on v11 (v9's subtraction is not silently undone)",
+    v11caps.poolStatus === undefined);
+  ok("hasE2Records true on v11", withLedger("v11", () => S.hasE2Records()) === true);
+  ok("hasE2Records false on v9", withLedger("v9", () => S.hasE2Records()) === false);
+  ok("hasE2Records false on an unknown version", withLedger("v42", () => S.hasE2Records()) === false);
+  ok("v11 is selectable", S.SUPPORTED_LEDGERS.includes("v11"));
+  ok("ledgerIsExactly('v11') on v11", withLedger("v11", () => S.ledgerIsExactly("v11")) === true);
+  ok("ledgerIsExactly('v9') is false on v11 (exactness, not capability aliasing)",
+    withLedger("v11", () => S.ledgerIsExactly("v9")) === false);
+  throws("v11 selected before publication fails with the register script named",
+    () => withLedger("v11", () => S.activeContractId({ CONTRACT_ID: "x" })),
+    /CONTRACT_V11_ID is missing; run registerV11\.cjs first/);
+  ok("v11 selected after publication resolves to its own id",
+    withLedger("v11", () => S.activeContractId({ CONTRACT_ID: "x", CONTRACT_V11_ID: "eleven" })) === "eleven");
+  ok("the release profile keeps v11 OUTSIDE operative until the E2 gates pass",
+    !S.PROFILES.release.operative.includes("v11"));
+  // the BEHAVIORAL form of the boundary, not only the structural one (unit-2
+  // checker, finding 6): selecting v11 under the release profile is refused
+  {
+    const pp = process.env.TEGARA_PROFILE, pl = process.env.LEDGER;
+    process.env.TEGARA_PROFILE = "release"; process.env.LEDGER = "v11";
+    try {
+      throws("LEDGER=v11 under the release profile is refused behaviorally",
+        () => S.assertProfile(), /release|operative/);
+    } finally {
+      if (pp === undefined) delete process.env.TEGARA_PROFILE; else process.env.TEGARA_PROFILE = pp;
+      if (pl === undefined) delete process.env.LEDGER; else process.env.LEDGER = pl;
+    }
+  }
+}
+
 fs.rmSync(TMP, { recursive: true, force: true });
 // ---- the RELEASE PROFILE fails closed (pass 10, F4) ----
 // The profile documents v9 as the operative ledger, with retail (v10), the v8 interface

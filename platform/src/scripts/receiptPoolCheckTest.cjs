@@ -71,7 +71,7 @@ const receiptFor = (m, { slotIndex = 0, asString = false } = {}) => {
   return {
     poolId: asString ? m.poolId : Buffer.from(core.decodeId32(m.poolId)),
     // proTxHash is REQUIRED by the published schema and the fixture omitted it entirely
-    // (a soundness review): every case here was verifying a receipt the contract could
+    // (a soundness-review finding): every case here was verifying a receipt the contract could
     // not accept. The default is a real node hash outside the reserved namespace.
     proTxHash: Buffer.from(m.realHash, "hex"),
     slotIndex, formatVersion: 1,

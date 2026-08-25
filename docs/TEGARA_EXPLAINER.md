@@ -322,7 +322,11 @@ serve Dash Platform itself. The accounting code already carries the evolution am
 node type offline, and the shared checks are written against node type rather than a
 fixed number, but every live demonstration in this document was a regular node. The
 covenant behavior, the payout mechanics, the formation rounds and the verification ladder
-all need their evolution-node counterparts exercised. The stated priority is to finish
+all need their evolution-node counterparts exercised. One boundary is not Tegara's to
+lift: the shared-collateral proposal scopes itself to regular masternodes, and the
+covenant build refuses a shared evolution-node registration at consensus, so the
+strongest verification level is out of an evolution pool's reach until that scope
+changes upstream. The stated priority is to finish
 and vet the regular-masternode line first, then make evolution nodes the next major
 effort rather than an afterthought.
 

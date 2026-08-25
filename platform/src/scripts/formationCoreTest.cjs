@@ -50,6 +50,26 @@ throws("wrong length refused", () => core.isFormingHash(Buffer.alloc(31, 0)), /3
   ok("thirds all positive", alloc.every((a) => a.bps >= 1));
 }
 
+// allocation at the EVO target (EvoNodes E1-2): one 3000/1000 case over 400000000000,
+// a positive evo case beside the suite's negative evo fixtures (the rule's general
+// properties are the regular rows' subject; this row pins the evo target's reachability)
+{
+  // caught, not crashed: a refusal here (for example the evo target collapsing to the
+  // regular amount) must show as THIS row's named failure, not an uncaught throw
+  let alloc = null;
+  try {
+    alloc = core.allocateBps(core.aggregateByOwner([
+      row("r1", "A", 300000000000n, 1), row("r2", "B", 100000000000n, 2)]), core.TARGETS.evo);
+  } catch { /* alloc stays null and the row fails by name */ }
+  // identity AND totals (checker on this fold): the two .find hits alone would pass a
+  // result carrying extra or duplicate allocations
+  ok("evo 3000/1000 -> 7500/2500, exactly two rows summing to 10000",
+    !!alloc && alloc.length === 2
+    && alloc.reduce((s, a) => s + a.bps, 0) === 10000
+    && alloc.find((a) => a.owner === "A").bps === 7500
+    && alloc.find((a) => a.owner === "B").bps === 2500);
+}
+
 // determinism: same input twice gives identical weights
 {
   const rows = [row("r1", "A", 12345678900n, 5), row("r2", "B", 87654321100n, 3)];
@@ -66,6 +86,73 @@ throws("partial set refused", () => core.allocateBps(core.aggregateByOwner([
 // sub-basis-point aggregate refused
 throws("sub-bps refused", () => core.allocateBps(core.aggregateByOwner([
   row("r1", "A", 99999999999n + 1n - 9999999n, 1), row("r2", "B", 9999999n, 2)]), T), /basis point/);
+
+// ---- a soundness-review finding: the covenant's per-share floor (MIN_SHARE_AMOUNT, 100 DASH regular) ----
+// Predicate-table rows for the new guard (playbook): smallest valid (an owner at exactly
+// the floor), first invalid (one duff below it), two-related-limits-differ (an amount
+// that clears the one-basis-point floor and fails the duff floor, which IS the finding),
+// and guard-disabled (evo, whose floor is deliberately undefined upstream).
+{
+  // the reviewer's 475/475/50 remainder case: sums exactly, every bps valid, and the
+  // 50 DASH owner is what L1 refuses with bad-protx-share-amount
+  throws("a soundness-review finding: a 50 DASH aggregate is refused by the builder",
+    () => core.allocateBps(core.aggregateByOwner([
+      row("r1", "A", 47500000000n, 1), row("r2", "B", 47500000000n, 2),
+      row("r3", "C", 5000000000n, 3)]), T), /minimum share/);
+  // the repaired shape from the same case: an existing owner absorbed the remainder
+  let repaired = null;
+  try {
+    repaired = core.allocateBps(core.aggregateByOwner([
+      row("r1", "A", 52500000000n, 1), row("r2", "B", 47500000000n, 2)]), T);
+  } catch { /* repaired stays null and the row fails by name */ }
+  ok("a soundness-review finding: 525/475 passes and allocates 5250/4750",
+    !!repaired && repaired.length === 2
+    && repaired.find((a) => a.owner === "A").bps === 5250
+    && repaired.find((a) => a.owner === "B").bps === 4750);
+  // boundary, smallest valid: exactly 100 DASH carries a share
+  let atFloor = null;
+  try {
+    atFloor = core.allocateBps(core.aggregateByOwner([
+      row("r1", "A", 90000000000n, 1), row("r2", "B", 10000000000n, 2)]), T);
+  } catch { /* atFloor stays null and the row fails by name */ }
+  ok("a soundness-review finding: an owner at exactly 100 DASH is accepted",
+    !!atFloor && atFloor.find((a) => a.owner === "B").bps === 1000);
+  // boundary, first invalid: one duff below the floor is refused
+  throws("a soundness-review finding: one duff below 100 DASH is refused",
+    () => core.allocateBps(core.aggregateByOwner([
+      row("r1", "A", 90000000001n, 1), row("r2", "B", 9999999999n, 2)]), T), /minimum share/);
+  // the shared consistency condition refuses the same shape. It is the helper BOTH the
+  // manifest builder and the third-party verifier call; each ROUTE is exercised by its
+  // own end-to-end row (the builder row below, the receipt row further down)
+  ok("a soundness-review finding: consistency check names the sub-floor owner",
+    /minimum share/.test(core.allocationConsistencyError([
+      { amount: "47500000000", bps: 4750 }, { amount: "47500000000", bps: 4750 },
+      { amount: "5000000000", bps: 500 }], T.toString()) || ""));
+  // guard disabled: evo has NO defined floor upstream (shared evo is refused at
+  // consensus and no amendment names one), so no floor is applied rather than guessed
+  ok("a soundness-review finding: evo applies no floor (a 50 DASH owner passes the consistency check)",
+    core.allocationConsistencyError([
+      { amount: "395000000000", bps: 9875 }, { amount: "5000000000", bps: 125 }],
+      core.TARGETS.evo.toString()) === null);
+  // a toy target (offline-test scale, matching no tier) stays arithmetic-only
+  ok("a soundness-review finding: a toy target applies no floor",
+    core.allocationConsistencyError([
+      { amount: "3", bps: 3000 }, { amount: "7", bps: 7000 }], "10") === null);
+  // slot economics: a slot below the floor lets one slot be a sub-floor owner, so the
+  // pool is refused at creation and admission alike
+  const slotMsg = (input) => {
+    try { core.requireCoherentSlotEconomics(input); return null; } catch (e) { return e.message; }
+  };
+  ok("a soundness-review finding: a 50 DASH slot book is refused for a regular pool",
+    /minimum share/.test(slotMsg({ nodeType: "regular", targetDuffs: 100000000000n,
+      slotDuffs: 5000000000n, slotCount: 20 }) || ""));
+  ok("a soundness-review finding: the 100 DASH default slot book passes",
+    slotMsg({ nodeType: "regular", targetDuffs: 100000000000n,
+      slotDuffs: 10000000000n, slotCount: 10 }) === null);
+  ok("a soundness-review finding: the evo 40-slot default (100 DASH slots) passes, no floor is applied",
+    slotMsg({ nodeType: "evo", targetDuffs: 400000000000n,
+      slotDuffs: 10000000000n, slotCount: 40 }) === null);
+}
 
 // --- verifyRegistration (L1 registration verification) ---
 const C = (amt, addr) => ({ amountDuffs: amt, rewardAddress: addr });
@@ -295,6 +382,32 @@ ok("toId32 rejects wrong-length bytes", core.toId32(Buffer.alloc(31, 1)) === nul
   const r = goldenReceipt(); r.poolId = core.decodeId32(GP); // 32 raw bytes, as read from the ledger
   ok("verify: ledger-native (bytes) poolId still matches", core.verifyReceiptAllocation(GC, r).ok);
 }
+
+// a soundness-review finding, the verifier path end to end: canonical bytes with a sub-floor row and a
+// CORRECT hash must fail verification with the floor reason, not pass on arithmetic
+// alone. OB sorts before OA by decoded id (pinned by the sort tests above).
+{
+  const script97 = "76a914" + "11".repeat(20) + "88ac";
+  const subFloorArr = ["tegara-completion-allocation", 1, GC, GP, "100000000000",
+    [[OB, "5000000000", 500, script97], [OA, "95000000000", 9500, script97]]];
+  const subFloorBytes = Buffer.from(JSON.stringify(subFloorArr), "utf8");
+  const vSub = core.verifyReceiptAllocation(GC, {
+    allocationRows: subFloorBytes, allocationHash: core.allocationHash(subFloorBytes) });
+  ok("a soundness-review finding: receipt verification refuses a sub-floor row",
+    !vSub.ok && /minimum share/.test(vSub.reason || ""));
+  // the BUILDER route (external artifact check, finding 5): the manifest builder must
+  // refuse the same shape, so a sub-floor receipt can never be produced by this code
+  let builderThrew = "";
+  try {
+    core.buildAllocationArray(GC, { v: 1, poolId: GP, realHash: "aa".repeat(32),
+      target: "100000000000", owners: [
+        { owner: OA, amountDuffs: "95000000000", bps: 9500, rewardScriptHex: script97 },
+        { owner: OB, amountDuffs: "5000000000", bps: 500, rewardScriptHex: script97 },
+      ] });
+  } catch (e) { builderThrew = (e && e.message) || ""; }
+  ok("a soundness-review finding: the manifest builder refuses a sub-floor owner",
+    /minimum share/.test(builderThrew));
+}
 // robustness: allocationHash may be given as a 64-hex string
 {
   const r = goldenReceipt(); r.allocationHash = GOLDEN_HASH; // hex string form
@@ -485,6 +598,52 @@ for (const [name, thrown] of [
     /cannot complete|product tier|two/.test(t(1, true, { demo: true }) || ""));
   ok("completable: zero owners is refused (a claim always adds one)",
     t(0, false) !== null);
+}
+
+// ---- nodeTypeForCollateral: the collateral names the type (EvoNodes E1-1). Predicate
+// table rows: the two valid amounts (one per type), the first invalid (off by one duff),
+// a plausible-but-wrong amount (the old 10-DASH rail scale), input-form coverage
+// (number, string, bigint all convert through toBig), and no disable path by design.
+{
+  // refusal rows require the THREW prefix, so a mutation returning the message text as
+  // a VALUE cannot satisfy them (round-17-style checker shape, applied at write time)
+  const t = (v) => { try { return core.nodeTypeForCollateral(v); } catch (e) { return `THREW: ${e.message}`; } };
+  ok("collateral 1000 DASH names regular", t(100000000000n) === "regular");
+  ok("collateral 4000 DASH names evo", t(400000000000n) === "evo");
+  ok("a number form converts (regular)", t(100000000000) === "regular");
+  ok("a string form converts (evo)", t("400000000000") === "evo");
+  ok("a number form converts (evo)", t(400000000000) === "evo");
+  ok("a string form converts (regular)", t("100000000000") === "regular");
+  ok("one duff off the regular target is refused, not rounded",
+    /^THREW: .*matches no known node type/.test(t(100000000001n)));
+  ok("the old rail demo scale (10 DASH) names nothing",
+    /^THREW: .*matches no known node type/.test(t(1000000000n)));
+  ok("an unconvertible value is refused",
+    /^THREW: /.test(t("not-duffs")));
+}
+
+// ---- nodeTypeForRail: the rail's creation-time decision. Collateral wins when
+// present; a declared type is validated by OWN-property membership against TARGETS
+// (the "toString" row pins the own-property rule); undeclared defaults to regular.
+{
+  const r = (args) => { try { return core.nodeTypeForRail(args); } catch (e) { return `THREW: ${e.message}`; } };
+  ok("an observed collateral names the type and wins",
+    r({ collateralDuffs: 400000000000n, declaredType: "regular" }) === "evo");
+  ok("the opposite conflict resolves the same way (regular collateral over a declared evo)",
+    r({ collateralDuffs: 100000000000n, declaredType: "evo" }) === "regular");
+  ok("a declared valid type is honored without an observation",
+    r({ declaredType: "evo" }) === "evo");
+  ok("undeclared defaults to regular", r({}) === "regular");
+  ok("a declared prototype-chain name is refused (own-property membership, not bracket lookup)",
+    /^THREW: .*not in the table/.test(r({ declaredType: "toString" })));
+  ok("a second prototype-chain name is refused too (no per-name special case)",
+    /^THREW: .*not in the table/.test(r({ declaredType: "constructor" })));
+  ok("a set-but-EMPTY declaration is refused rather than silently defaulted",
+    /^THREW: .*not in the table/.test(r({ declaredType: "" })));
+  ok("a declared unknown type is refused",
+    /^THREW: .*not in the table/.test(r({ declaredType: "banana" })));
+  ok("an unrecognized observed collateral refuses even with a valid declared type",
+    /^THREW: .*matches no known node type/.test(r({ collateralDuffs: 1n, declaredType: "regular" })));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -86,7 +86,7 @@ const classifyPoolInner = ({ contractId, pool, poolId, receipt = null, operatorH
       receiptOk = res.ok === true;
       if (!receiptOk) receiptReason = res.reason;
     }
-    // ON THE FLIP LEDGERS THE POOL'S OWN ASSERTION MUST AGREE (a soundness review): the
+    // ON THE FLIP LEDGERS THE POOL'S OWN ASSERTION MUST AGREE (a soundness-review finding): the
     // shared check binds the receipt to the pool's CONSTANTS, but on v8 the pool also
     // asserts the node and the lifecycle itself, and a structurally verifying receipt
     // over a still-forming pool, or over a pool live under a DIFFERENT hash, is a
@@ -379,7 +379,7 @@ const backingNode = ({ pool, receipt = null, receiptOk = false }) => {
     }
     const buf = Buffer.from(h);
     if (buf.length !== 32) return { known: false, why: "the receipt's proTxHash is not 32 bytes" };
-    // DEFENSIVE, and deliberately redundant with the shared check (a soundness review): `receiptOk`
+    // DEFENSIVE, and deliberately redundant with the shared check (a soundness-review finding): `receiptOk`
     // arrives from the caller, so a caller that verified nothing, or verified with an
     // older check, must still not be able to turn a reserved forming-namespace value
     // into an established node here. This is the one producer of node identities, so it
