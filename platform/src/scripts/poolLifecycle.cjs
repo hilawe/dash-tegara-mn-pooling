@@ -20,7 +20,7 @@
  * here. Nobody else can, and the funder client's admission rule is the consequence: it fails
  * closed on a receipt-less pool rather than guessing.
  *
- * THIS IS THE SHAPE THREE v9 REVIEW ROUNDS ARRIVED AT BY ELIMINATION. A mutable poolState, an
+ * THIS IS THE SHAPE THREE v9 reviews ARRIVED AT BY ELIMINATION. A mutable poolState, an
  * immutable-terms companion, and receipt-presence-as-liveness were each killed, because
  * Platform data contracts cannot express cross-document invariants and so cannot hold a
  * liveness claim that is guaranteed not to contradict. Completed, currently-active and
@@ -399,7 +399,7 @@ const backingNode = ({ pool, receipt = null, receiptOk = false }) => {
  *
  * Any caller about to record a statement ABOUT a node routes the identity through here, so a
  * change that lets an unestablished node reach a written document crashes on its first run
- * instead of publishing a false attribution and waiting for a review round to notice.
+ * instead of publishing a false attribution and waiting for a review to notice.
  *
  * WHAT THIS ENFORCES IS SHAPE, NOT PROVENANCE. It checks that the result says `known`, and
  * that the hex is a well-formed 32-byte value. It CANNOT prove the result came from

@@ -40,7 +40,7 @@ const { HEADER_KIND: CAP_HEADER, RECEIPT_KIND: CAP_RECEIPT,
 // visibly separate, the INTERNALS this suite reaches through the module's
 // test-only surface. The split is the point: an invariant these internals hold
 // through `runAudit` is not promised to an arbitrary direct caller, and several
-// review rounds were spent on claims that forgot that (round-65).
+// reviews were spent on claims that forgot that.
 const auditModule = require("./e2Audit.cjs");
 const {
   LABELS, ASPECT_TERMINALS, ASPECT_KEYS, GRADES, REPORT_KIND, runAudit,
@@ -569,7 +569,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
 
   {
     // an EMPTY interval has an empty permitted prefix: P is I minus U,
-    // and an empty I contains nothing to permit (round-4 finding 5)
+    // and an empty I contains nothing to permit (a review finding 5)
     const r = await resolveInterval({ requestedStart: 2, requestedEnd: null, configuredStart: 6,
       provedActivation: 6, fetchRange: ledgerFetch(0, true) });
     ok("an empty interval fabricates no prefix",
@@ -785,7 +785,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       annotation: { endEpoch: 3, recordsHeightMax: "1", note: "x" } }),
     /unknown members/);
 
-  // ---- object-mechanics closure and branch-evidence coherence (round 3) ----
+  // ---- object-mechanics closure and branch-evidence coherence ----
   throwsSync("an EVALUATED deactivation aspect in the open-ended branch refuses (branch coherence)",
     () => {
       const a = labelsAtTerminal("open-ended");
@@ -1132,7 +1132,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   {
     // fixture one, open-ended: every member and nested member compared
     // against a hand-built expected literal, so no output branch can be
-    // replaced behind the verdict (round-6 finding 3)
+    // replaced behind the verdict (a review finding 3)
     const rep = buildReport(reportInput());
     const expected = {
       v: 1, kind: "tegara.e2.auditReport.v1", poolId,
@@ -1356,7 +1356,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   throwsSync("a sparse per-epoch row ARRAY refuses (the row itself must be an own element)",
     () => buildReport({ ...reportInput(), epochs: Array(1) }), /own enumerable data element/);
   // the descriptor rule has THREE sub-conditions and Array(1) exercises only
-  // the hole (round-64, after an accessor and a non-enumerable element both
+  // the hole (a review, after an accessor and a non-enumerable element both
   // slipped a weakened rule): an ACCESSOR-backed row would re-run its getter
   // on each read, and a NON-ENUMERABLE row would vanish from a serialization,
   // so both are refused as not own-enumerable-data
@@ -1408,7 +1408,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       }
     }
     if (sharedCount === 0) {
-      // the zero-count cap (round-43): with nothing examined, a receipt
+      // the zero-count cap: with nothing examined, a receipt
       // label cannot outrank both OPERATOR-PROVIDED and the record set
       const bound = Math.max(specRank("OPERATOR-PROVIDED"), specRank(aspects.recordSet.label));
       for (const k of RECEIPT_ASPECT_KEYS) {
@@ -1481,7 +1481,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         // the ONE expected invalid-degradation shape is the zero-count
         // cap: the STRUCTURE must show it (zero counts, and a receipt
         // label now past the degraded bound), not just the message
-        // (round-45); any other exception is a real fault and fails
+        //; any other exception is a real fault and fails
         const rcK = ["transferExecution", "reservationPresence", "ordering"];
         const zeroed = rcK.every((k) => degraded.aspects[k].evaluated
           && degraded.aspects[k].examinedCount === 0);
@@ -1751,7 +1751,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const heightsByType = { header: "900", accrual: "901", reservation: "902",
       receipt: "903", part: "904" };
     const fetchVerifiedPage = opts.fetchVerifiedPage ?? (async ({ contractId, type, where, orderBy, limit, startAfter }) => {
-      // the adapter checks the exact query it receives (the round-6
+      // the adapter checks the exact query it receives (the review
       // provenance gap: a wrong or dropped predicate must fail loudly)
       if (opts.strictQueries !== false) {
         if (contractId !== GC) throw new Error(`page adapter: wrong contractId ${contractId}`);
@@ -1848,7 +1848,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // the missing-epoch-object branch is unreachable THROUGH THE ENTRY, whose
     // discovery is gapless, but this evaluator is EXPORTED and a direct caller
     // supplies epochInfo and resolution independently, so the branch is
-    // reachable exactly when those two disagree (round-63, correcting a
+    // reachable exactly when those two disagree (a review, correcting a
     // comment that had claimed unreachability without qualification). A branch
     // described as unreachable and left ungated is a claim a test cannot
     // support, so it is reached here rather than asserted away.
@@ -1886,7 +1886,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("EVERY recipient identity is looked up, by identity (a double read of one cannot stand in)",
       identityReads.size === 3 && [FA, FB, FC].every((f) => identityReads.has(f)));
     // and a FOUR-member pool looks up all four (the duty scales with the
-    // allocation, round-44)
+    // allocation, a review)
     const OD = toBase58(h32("ff")); // all-ff bytes, so this owner sorts LAST
     const w4 = mkWorld({ manifest: {
       v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
@@ -1907,7 +1907,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const f4 = await evaluateFormationInputs({ poolId: POOL_HEX, contractId: GC, deps: counting4 });
     ok("a four-member allocation drives four distinct identity lookups and proves formation",
       f4.label === "PROVED" && f4.rows.length === 4 && reads4.size === 4);
-    // and the FOURTH answer is consumed, not merely requested (round-45)
+    // and the FOURTH answer is consumed, not merely requested
     const FD = Buffer.from(core.decodeId32(OD)).toString("hex");
     const w4of = (ans) => ({ ...w4.deps, provedByKey: async (type, key) =>
       type === "identity" && sameIdTest(key.identityId, FD) ? ans
@@ -1924,7 +1924,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       evaluateFormationInputs({ poolId: POOL_HEX, contractId: GC,
         deps: w4of({ status: "served", doc: { id: FA }, height: "892" }) }),
       /DIFFERENT identity/);
-    // and a FIFTH member is reached too (round-60): a loop truncated at
+    // and a FIFTH member is reached too: a loop truncated at
     // any bound at or below four passes every fixture above, so the
     // coverage is proved past the largest earlier allocation
     const OE = toBase58(h32("fd"));
@@ -1996,7 +1996,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && fLateId.heights.includes("890") && fLateId.heights.includes("889"));
   }
   {
-    // evaluator duties WIRED, not merely present (round-37): the
+    // evaluator duties WIRED, not merely present: the
     // allocation recomputation, the fee grammar, the income-identity
     // binding, the in-scope feeCredits comparison, and the entry's
     // dependency checks each have an isolated adverse gate
@@ -2032,7 +2032,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       ok(`a missing deps.${missing} is a structured REFUSED-INPUT`,
         rD.verdict === "REFUSED-INPUT" && rD.reason.includes(missing));
     }
-    // the verifier PIPELINE is validated at the entry too (round-40)
+    // the verifier PIPELINE is validated at the entry too
     for (const vk of ["decodeProofCarrier", "decodeMetadata", "decodeTransfer", "verifyStageOne", "verifyStageTwo"]) {
       const wV40 = mkWorld();
       const rV40 = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-nodep"),
@@ -2040,7 +2040,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       ok(`a missing verifierDeps.${vk} is a structured REFUSED-INPUT`,
         rV40.verdict === "REFUSED-INPUT" && rV40.reason.includes(vk));
     }
-    // an adapter FAULT in the basis check is never evidence (round-40),
+    // an adapter FAULT in the basis check is never evidence,
     // on the header path and the RECEIPT path separately (each has its
     // own gate, so each direction gets its own fixture)
     const wThrow = mkWorld({ verifyCaptureBasis: async () => { throw new Error("key resolution unavailable"); } });
@@ -2057,7 +2057,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       cap.kind === CAP_HEADER ? true : "true" });
     await rejects("a receipt-side non-boolean basis result is an adapter-contract fault too",
       runLedger(wStrR), /requires true or false/);
-    // a SELF-SET refusal property is not a refusal (round-42): only the
+    // a SELF-SET refusal property is not a refusal: only the
     // verifier modules' own constructed refusals classify as evidence
     const wSelfSet = mkWorld({ verifyCaptureBasis: async (cap) => cap.kind !== CAP_HEADER });
     await rejects("an adapter error carrying a self-set verificationRefusal property still propagates",
@@ -2065,8 +2065,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         verifyStageOne: async () => { const e = new Error("proof helper unavailable");
           e.verificationRefusal = true; throw e; } } } }),
       /proof helper unavailable/);
-    // classification is by ORIGIN, never textual (round-41; the mechanism
-    // became a membership record round-61): a plain adapter error whose
+    // classification is by ORIGIN, never textual (a review; the mechanism
+    // became a membership record a review): a plain adapter error whose
     // message merely ends in "refusing" still propagates.
     // The header basis is disabled in these worlds so the fault fires in
     // the RECEIPT path's catches, the ones under test.
@@ -2123,7 +2123,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("a receipt owned by a different identity refuses the six-duty pair check",
       f.label === "REFUSED" && /pair check/.test(f.reason));
     // a FOREIGN-POOL completion receipt is a nonconforming answer, so
-    // its height never enters the range (round-46)
+    // its height never enters the range
     const wFor = mkWorld();
     const foreignFr = { ...wFor.fr, poolId: Buffer.from(h32("77"), "hex") };
     const fFor = await evaluateFormationInputs({ poolId: POOL_HEX, contractId: GC,
@@ -2165,7 +2165,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       expectedContractPayload: nested, deps: w.deps });
     ok("a NESTED-member divergence refuses (comparison recurses into nested members, not a top-level shortlist)",
       c2n.label === "REFUSED");
-    // divergence in members OUTSIDE any plausible shortlist (round-60):
+    // divergence in members OUTSIDE any plausible shortlist:
     // canonical equality covers EVERY contract-defined member, so an extra
     // top-level member and an extra nested member both refuse
     const cExtraTop = await evaluateContractIntegrity({ contractId: GC,
@@ -2183,7 +2183,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       deps: { ...w.deps, provedByKey: async () => ({ status: "unverified" }) } });
     ok("an unverified contract read is UNPROVED", c3.label === "UNPROVED");
     // the malformed-payload refusal cannot be SIDESTEPPED by the adapter's
-    // answer (round-61): a malformed REQUEST is a property of the request
+    // answer: a malformed REQUEST is a property of the request
     // alone, so the supplied payload is validated BEFORE the read and on
     // every path. This case previously reached UNPROVED with the payload
     // never examined (the fixture above supplied the FETCHED shape, envelope
@@ -2199,7 +2199,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     }
     // an UNRECOGNIZED $-member on the FETCHED document is a divergence the
     // comparison cannot account for, never a member to drop silently
-    // (round-61): stripping by the $ prefix made this document compare equal
+    //: stripping by the $ prefix made this document compare equal
     // to the expected payload, because the extra member disappeared first.
     const cFetchedExtra = await evaluateContractIntegrity({ contractId: GC,
       expectedContractPayload: w.deps.expectedContractPayload,
@@ -2209,8 +2209,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       cFetchedExtra.label === "REFUSED" && /outside the known platform envelope/.test(cFetchedExtra.reason));
     // and a RECOGNIZED envelope member is still stripped, so an ordinary
     // fetched document with its envelope still proves. EVERY listed member is
-    // exercised (round-62): a list entry no gate reaches is an unchecked
-    // assumption about the platform's envelope, and the round-61 list carried
+    // exercised: a list entry no gate reaches is an unchecked
+    // assumption about the platform's envelope, and the review list carried
     // four such entries, two of which a data contract can legitimately use as
     // real content.
     const ENVELOPE_UNDER_TEST = { $ownerId: h32("a1"), $revision: 3,
@@ -2233,7 +2233,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       cEnvelopeOk.label === "PROVED");
     // members the list deliberately does NOT carry, including two a data
     // contract can legitimately use as its own content, refuse rather than
-    // being dropped (round-62): stripping those would hide a divergence in
+    // being dropped: stripping those would hide a divergence in
     // the very document this aspect compares
     for (const member of ["$schema", "$defs", "$version", "$format_version", "$future"]) {
       const cUnknown = await evaluateContractIntegrity({ contractId: GC,
@@ -2252,7 +2252,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         /system-namespace members/);
     }
     // a supplied payload carrying a $-member cannot slip a difference past
-    // the comparison by being stripped (round-55, F4): a registration
+    // the comparison by being stripped (a review finding): a registration
     // payload has no system-namespace members, so a supplied $-member is
     // refused rather than dropped. Without this, a supplied "$policy" absent
     // from the fetched contract would compare equal (both stripped).
@@ -2261,7 +2261,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         expectedContractPayload: { ...w.deps.expectedContractPayload, $policy: true }, deps: w.deps }),
       /system-namespace members/);
     // a revoked-proxy payload passed DIRECTLY to the exported evaluator is
-    // refused cleanly (round-57): the Array.isArray classification throws on a
+    // refused cleanly: the Array.isArray classification throws on a
     // revoked proxy and is guarded, so it refuses rather than escaping raw.
     const revC = Proxy.revocable({ version: "v11" }, {}); revC.revoke();
     await rejects("a revoked-proxy expected payload is refused, never an escaping raw TypeError",
@@ -2273,7 +2273,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // canonicalString. Because the comparison reads the captured copy, the
     // divergence stands and the aspect refuses; a validate-then-reread
     // would have compared the get-trap members and passed vacuously
-    // (round-53, finding 1).
+    // (a review finding).
     {
       const matching = w.deps.expectedContractPayload;
       const divergent = { ...matching, version: "v12" };
@@ -2309,7 +2309,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       () => evaluateReservationPresence(receipt, { status: "served", doc: w.reservations[0] }),
       /authenticated height/);
     // a REVOKED-Proxy answer passed DIRECTLY to the exported evaluator is
-    // refused cleanly (round-57): requireAnswer's Array.isArray classification
+    // refused cleanly: requireAnswer's Array.isArray classification
     // throws on a revoked proxy, so it is guarded, and the answer is rejected
     // as a non-plain envelope rather than escaping as a raw TypeError.
     {
@@ -2323,7 +2323,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // its get trap would serve a foreign-pool doc that refuses. The
     // exported evaluator must judge on the captured conforming doc, so a
     // get-trap divergence cannot substitute unchecked evidence for the
-    // validated answer (round-53, finding 1).
+    // validated answer (a review finding).
     {
       const conforming = w.reservations[0];
       const divergent = { ...w.reservations[0], poolId: h32("99") };
@@ -2375,7 +2375,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("a capture without a verifying signature basis refuses (validity clause 1)",
       noBasis.label === "REFUSED" && /clause 1/.test(noBasis.reason));
     // the transfer evaluator's OWN capture-basis catch formats the caught
-    // value totally (round-58, F1): a null-prototype thrown value is a clean
+    // value totally (a review finding): a null-prototype thrown value is a clean
     // adapter-fault Error here (line reached directly, not via the header
     // capture check), never an escaping raw TypeError.
     await rejects("a capture-basis adapter throwing a null-prototype value refuses the transfer with a clean Error, never an escaping raw TypeError",
@@ -2442,7 +2442,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       evaluateOrdering({ ...base, headerCaptureValid: false }).label === "OPERATOR-PROVIDED");
     ok("differing height routes degrade (same-route equality is the testable form)",
       evaluateOrdering({ ...base, headerCapture: { ...w.headerCaps[0], heightRoute: "other-route" } }).label === "OPERATOR-PROVIDED");
-    ok("routes sharing a prefix but differing at the tail are different routes (round-60)",
+    ok("routes sharing a prefix but differing at the tail are different routes",
       evaluateOrdering({ ...base, headerCapture: { ...w.headerCaps[0], heightRoute: "tenderdash-txx" } }).label === "OPERATOR-PROVIDED");
     ok("an inclusion height EQUAL to the header's degrades (strictly greater is required)",
       evaluateOrdering({ ...base, capture: { ...w.captures[0], inclusionHeight: "1000" } }).label === "OPERATOR-PROVIDED");
@@ -2497,7 +2497,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // boundary accepts (a null prototype is permitted), so it reaches the
     // recompute diagnostics; a raw `${value}` interpolation of it throws
     // an untyped TypeError (no toString) instead of the intended record-set
-    // refusal (round-53, finding 2). scalarShow routes only the
+    // refusal (a review finding). scalarShow routes only the
     // non-primitive case through the safe stringifier, so the mismatch
     // yields a clean REFUSED, and a real integer field reads unchanged.
     const wMc = mkWorld({ mutateDocs: (docs) => { docs.header[0].memberCount = Object.create(null); } });
@@ -2514,13 +2514,13 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // unguarded interpolation: a null-prototype epoch index is flagged by
     // the grammar sweep, and the slot loop must skip it rather than
     // interpolate it into an untyped throw before the structural refusal
-    // returns (round-53, finding 2)
+    // returns (a review finding)
     const wSlot = mkWorld({ mutateDocs: (docs) => { docs.accrual[0].epochIndex = Object.create(null); } });
     const ledSlot = await runLedger(wSlot, { formation: { label: "UNPROVED" } });
     ok("a null-prototype epoch index refuses structurally on the unavailable path, never throwing in the slot construction",
       ledSlot.recordSet.label === "REFUSED"
       && ledSlot.diagnostics.poolGlobal.some((d) => /malformed epoch index/.test(d)));
-    // the SAME class at the other forward-pass diagnostics (round-54): a
+    // the SAME class at the other forward-pass diagnostics: a
     // null-prototype calcVersion, allocationHash or funder identifier the
     // plain-data domain admits must refuse cleanly, not throw in a raw
     // interpolation or String() conversion
@@ -2653,7 +2653,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("the missing row's contribution stands alone in a narrowed interval",
       ledN.aggregates.transferExecution === "REFUSED");
     // an enumerated reservation beside a pinned PROVED ABSENCE: the
-    // absence's proof height still enters the range (round-13 finding 1)
+    // absence's proof height still enters the range (a review finding 1)
     const wAbs = mkWorld({ provedByKey: (base) => async (type, key) =>
       type === "reservationByAccrual"
         ? { status: "proved-absence", height: "2000" } : base(type, key) });
@@ -2799,7 +2799,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
 
   {
-    // the round-1 checker's exactness gaps, each now refused
+    // the review's exactness gaps, each now refused
     const dup = mkWorld({ mutateDocs: (docs) => { docs.header.push({ ...docs.header[0], id: h32("f1") }); } });
     const ledDup = await runLedger(dup);
     ok("a DUPLICATE header for an epoch is a fetched extra",
@@ -2884,7 +2884,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // dangling dependents are settled by the PINNED BY-IDENTIFIER read,
-    // never by enumeration absence (rounds 15, 16 and 19): with the read
+    // never by enumeration absence (successive reviews): with the read
     // UNSERVED they stay possible orphans, narrowed interval or whole
     // universe alike, and with a PROVED ABSENCE they are genuine
     // orphans, narrowed or not
@@ -2965,7 +2965,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("a prototype-carried expected payload is a structured REFUSED-INPUT at the entry, never an escaping throw",
       rEntry.verdict === "REFUSED-INPUT" && /plain data/.test(rEntry.reason));
     // a supplied $-member is a structured REFUSED-INPUT THROUGH THE ENTRY too
-    // (round-56, F1): the evaluator's own $-check throws a plain refusal that
+    // (a review finding): the evaluator's own $-check throws a plain refusal that
     // runAudit's catch would not convert, so the entry owns the input typing.
     const rDollar = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-nodep"),
       deps: { ...w3.deps, expectedContractPayload: { ...w3.deps.expectedContractPayload, $policy: true } } });
@@ -2973,7 +2973,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       rDollar.verdict === "REFUSED-INPUT" && /system-namespace/.test(rDollar.reason));
     // each of the THREE throwing reflective traps on the payload is a
     // structured REFUSED-INPUT through the entry, not an escaping adapter
-    // error (round-56 F2, all three covered round-57 F3)
+    // error (a review F2, all three covered a review F3)
     for (const trap of [
       { ownKeys() { throw new Error("ownKeys trap"); } },
       { getPrototypeOf() { throw new Error("getPrototypeOf trap"); } },
@@ -2985,7 +2985,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     }
     // a REVOKED-Proxy payload is likewise a structured REFUSED-INPUT: the
     // Array.isArray classification throws on a revoked proxy and is guarded
-    // (round-57, F2)
+    // (a review finding)
     const revPay = Proxy.revocable({ version: "v11" }, {}); revPay.revoke();
     const rRev = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-nodep"),
       deps: { ...w3.deps, expectedContractPayload: revPay.proxy } });
@@ -3018,7 +3018,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && ledU.diagnostics.poolGlobal.some((d) => /malformed accrual reference/.test(d)));
     // a NULL-PROTOTYPE reference is plain data at the boundary yet no
     // identifier: it must refuse through the grammar, never crash the
-    // normalizer (round-48)
+    // normalizer
     const wNP = mkWorld({ mutateDocs: (docs) => { docs.part.push({ id: h32("f9"),
       poolId: docs.receipt[0].poolId, accrualId: Object.create(null) }); } });
     const ledNP = await runLedger(wNP);
@@ -3026,7 +3026,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       ledNP.recordSet.label === "REFUSED"
       && ledNP.diagnostics.poolGlobal.some((d) => /malformed accrual reference/.test(d)));
     // a ONE-ELEMENT ARRAY around a real identifier cannot coerce into a
-    // valid key (round-51), on the normal and unavailable paths alike
+    // valid key, on the normal and unavailable paths alike
     const mutArr = (docs) => { docs.part.push({ id: h32("f9"),
       poolId: docs.receipt[0].poolId, accrualId: [docs.accrual[0].id] }); };
     const ledArr = await runLedger(mkWorld({ mutateDocs: mutArr }));
@@ -3072,7 +3072,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && ledInc.diagnostics.poolGlobal.some((d) => /INCOMPLETE/.test(d))
       && ledInc.heightCandidates.includes("919")
       && ledInc.lag.undistributedCredits === "0");
-    // the round-23 must-fix: the recovered accrual conforms but its
+    // the review must-fix: the recovered accrual conforms but its
     // DEPENDENT does not (the enumerated receipt carries another
     // funder's transfer), so the forward evaluation refuses the receipt
     let gone3;
@@ -3178,7 +3178,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // same-type MULTIPLICITY under a recovered accrual refuses through
     // the forward evaluation, ONE settlement read serving both; and the
     // same pair under an accrual recovered at an IGNORED epoch carries
-    // no obligation (round-23)
+    // no obligation
     let byIdCalls = 0;
     const recovered = { id: h32("f9"), poolId: POOL_HEX, epochIndex: 5, funderId: FB, amountCredits: 240000 };
     const mkw = (byIdDoc) => mkWorld({ mutateDocs: (docs) => {
@@ -3278,7 +3278,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       ledR.recordSet.label === "REFUSED"
       && ledR.diagnostics.poolGlobal.some((d) => /reservations under/.test(d)));
     // duplicate ACCRUAL SLOTS refuse on the unavailable path, and an
-    // ignored epoch's pair carries no obligation (round-31)
+    // ignored epoch's pair carries no obligation
     const mkDupA = () => mkWorld({
       mutateDocs: (docs) => { docs.accrual.push({ ...docs.accrual[0], id: h32("f5") }); },
       provedByKey: (base) => async (type, key) =>
@@ -3293,7 +3293,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && !ledAN.diagnostics.poolGlobal.some((d) => /accruals share the slot/.test(d)));
   }
   {
-    // record GRAMMAR holds on both paths (round-32): a string epoch
+    // record GRAMMAR holds on both paths: a string epoch
     // index and a malformed funder identifier each refuse, with the
     // formation available or not, and a STRING-TYPED credits value never
     // compares equal to its recomputed integer text
@@ -3313,7 +3313,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         && ledU.diagnostics.poolGlobal.some((d) => /malformed epoch index|malformed funder identifier/.test(d)));
     }
     // an IGNORED epoch's malformed funder carries no obligation
-    // (round-42): the epoch classifies safely, so no duty attaches
+    //: the epoch classifies safely, so no duty attaches
     const narrowed42 = await resolveInterval({ requestedStart: 6, requestedEnd: null,
       configuredStart: 5, fetchRange: async (start, end) => ({
         epochs: [{ number: 6, totalProcessingFees: "5000000", totalDistributedStorageFees: "0",
@@ -3352,7 +3352,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // formation-FREE prefix duties hold on the unavailable path
-    // (round-33): a nonzero proposer count, a nonzero prefix accrual,
+    //: a nonzero proposer count, a nonzero prefix accrual,
     // and transfer records under it all refuse with the pool read
     // unserved
     const w = mkWorld({ provedActivation: 5,
@@ -3380,7 +3380,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.diagnostics.poolGlobal.some((d) => /prefix accrual in epoch 4 does not carry an integer-zero amount/.test(d))
       && led.diagnostics.poolGlobal.some((d) => /transfer records exist under a prefix accrual in epoch 4/.test(d)));
     // a zero-credit prefix header with a wrong calcVersion refuses too
-    // (round-36): the version check needs no formation rows
+    //: the version check needs no formation rows
     const wV = mkWorld({ provedActivation: 5,
       fetchRange: async (start, end) => ({ epochs: [
         { number: 4, totalProcessingFees: "1", totalDistributedStorageFees: "0",
@@ -3414,7 +3414,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("a fee-only nonzero prefix header refuses on the unavailable path",
       ledF2.recordSet.label === "REFUSED"
       && ledF2.diagnostics.poolGlobal.some((d) => /header does not carry integer-zero credits/.test(d)));
-    // the basic member GRAMMAR refuses there too (round-37)
+    // the basic member GRAMMAR refuses there too
     for (const [what, patch] of [["a non-integer memberCount", { memberCount: 3.5 }],
       ["a NEGATIVE memberCount", { memberCount: -1 }],
       ["a non-string allocationHash", { allocationHash: 7 }],
@@ -3457,7 +3457,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // the reservation chain equality requires a WELL-FORMED receipt hash
-    // (round-33): two absent members compare equal but prove nothing
+    //: two absent members compare equal but prove nothing
     const f = evaluateReservationPresence(
       { poolId: POOL_HEX, accrualId: h32("20") },
       { status: "served", height: "915",
@@ -3469,7 +3469,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       { status: "served", height: "915",
         doc: { id: h32("50"), poolId: POOL_HEX, accrualId: h32("20"), transitionHash: null } });
     ok("equal null transition hashes refuse too", f2.label === "REFUSED");
-    // the answer union is DISCRIMINATED (round-40): members outside the
+    // the answer union is DISCRIMINATED: members outside the
     // declared variant are contradictory shapes and refuse hard
     throwsSync("a proved absence carrying a document is a contradictory envelope",
       () => evaluateReservationPresence({ poolId: POOL_HEX, accrualId: h32("20") },
@@ -3479,7 +3479,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       () => evaluateReservationPresence({ poolId: POOL_HEX, accrualId: h32("20") },
         { status: "unserved", height: "915" }),
       /outside|unknown members/);
-    // the ENVELOPE validates before any member read (round-41): a
+    // the ENVELOPE validates before any member read: a
     // self-replacing status accessor refuses outright
     const spyAns = { doc: { id: h32("50"), poolId: POOL_HEX, accrualId: h32("20") } };
     Object.defineProperty(spyAns, "status", { enumerable: true, configurable: true,
@@ -3488,7 +3488,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       () => evaluateReservationPresence({ poolId: POOL_HEX, accrualId: h32("20") }, spyAns),
       /accessor-backed/);
     // an ARRAY envelope with a throwing status getter refuses without
-    // even its refusal message reading the member (round-52)
+    // even its refusal message reading the member
     let arrReads = 0;
     const arrAns = [];
     Object.defineProperty(arrAns, "status", { enumerable: true, configurable: true,
@@ -3509,7 +3509,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // an unresolved expected-accrual fallback no longer decides a
-    // dangling dependent (round-19): the by-identifier read does. With
+    // dangling dependent: the by-identifier read does. With
     // both reads unserved the dependent stays a possible orphan; with
     // the base world's proved absence it is a genuine orphan
     let gone;
@@ -3550,7 +3550,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.perEpoch.get(5).diagnostics.some((d) => /amount 999 differs/.test(d)));
   }
   {
-    // SETTLEMENT runs before the formation gate (round-34): a dangling
+    // SETTLEMENT runs before the formation gate: a dangling
     // reference on the unavailable path is settled by the pinned read,
     // so a PROVED absence is a genuine orphan refusal there too, while
     // an UNSERVED read still leaves only a possible orphan
@@ -3570,7 +3570,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // a RECOVERED prefix violation refuses on the unavailable path
-    // (round-34): the enumeration omits the accrual, the pinned read
+    //: the enumeration omits the accrual, the pinned read
     // serves it at a prefix epoch with a nonzero amount, the pool read
     // is unserved
     const w = mkWorld({ provedActivation: 5,
@@ -3597,7 +3597,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.diagnostics.poolGlobal.some((d) => /prefix accrual in epoch 4 does not carry an integer-zero amount/.test(d)));
   }
   {
-    // SETTLEMENT survives a missing sibling enumeration (round-35): the
+    // SETTLEMENT survives a missing sibling enumeration: the
     // part enumeration is unserved, and the dangling receipt's proved
     // absence still refuses as a genuine orphan
     const w = mkWorld({ mutateDocs: (docs) => { docs.receipt.push({ ...docs.receipt[0],
@@ -3611,7 +3611,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.diagnostics.poolGlobal.some((d) => /whose absence is proved \(an orphan\)/.test(d)));
   }
   {
-    // settlement survives an UNAVAILABLE ACCRUAL ENUMERATION (round-37):
+    // settlement survives an UNAVAILABLE ACCRUAL ENUMERATION:
     // the pinned by-identifier read is its own proof, so a proved
     // absence refuses as an orphan and a recovered prefix violation
     // refuses through the prefix sweep, with no accrual enumeration at
@@ -3645,7 +3645,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("a recovered nonzero prefix accrual refuses even with the accrual enumeration unavailable",
       ledPre37.recordSet.label === "REFUSED"
       && ledPre37.diagnostics.poolGlobal.some((d) => /prefix accrual in epoch 4 does not carry an integer-zero amount/.test(d)));
-    // a recovered OUT-OF-DOMAIN accrual refuses there too (round-38)
+    // a recovered OUT-OF-DOMAIN accrual refuses there too
     const wExtra = mkNoAcc({ provedByKey: (base) => async (type, key) =>
       type === "pool" ? { status: "unserved" }
         : type === "accrualById"
@@ -3666,7 +3666,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // a recovered accrual served under its BASE58 spelling still feeds
-    // the sweeps (round-35): the identifier is normalized at the join
+    // the sweeps: the identifier is normalized at the join
     const w = mkWorld({ provedActivation: 5,
       fetchRange: async (start, end) => ({ epochs: [
         { number: 4, totalProcessingFees: "1", totalDistributedStorageFees: "0",
@@ -3693,7 +3693,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   {
     // a proved reservation ABSENCE beside an ENUMERATED reservation, on
     // the missing-receipt row, is a fetched mismatch and refuses the
-    // record set (round-35)
+    // record set
     let a0;
     const w = mkWorld({ mutateDocs: (docs) => { a0 = docs.accrual[0]; docs.receipt.splice(0, 1); },
       provedByKey: (base) => async (type, key) =>
@@ -3954,7 +3954,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         ? { status: "served", doc: stolen, height: "942" }
         : w.deps.provedByKey(type, key) };
     const led = await runLedger({ ...w, deps });
-    ok("a fallback receipt is never re-reported as an in-flight reservation, and the recovery degrades completeness to UNPROVED (round-54, F5)",
+    ok("a fallback receipt is never re-reported as an in-flight reservation, and the recovery degrades completeness to UNPROVED (a review finding)",
       led.recordSet.label === "UNPROVED"
       && led.perEpoch.get(5).diagnostics.some((d) => /INCOMPLETE/.test(d))
       && !led.diagnostics.poolGlobal.some((d) => /no receipt/.test(d)));
@@ -3964,7 +3964,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   {
     // a conforming RESERVATION the pinned read serves but the enumeration
     // omitted degrades record-set completeness to UNPROVED, extending the
-    // F5 recovery policy to the reservation path (round-55, F2). The
+    // F5 recovery policy to the reservation path (a review finding). The
     // reservation ASPECT stays PROVED (the record is present and conforms).
     const w = mkWorld();
     const stolen = w.docs.reservation[0];
@@ -3978,7 +3978,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       led.receiptEvaluations.every((e) => e.reservation === "PROVED")
       && led.recordSet.label === "UNPROVED"
       && led.perEpoch.get(5).diagnostics.some((d) => /reservation: recovered by the pinned read but ABSENT/.test(d)));
-    // the recovery does NOT mark the epoch's DISTRIBUTION incomplete (round-59,
+    // the recovery does NOT mark the epoch's DISTRIBUTION incomplete (a review,
     // F3): a recovered record EXISTS and conforms, so the four recovery paths
     // share one rule, degrade record-set completeness but never lag. The
     // distribution-incomplete diagnostic must be absent and lagCount zero.
@@ -3988,7 +3988,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // the enumeration and the pinned UNIQUE-KEY reservation read serving
-    // DIFFERENT documents is a fetched mismatch that refuses (round-58, F2):
+    // DIFFERENT documents is a fetched mismatch that refuses (a review finding):
     // both conform to the receipt individually, but a unique-key read cannot
     // serve a different identifier than the enumeration for the same accrual.
     const w = mkWorld();
@@ -4004,7 +4004,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.perEpoch.get(5).diagnostics.some((d) => /serve DIFFERENT documents/.test(d)));
   }
   {
-    // the SAME identity cross-check on the MISSING-RECEIPT path (round-59, F1):
+    // the SAME identity cross-check on the MISSING-RECEIPT path (a review finding):
     // the receipt is omitted (its known-key read unserved), the enumeration
     // serves reservation R1, and the pinned read serves a DIFFERENT conforming
     // reservation R2. The two unique-key reads disagreeing is a fetched
@@ -4024,7 +4024,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.perEpoch.get(5).diagnostics.some((d) => /serve DIFFERENT documents/.test(d)));
   }
   {
-    // the identity cross-checks compare WHOLE identifiers (round-60): two
+    // the identity cross-checks compare WHOLE identifiers: two
     // documents whose identifiers share a long common prefix and differ
     // only at the tail are still DIFFERENT documents, on both paths
     const w = mkWorld();
@@ -4056,7 +4056,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // the reservation-to-receipt transitionHash binding compares WHOLE
-    // hashes (round-60): a bound hash equal in prefix and differing only
+    // hashes: a bound hash equal in prefix and differing only
     // at the tail is a fetched mismatch
     const w = mkWorld({ mutateDocs: (docs) => {
       const t = docs.receipt[0].transitionHash;
@@ -4068,8 +4068,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.perEpoch.get(5).diagnostics.some((d) => /different transitionHash/.test(d)));
   }
   {
-    // ---- THE VERIFICATION BOUNDARY (round-65) ----
-    // Everything rounds 59 through 64 built here is DELETED with the machinery
+    // ---- THE VERIFICATION BOUNDARY ----
+    // Everything those successive reviews built here is DELETED with the machinery
     // it defended: the recognizers, the private registries, the disown helper,
     // the call wrappers, and the retained-refusal, recovered-constructor,
     // accessor-lookup and revoked-proxy cases that existed only to prove those
@@ -4090,7 +4090,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       chainIdPin: CHAIN, capture: w.captures[0], supersessions: [], deps: refusing });
     ok("a RETURNED refusal from the verifier becomes adverse evidence on the transfer aspect",
       refused.label === "REFUSED" && /stage two/.test(refused.reason));
-    // the CAPTURE verdict is read separately from the receipt's (round-65):
+    // the CAPTURE verdict is read separately from the receipt's:
     // this capture fails its OWN clauses (a non-canonical inclusion height)
     // while the receipt verifies, so only the capture read can produce the
     // refusal, and ignoring that verdict would grade the epoch as executed
@@ -4143,7 +4143,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // a proved-read adapter that throws SYNCHRONOUSLY (rather than returning
-    // a rejected promise) is inside the guard too (round-61): the read used
+    // a rejected promise) is inside the guard too: the read used
     // to be INVOKED while building the argument, so the call happened before
     // the guard was entered and a synchronous throw escaped raw. The guard
     // takes a thunk, so a synchronous throw and a rejection are one event.
@@ -4172,7 +4172,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     await rejects("a SYNCHRONOUSLY throwing reservation read refuses through the ledger evaluation",
       runLedger({ ...w, deps: depsSyncR }),
       /a proved adapter read failed \(the decoder is unavailable\)/);
-    // EVERY read type, not the three that happened to be cited (round-62):
+    // EVERY read type, not the three that happened to be cited:
     // one call site left passing an already-invoked promise would let a
     // synchronous decoder fault escape there while these gates stayed true,
     // so each type is driven through a world that reaches it.
@@ -4217,9 +4217,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // a capture-basis adapter that throws a NULL-PROTOTYPE value is a clean
-    // adapter-fault Error, never an escaping raw TypeError (round-58, F1): the
+    // adapter-fault Error, never an escaping raw TypeError (a review finding): the
     // caught value is formatted totally, the same class the plain-data catch
-    // handled in round 57.
+    // handled in a review.
     const w = mkWorld({ verifyCaptureBasis: async () => { throw Object.create(null); } });
     await rejects("a capture-basis adapter throwing a null-prototype value is a clean adapter-fault Error, never an escaping raw TypeError",
       runLedger(w), /capture-basis adapter failed/);
@@ -4281,7 +4281,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         ? { status: "served", doc: kept, height: "941" }
         : wGood.deps.provedByKey(type, key) };
     const ledGood = await runLedger({ ...wGood, deps: wGoodDeps });
-    ok("a conforming fallback accrual joins the resolution index (its dependents are never orphans) and degrades completeness to UNPROVED (round-54, F5)",
+    ok("a conforming fallback accrual joins the resolution index (its dependents are never orphans) and degrades completeness to UNPROVED (a review finding)",
       ledGood.recordSet.label === "UNPROVED" && ledGood.diagnostics.orphans.length === 0
       && ledGood.perEpoch.get(5).diagnostics.some((d) => /INCOMPLETE/.test(d)));
     ok("the fallback accrual's height enters the range candidates (a value no enumeration supplies)",
@@ -4293,7 +4293,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     await rejects("a missing expected payload refuses hard, never PROVED",
       evaluateContractIntegrity({ contractId: GC, expectedContractPayload: undefined, deps: w.deps }),
       /needs the supplied registration payload/);
-    // the supplied payload here is the CLEAN registration shape (round-61):
+    // the supplied payload here is the CLEAN registration shape:
     // the fetched shape carries the platform envelope, which the supplied
     // payload never does, and supplying it now refuses at the request check
     // before the adapter answer is ever read, which is a different assertion
@@ -4342,7 +4342,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   {
     // a FALLBACK zero-entitlement accrual is swept for dependents too:
     // remove epoch 6's accrual from the enumeration, serve it by known
-    // key, and enumerate a receipt under it (the round-6 gap)
+    // key, and enumerate a receipt under it (the review gap)
     const w = mkWorld();
     const zeroAccrual = w.docs.accrual.find((a) => a.epochIndex === 6 && a.funderId === FA);
     w.docs.accrual = w.docs.accrual.filter((a) => a !== zeroAccrual);
@@ -4488,7 +4488,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   {
     // the known-key binds NORMALIZE: a base58 spelling of the same pool
     // is the SAME key, never a different-key refusal. The recovery still
-    // degrades completeness to UNPROVED (round-54, F5); the point here is
+    // degrades completeness to UNPROVED (a review finding); the point here is
     // that it is UNPROVED (recovered), not REFUSED (a mis-normalized key).
     const w = mkWorld({ mutateDocs: (docs) => {
       const h = docs.header[0];
@@ -4598,8 +4598,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       walkFrozen(rep));
   }
   {
-    // A THROWN VALUE RESISTANT TO INSPECTION IS OUT OF SCOPE (round-65). The
-    // round-59 test that lived here asserted that a revoked Proxy thrown by a
+    // A THROWN VALUE RESISTANT TO INSPECTION IS OUT OF SCOPE. The
+    // a review test that lived here asserted that a revoked Proxy thrown by a
     // verifier stage leaves runAudit with its identity preserved, and it is
     // deleted with the machinery that made that true.
     //
@@ -4627,10 +4627,10 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       thrown === boom && resolved === null);
   }
   {
-    // DEPENDENCIES ARE NORMALIZED ONCE (round-65). Every member is read exactly
+    // DEPENDENCIES ARE NORMALIZED ONCE. Every member is read exactly
     // once at the entry into a frozen capability record and nothing downstream
     // consults the caller's object again, so an accessor cannot serve one value
-    // to a validation and a different one to a use. Earlier rounds enforced this
+    // to a validation and a different one to a use. Earlier reviews enforced this
     // member by member as reviewers found each one; the record makes it
     // structural.
     //
@@ -4658,9 +4658,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     if (overRead.length) console.error("   read more than once:", JSON.stringify(overRead));
   }
   {
-    // THE PUBLIC SURFACE IS PINNED (round-65). An evaluator that drifts back
+    // THE PUBLIC SURFACE IS PINNED. An evaluator that drifts back
     // onto the public surface silently turns an entry-level invariant into a
-    // contract for callers nobody has written, which is what several rounds of
+    // contract for callers nobody has written, which is what several reviews of
     // claim-width findings were actually about. This states the intended
     // surface literally, so widening it is a decision somebody makes here
     // rather than a side effect of adding an export.
@@ -4684,7 +4684,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // the exported class makes instanceof reproducible from outside: a
     // deliberate adapter can throw an object INHERITING the exported
     // prototype, carrying a reason of its own choosing. Classification is
-    // by membership in the module-private refusal set (round-60), so the
+    // by membership in the module-private refusal set, so the
     // imitation is NOT converted into a structured REFUSED-INPUT and leaves
     // runAudit as the adapter fault it is, identity preserved.
     const w = mkWorld();
@@ -4770,7 +4770,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("a non-eligible pool refuses formation THROUGH the entry",
       repF.aspects.formationInputs.label === "REFUSED" && repF.verdict === "REFUSED-REPORT");
     // UNAVAILABLE formation COMBINED WITH a structural record-set refusal
-    // grades cleanly, never throwing in the zero-examined rule (round-54,
+    // grades cleanly, never throwing in the zero-examined rule (a review,
     // F6): the unavailable path returns UNPROVED per-receipt aggregates and
     // examinedCount 0 beside a REFUSED record set. UNPROVED (rank 2) does not
     // outrank OPERATOR-PROVIDED (rank 3), so the zero-count rule admits it and
@@ -4791,7 +4791,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         expectedContractPayload: { ...wC.deps.expectedContractPayload, version: "v12" } } });
     ok("a divergent expected contract payload refuses contract integrity THROUGH the entry",
       repC.aspects.contractIntegrity.label === "REFUSED" && repC.verdict === "REFUSED-REPORT");
-    // the entry CAPTURES the expected payload once (round-54): a deps whose
+    // the entry CAPTURES the expected payload once: a deps whose
     // expectedContractPayload accessor serves a divergent v12 on the entry
     // read and then the matching payload afterward is compared under the
     // captured v12, so it refuses. A re-read from mutable deps would have
@@ -4810,8 +4810,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         repM.aspects.contractIntegrity.label === "REFUSED" && reads === 1);
     }
     {
-      // the entry CAPTURES ALL THREE scalar trust inputs once (round-55 F1,
-      // strengthened round-56 F3): deps.incomeIdentity, deps.provedActivation
+      // the entry CAPTURES ALL THREE scalar trust inputs once (a review F1,
+      // strengthened a review F3): deps.incomeIdentity, deps.provedActivation
       // AND deps.provedDeactivation are each read exactly once, so an accessor
       // cannot return one value during entry validation and another during
       // evaluation. The path is a DEACTIVATION-BOUNDED report over the real
@@ -4850,7 +4850,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     {
       // a proved-read answer that RESOLVES a value resistant to inspection (a
       // revoked proxy) is converted to a plain adapter-fault refusal by the
-      // total await, never an escaping raw TypeError (round-57, F2).
+      // total await, never an escaping raw TypeError (a review finding).
       const wH = mkWorld();
       const rev = Proxy.revocable({ status: "served", doc: {}, height: "890" }, {}); rev.revoke();
       const depsH = { ...wH.deps, provedByKey: async (type, key) =>
@@ -4858,13 +4858,13 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       await rejects("a revoked-proxy proved answer is a plain adapter-fault refusal, never an escaping raw TypeError",
         evaluateFormationInputs({ poolId: POOL_HEX, contractId: GC, deps: depsH }),
         /a proved adapter read failed/);
-      // an ORDINARY proved-read rejection keeps its real cause (round-59, F4)
+      // an ORDINARY proved-read rejection keeps its real cause (a review finding)
       const depsO = { ...wH.deps, provedByKey: async (type, key) =>
         type === "pool" ? Promise.reject(new Error("DAPI timeout")) : wH.deps.provedByKey(type, key) };
       await rejects("an ordinary proved-read rejection is refused with its REAL cause preserved",
         evaluateFormationInputs({ poolId: POOL_HEX, contractId: GC, deps: depsO }),
         /a proved adapter read failed \(DAPI timeout\)/);
-      // the getter shape (round-60): a rejection whose `message` getter
+      // the getter shape: a rejection whose `message` getter
       // itself throws must still refuse plainly, never let the getter's
       // throw replace the refusal
       const eGet = {};
@@ -4908,7 +4908,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("conflicting dependency fields cannot repoint the pinned constants",
       pinned(repConf));
     // an unserved FORMATION read nulls the records range too (any
-    // required query unserved makes it null, round-28)
+    // required query unserved makes it null, a review)
     const wPU = mkWorld({ provedByKey: (base) => async (type, key) =>
       type === "pool" ? { status: "unserved" } : base(type, key) });
     const repPU = await runAudit({ poolId: POOL_HEX, dir: JDIR, deps: wPU.deps });
@@ -4935,7 +4935,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && repE.aspects.reservationPresence.note === undefined
       && repE.aspects.ordering.note === undefined);
     // the pinned constants are pinned across the RESOLVED START too
-    // (round-53): repV is a graded report the entry assembled at start 6,
+    //: repV is a graded report the entry assembled at start 6,
     // so a pinned aspect made conditional on the start or interval (for
     // example balance PROVED only when startEpoch is 6) is caught here,
     // not just on the start-5 reports above. This is the universal the
@@ -4946,7 +4946,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // height never enters the records range, and its unavailability makes
     // formation UNPROVED, routing to the unavailable path (recordsProved
     // false) so the whole range is withheld fail-closed, though every
-    // DOCUMENT read was served (round-53, finding 3's gate)
+    // DOCUMENT read was served (a review finding's gate)
     const wIU = mkWorld({ provedByKey: (base) => async (type, key) =>
       type === "identity" ? { status: "unserved" } : base(type, key) });
     const repIU = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"), deps: wIU.deps });
@@ -4955,7 +4955,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && repIU.aspects.formationInputs.label === "UNPROVED"
       && repIU.aspects.recordSet.label === "UNPROVED");
     // the range rule is a RULE, not a list of the four values tested
-    // below (round-60): other negatives, other non-integers, NaN, the
+    // below: other negatives, other non-integers, NaN, the
     // infinities and other non-number types are refused the same way
     for (const bad of [-2, -1000000, 1e-3, NaN, Infinity, -Infinity,
       Number.MAX_SAFE_INTEGER + 4, null, true, [], {}, 3n]) {
@@ -4988,7 +4988,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         () => gradeVerdict({ branch: repMissing.branch, aspects: aspMissing,
           inReportRefusal: false, coverage: cleanCoverage(), annotation: repMissing.openEnded ?? null }),
         /must carry its examinedCount/);
-      // one shared examined set, one count (round-42)
+      // one shared examined set, one count
       const repUneq = JSON.parse(JSON.stringify(repE));
       const aspUneq = { ...repUneq.aspects,
         reservationPresence: { ...repUneq.aspects.reservationPresence, examinedCount: 7 } };
@@ -4996,7 +4996,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         () => gradeVerdict({ branch: repUneq.branch, aspects: aspUneq,
           inReportRefusal: false, coverage: cleanCoverage(), annotation: repUneq.openEnded ?? null }),
         /carry equal examinedCounts/);
-      // TRANSFER alone diverging is refused (round-48)
+      // TRANSFER alone diverging is refused
       const repTr = JSON.parse(JSON.stringify(repE));
       const aspTr = { ...repTr.aspects,
         transferExecution: { ...repTr.aspects.transferExecution, examinedCount: 9 } };
@@ -5004,7 +5004,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         () => gradeVerdict({ branch: repTr.branch, aspects: aspTr,
           inReportRefusal: false, coverage: cleanCoverage(), annotation: repTr.openEnded ?? null }),
         /carry equal examinedCounts/);
-      // and ORDERING alone diverging is refused too (round-47)
+      // and ORDERING alone diverging is refused too
       const repOrd = JSON.parse(JSON.stringify(repE));
       const aspOrd = { ...repOrd.aspects,
         ordering: { ...repOrd.aspects.ordering, examinedCount: 9 } };
@@ -5012,7 +5012,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         () => gradeVerdict({ branch: repOrd.branch, aspects: aspOrd,
           inReportRefusal: false, coverage: cleanCoverage(), annotation: repOrd.openEnded ?? null }),
         /carry equal examinedCounts/);
-      // equality is over the WHOLE counts (round-60): counts sharing a
+      // equality is over the WHOLE counts: counts sharing a
       // textual prefix and differing in magnitude are still unequal
       for (const [a, b] of [[12, 120], [1, 10], [123, 1234]]) {
         const repPfx = JSON.parse(JSON.stringify(repE));
@@ -5026,14 +5026,14 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
             inReportRefusal: false, coverage: cleanCoverage(), annotation: repPfx.openEnded ?? null }),
           /carry equal examinedCounts/);
       }
-      // the count is CONSUMED (round-43): zero examined receipts cannot
+      // the count is CONSUMED: zero examined receipts cannot
       // carry labels above inheritance or degradation
       const repZero = JSON.parse(JSON.stringify(repE));
       const aspZero = { ...repZero.aspects };
       for (const k of ["transferExecution", "reservationPresence", "ordering"]) {
         aspZero[k] = { ...aspZero[k], examinedCount: 0 };
       }
-      // the cap is a RULE over the label ORDER (round-60): EVERY label
+      // the cap is a RULE over the label ORDER: EVERY label
       // above the applicable bound is refused on every per-receipt
       // aspect, not only the three combinations spelled out below. The
       // aspect's own ceiling is respected, so a label the aspect can
@@ -5068,7 +5068,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       }
     }
     // a FOUR-receipt world proves the count is the true length, not a
-    // constant that happens to match the golden three (round-49)
+    // constant that happens to match the golden three
     const OD49 = toBase58(h32("ff"));
     const w49 = mkWorld({ manifest: {
       v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
@@ -5088,7 +5088,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       rep49.aspects.transferExecution.examinedCount === 4
       && rep49.aspects.reservationPresence.examinedCount === 4
       && rep49.aspects.ordering.examinedCount === 4);
-    // a FIVE-receipt world (round-60): a count clamped anywhere at or
+    // a FIVE-receipt world: a count clamped anywhere at or
     // below four would pass every smaller world, so the entry count is
     // proved against a set larger than any earlier fixture
     const OE60 = toBase58(h32("fe"));
@@ -5111,7 +5111,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       rep60.aspects.transferExecution.examinedCount === 5
       && rep60.aspects.reservationPresence.examinedCount === 5
       && rep60.aspects.ordering.examinedCount === 5);
-    // the count is EXAMINED receipts, never expected rows (round-50):
+    // the count is EXAMINED receipts, never expected rows:
     // a missing receipt, a missing accrual, and an all-missing world
     // each lower it exactly
     const JDIR50 = path.join(TMP, "jr-counts");
@@ -5299,7 +5299,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   {
     // ordering's route equality requires BOTH routes to EXIST as
     // nonempty strings: two absent members compare equal without
-    // establishing either record carries a route (round-30)
+    // establishing either record carries a route
     const mkOrd = (routes) => evaluateOrdering({
       receipt: { transitionHash: h32("01") }, receiptCaptureValid: true,
       capture: { transitionHash: h32("01"), inclusionHeight: "1001", ...routes.r },
@@ -5316,7 +5316,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   }
   {
     // DISTINCT reservation-read heights all reach the reduction
-    // (round-49): three reads at "915", "916" and "3000" contribute
+    //: three reads at "915", "916" and "3000" contribute
     // each value, so the true maximum survives
     let resSeq = 0;
     const wDH = mkWorld({ provedByKey: (base) => async (type, key) => {
@@ -5349,7 +5349,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       led.recordSet.label === "REFUSED"
       && led.diagnostics.poolGlobal.some((d) => /no receipt/.test(d)));
     // the same state in an IGNORED epoch carries no obligation, the
-    // lifecycle diagnostic included (round-26)
+    // lifecycle diagnostic included
     const w2 = mkWorld({ mutateDocs: (docs) => { docs.receipt.splice(0, 1); } });
     const narrowed = await resolveInterval({ requestedStart: 6, requestedEnd: null,
       configuredStart: 5, fetchRange: async (start, end) => ({
@@ -5369,7 +5369,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     ok("a narrowed interval still reports an IN-SCOPE reservation without its receipt",
       led55.diagnostics.poolGlobal.some((d) => /no receipt/.test(d)));
     // a reservation the ENUMERATION omitted but the pinned read serves
-    // still reaches the in-flight sweep (round-27)
+    // still reaches the in-flight sweep
     let aside;
     const w4 = mkWorld({ mutateDocs: (docs) => {
       docs.receipt.splice(0, 1);

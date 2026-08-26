@@ -122,7 +122,7 @@ updateEnvKey("PLAIN_KEY", "v3");
   ok("foreign save preserved the marker", readEnvRaw().STATE_MIGRATED === "1");
 }
 
-// 9. journalOwner sync is SCOPED to the COMPOUND_ family it owns (round-3 review
+// 9. journalOwner sync is SCOPED to the COMPOUND_ family it owns (a review
 //    blocker: the old full-sync deleted every owned prefix absent from the journal's
 //    snapshot, so a journal write racing a completion could erase a fresh
 //    RECEIPT_DRAFT_ or FORMATION_ manifest). Absent COMPOUND_ keys still delete with a
@@ -143,7 +143,7 @@ updateEnvKey("PLAIN_KEY", "v3");
   ok("a WATCH_ key survives a journal save that omitted it", loadEnv().WATCH_W !== undefined);
   ok("a RECEIPT_DRAFT_ survives a journal save that omitted it", loadEnv().RECEIPT_DRAFT_RACE === "frozen");
   // the register publish-intent marker AND the contract id are owned, so a stale foreign
-  // saveEnv that never saw them cannot clobber them out (round-7 re-check-2 P1)
+  // saveEnv that never saw them cannot clobber them out (a review re-check-2 P1)
   updateEnvKey("CONTRACT_V8_PENDING", "1");
   updateEnvKey("CONTRACT_V8_ID", "theId");
   // the v9 pair is owned for the same reason (v9 draft review, finding 3)
@@ -169,7 +169,7 @@ updateEnvKey("PLAIN_KEY", "v3");
     (updateEnvKey("E2_START_EPOCH_" + "AB".repeat(32), "4200"),
       loadEnv()["E2_START_EPOCH_" + "AB".repeat(32)] === "4200"));
 
-  // THE WRITE-ONCE CLASS (E2 spec rounds 31/32): set, idempotent equal rewrite,
+  // THE WRITE-ONCE CLASS (E2 specification revisions 31 and 32): set, idempotent equal rewrite,
   // differing-update refusal, deletion refusal (ABSENT KEY INCLUDED), for BOTH
   // E2 keys. The pin value is GENERATED per run (checker finding 4: a reader
   // mutation returning a fixed object survived assertions against a fixed

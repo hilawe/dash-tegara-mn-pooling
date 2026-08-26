@@ -1,5 +1,5 @@
 /**
- * Fixtures for THE PRODUCTION ENTRY POINT (build review round 3, MUST-FIX). The decisive
+ * Fixtures for THE PRODUCTION ENTRY POINT (build review a review, a required fix). The decisive
  * property: evidence that the normative checker would reject must NOT produce an
  * envelope. The reviewer fed the derivation primitive 72 negative-evidence cases and it
  * accepted 67; these fixtures assert the gated writer refuses them.
@@ -185,7 +185,7 @@ ok("mutating the caller's evidence afterwards cannot stale the result",
       { start: { kind: "observed", banHeight: 1200 }, endHeight: 1300 }] },
     baseHeight: base.basePackage.baseBlock.height,
   };
-  // WHAT THIS CASE ACTUALLY ESTABLISHES, RELABELLED (round 12, MINOR). It was described as an
+  // WHAT THIS CASE ACTUALLY ESTABLISHES, RELABELLED (a review, MINOR). It was described as an
   // indexed path compared against a scan fallback, and it called the exported recognizeAt twice,
   // the second time with an extra `suspendedAt` property on the context. There has been no such
   // fallback since the prepared-data redesign: the exported entry point takes no prepared
@@ -295,7 +295,7 @@ throws("evidence carrying a function is refused",
      validateAgainstSpecification(good.envelope, good.canonicalBytes).valid === true);
 }
 
-// THE BYTES HANDED TO THE GATE, ISOLATED (round 4, MINOR). The earlier fixture reparsed and
+// THE BYTES HANDED TO THE GATE, ISOLATED (a review, MINOR). The earlier fixture reparsed and
 // re-validated the RETURNED bytes, which proves they conform but would not fail if a writer
 // gated one conforming candidate and returned a different conforming one. This intercepts the
 // temporary file the gate is given and compares it with what came back.

@@ -274,7 +274,7 @@ ok("the declared coinbase shape with txRaw and inclusionProof is accepted",
      coinbase: { kind: "available", outputs: [], txRaw: "00", inclusionProof: "00" },
    }).kind === "classified");
 
-// A NUMBER IS NOT A DECIMAL STRING (confirmation round 2, MAJOR). The pattern check
+// A NUMBER IS NOT A DECIMAL STRING (confirmation a review, MAJOR). The pattern check
 // coerced, so a numeric 5 tested as "5" and a non-conforming output reached OWED. The
 // production gate refused the envelope afterwards, but this exported classifier returned a
 // plausible answer, which is the thing being closed.
@@ -319,7 +319,7 @@ ok("matchOwnerVector still matches well-formed decimal-string outputs", (() => {
   return r.matchedOutputs.length === 1 && r.unexplainedOutputs.length === 0;
 })());
 
-// round 4, MAJOR: a string hMinus1 flowed into the returned listHeight and every comparison,
+// a review, MAJOR: a string hMinus1 flowed into the returned listHeight and every comparison,
 // so deriveEligibility returned a plausible typed state for malformed input
 throws("deriveEligibility refuses a non-integer hMinus1",
   () => deriveEligibility({ stateAtHMinus1: "ABSENT", listRoot: null, hMinus1: "abc",

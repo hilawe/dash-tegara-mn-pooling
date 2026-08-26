@@ -36,7 +36,7 @@ const { reassembleProof, verifyCarrierConformance } = verifyModule.__testing;
 
 let passed = 0, failed = 0;
 const ok = (name, cond) => { if (cond) { passed++; } else { failed++; console.error("FAIL:", name); } };
-// UNDER THE ROUND-65 BOUNDARY A REFUSAL IS RETURNED, NEVER THROWN
+// UNDER THE a review BOUNDARY A REFUSAL IS RETURNED, NEVER THROWN
 // (docs/E2_VERIFICATION_BOUNDARY.md), so these assert the returned verdict. A
 // public entry that THREW its refusal now fails them, which is the point: the
 // audit reads a status off a returned value and must never be handed a
@@ -596,7 +596,7 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
       parts: fix.parts, reservation: SERVED, entitlementRow: ROW,
       incomeIdentity: INCOME, chainIdPin: CHAIN, deps: mkDeps() }),
     /transitionBytes differ/);
-  // AL2/AL3 (round-65): the composite must surface the RECEIPT's own refusal
+  // AL2/AL3: the composite must surface the RECEIPT's own refusal
   // reason, not a downstream pair-check reason. Calling the wrapped entries
   // internally would still end in a refusal, so only the REASON distinguishes
   // the two, which is exactly what a caller reads.
@@ -731,7 +731,7 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
       rUnproved.status === "verified" && rUnproved.reservationAspect === "unproved");
   }
 
-  // ---- THE FAULT SIDE OF THE BOUNDARY (round-65) ----
+  // ---- THE FAULT SIDE OF THE BOUNDARY ----
   // The contract has two halves and the suite previously gated only one. A
   // REFUSAL is returned, and the tests above establish that. A DEPENDENCY
   // FAILURE is a FAULT: it propagates out of the entry unchanged, is never
@@ -775,7 +775,7 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
   // interpolates the caught value into the refusal it raises, so a value that
   // resists inspection must not turn that refusal into a SECONDARY fault. This
   // gate lived in the audit suite and was deleted with the block around it
-  // during the round-65 redesign; the restored battery caught its absence,
+  // during the review redesign; the restored battery caught its absence,
   // which is the battery doing its job. It belongs here, beside the decoders.
   for (const decoder of ["decodeProofCarrier", "decodeMetadata", "decodeTransfer"]) {
     for (const [what, make] of [

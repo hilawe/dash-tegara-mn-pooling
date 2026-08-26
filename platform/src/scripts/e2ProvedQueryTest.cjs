@@ -105,12 +105,12 @@ const ledger = (total, heights, log) => {
       r.heightMin === "68" && r.heightMax === "72");
   }
   {
-    // depth beyond the earlier three-page worlds (round-60): a walk that
+    // depth beyond the earlier three-page worlds: a walk that
     // treated some later full page as terminal would truncate silently,
     // so this gate enumerates NINE documents at limit 2, four full pages
     // and a terminal short fifth
     // EVERY page's height PARTICIPATES, which an aggregate can only observe
-    // when each page carries an extreme of its own (round-62): with heights
+    // when each page carries an extreme of its own: with heights
     // whose extremes all sat on early pages, dropping a later page from the
     // reduction left the aggregate unchanged and went unnoticed. Here page 4
     // owns the maximum and page 5 owns the minimum, so omitting either is
@@ -128,7 +128,7 @@ const ledger = (total, heights, log) => {
     // make every page's participation observable: whichever pages own no
     // extreme can be dropped from the reduction with no visible effect. So
     // each page is pinned in turn, by a run in which THAT page carries the
-    // unique maximum (round-62).
+    // unique maximum.
     for (let p = 1; p <= 5; p++) {
       const heights = ["70", "70", "70", "70", "70"];
       heights[p - 1] = "90";
@@ -137,7 +137,7 @@ const ledger = (total, heights, log) => {
       ok(`page ${p}'s height enters the reduction (it carries the run's unique maximum)`,
         rp.status === "proved" && rp.pages === 5 && rp.heightMax === "90" && rp.heightMin === "70");
     }
-    // and again for the MINIMUM, which is a separate reduction (round-63):
+    // and again for the MINIMUM, which is a separate reduction:
     // the unique-maximum runs above leave every other page at the same
     // height, so a minimum updated on only some pages still reports 70 and
     // survives them all. Each page carries the unique minimum in turn.
@@ -152,7 +152,7 @@ const ledger = (total, heights, log) => {
   }
   {
     // a Date is a class-carried value: admitting it as a special case
-    // would silently widen the declared base-prototype domain (round-60)
+    // would silently widen the declared base-prototype domain
     await rejects("a Date leaf inside a document is not plain data",
       provedQueryPage({ type: "receipt", limit: 2,
         fetchVerifiedPage: async () => ({ status: "verified", height: "70",
@@ -160,7 +160,7 @@ const ledger = (total, heights, log) => {
       /not plain data/);
     // a Proxy over a CLASS INSTANCE whose getPrototypeOf trap reports
     // Object.prototype passes the prototype test, and that is not a defect
-    // (round-62): the walk cannot decide what the input really is, and the
+    //: the walk cannot decide what the input really is, and the
     // property it establishes is about the CAPTURE. So the capture must be
     // an ordinary plain object carrying exactly the validated members, with
     // no trace of the class, and the consumer must read THAT.
@@ -177,7 +177,7 @@ const ledger = (total, heights, log) => {
   {
     // an ordinary rejection whose `message` getter itself throws: the
     // total formatter must still produce a plain refusal rather than let
-    // the getter's throw replace the refusal (round-60)
+    // the getter's throw replace the refusal
     await rejects("a fetch rejection with a throwing message getter still refuses plainly",
       provedQueryPage({ type: "receipt", limit: 2,
         fetchVerifiedPage: async () => {
@@ -251,13 +251,13 @@ const ledger = (total, heights, log) => {
           documents: [{ id: "01".repeat(32) }, midSpy, { id: "03".repeat(32) }], cursor: null }) }),
       /accessor-backed/);
     ok("the middle document's getter never fired", midReads === 0);
-    // the page envelope is a DISCRIMINATED union too (round-40)
+    // the page envelope is a DISCRIMINATED union too
     await rejects("an unverified page carrying documents and a height is a contradictory envelope",
       provedQueryPage({ type: "receipt", limit: 2,
         fetchVerifiedPage: async () => ({ status: "unverified",
           documents: [{ id: "01".repeat(32) }], height: "70" }) }),
       /contradictory envelope/);
-    // the PAGE ENVELOPE validates before any member read (round-41)
+    // the PAGE ENVELOPE validates before any member read
     let heightReads = 0;
     const spyPage = { status: "verified", documents: [{ id: "01".repeat(32) }], cursor: null };
     Object.defineProperty(spyPage, "height", { enumerable: true, configurable: true,
@@ -268,7 +268,7 @@ const ledger = (total, heights, log) => {
       /not plain data/);
     ok("the page height getter never fired", heightReads === 0);
     // A PROXY DEFEATS validate-then-reread, so the wrapper must
-    // validate-and-CAPTURE (round-53, finding 1): a Proxy reports a plain
+    // validate-and-CAPTURE (a review finding): a Proxy reports a plain
     // data descriptor for `documents` to the walk (which reads
     // descriptors, not the get trap) and then serves a DIFFERENT array
     // through its get trap. A wrapper that re-read `page.documents` after
@@ -304,7 +304,7 @@ const ledger = (total, heights, log) => {
     }
     {
       // a BINARY LEAF must be captured from its own byte descriptors, not
-      // read through the value (round-54): Uint8Array.from would consult the
+      // read through the value: Uint8Array.from would consult the
       // iterator or index getters, which a Uint8Array-shaped Proxy can trap
       // to serve bytes the descriptor walk never validated. The captured
       // bytes must be the descriptor bytes.
@@ -330,7 +330,7 @@ const ledger = (total, heights, log) => {
     }
     {
       // the ARRAY length must be read from the own descriptor, not through
-      // the value (round-55): a Proxy get trap that reports a short length
+      // the value: a Proxy get trap that reports a short length
       // could otherwise hide a sparse hole, and a throwing length trap must
       // not escape as an untyped exception.
       const sparse = [10]; sparse.length = 2; // [10, <hole>], real length 2
@@ -350,15 +350,15 @@ const ledger = (total, heights, log) => {
       // itself, not only downstream where canonicalString also rejects
       // symbol keys: a symbol-keyed member on a plain object (an enumerated
       // document, an answer) never reaches canonicalString, so the walk must
-      // refuse it directly (round-55).
+      // refuse it directly.
       const symSnap = plainDataSnapshot({ id: "aa", [Symbol("x")]: 1 });
       ok("a symbol-keyed member on a plain object is refused by the walk itself",
         typeof symSnap.defect === "string" && /symbol-keyed member/.test(symSnap.defect));
-      // the walk is TOTAL over throwing reflective traps (round-56): a Proxy
+      // the walk is TOTAL over throwing reflective traps: a Proxy
       // whose ownKeys, getPrototypeOf or getOwnPropertyDescriptor trap throws
       // must yield a plain-data DEFECT, never escape as the adapter's raw
       // error. The reflective ops are the capture channel, so each is guarded.
-      // the thrown value itself may be UNREADABLE (round-57): a null-prototype
+      // the thrown value itself may be UNREADABLE: a null-prototype
       // object or a throwing `message` getter must not make the catch handler
       // throw a second fault, so it reads none of the thrown value.
       const unreadableErr = {}; Object.defineProperty(unreadableErr, "message", { get() { throw new Error("m"); } });
@@ -374,7 +374,7 @@ const ledger = (total, heights, log) => {
           !threw && snap && typeof snap.defect === "string" && /threw during plain-data validation/.test(snap.defect));
       }
       // a REVOKED Proxy resolved by the page fetch is refused, not escaped
-      // (round-57): the await unwrap and the Array.isArray classification both
+      //: the await unwrap and the Array.isArray classification both
       // throw on a revoked proxy, so both are guarded.
       const rev = Proxy.revocable({ status: "verified" }, {}); rev.revoke();
       let pageErr = null;
@@ -382,13 +382,13 @@ const ledger = (total, heights, log) => {
       catch (e) { pageErr = e; }
       // the assertion requires the MODULE's own refusal (its prefix and fixed
       // adapter-fault text) and that the escaping native TypeError did NOT
-      // reach the caller (round-58): a looser match would pass on the raw
+      // reach the caller: a looser match would pass on the raw
       // revoked-proxy TypeError the guard is meant to convert.
       ok("a revoked-proxy page is CONVERTED to the module's plain adapter-fault refusal, not the raw native TypeError",
         pageErr instanceof Error && !(pageErr instanceof TypeError)
         && /^e2ProvedQuery: the injected page fetch failed/.test(pageErr.message));
       // an ORDINARY page-fetch rejection keeps its real cause, not a false
-      // "resistant to inspection" message (round-59, F4)
+      // "resistant to inspection" message (a review finding)
       let ordErr = null;
       try { await provedQueryPage({ type: "x", startAfter: null,
         fetchVerifiedPage: async () => { throw new Error("Platform endpoint unavailable"); } }); }
@@ -397,8 +397,8 @@ const ledger = (total, heights, log) => {
         ordErr instanceof Error && /Platform endpoint unavailable/.test(ordErr.message)
         && /the injected page fetch failed/.test(ordErr.message));
     }
-    // the JSON VALUE DOMAIN is enforced throughout the graph (round-43)
-    // the combined named-plus-hole array and the cycle (round-44)
+    // the JSON VALUE DOMAIN is enforced throughout the graph
+    // the combined named-plus-hole array and the cycle
     await rejects("a high decimal name compensating a hole is a named member, not an index",
       provedQueryPage({ type: "receipt", limit: 2,
         fetchVerifiedPage: async () => ({ status: "verified", height: "70",
@@ -412,7 +412,7 @@ const ledger = (total, heights, log) => {
           return { status: "verified", height: "70", documents: [doc], cursor: null }; } }),
       /closes a cycle/);
     // a wrong ADAPTER cursor on a full page is ignored: the checker
-    // computes its own from the page's last document (round-44)
+    // computes its own from the page's last document
     const cursorLog = [];
     const rCur = await enumerateProved({ type: "receipt", limit: 2,
       fetchVerifiedPage: async (q) => { cursorLog.push(q.startAfter);
@@ -422,7 +422,7 @@ const ledger = (total, heights, log) => {
           : { status: "verified", height: "70", documents: [], cursor: null }; } });
     ok("the checker's cursor comes from the last document, never the adapter's member",
       rCur.status === "proved" && cursorLog.length === 2 && cursorLog[1] === "02".repeat(32));
-    // a LOW adapter cursor is ignored the same way (round-45): the next
+    // a LOW adapter cursor is ignored the same way: the next
     // request still advances past the last collected identifier
     const lowLog = [];
     const rLow = await enumerateProved({ type: "receipt", limit: 2,
@@ -434,7 +434,7 @@ const ledger = (total, heights, log) => {
     ok("a LOW adapter cursor cannot rewind the walk (no identifier repeats)",
       rLow.status === "proved" && rLow.documents.length === 2
       && lowLog[1] === "02".repeat(32));
-    // the ignored cursor still has to CONFORM (round-63): being unread for
+    // the ignored cursor still has to CONFORM: being unread for
     // steering is not a licence to be any shape at all, or an accepted
     // envelope stops meaning that every member it carries has a grammar
     for (const [what, bad] of [["an object", { malformed: true }],
@@ -454,10 +454,10 @@ const ledger = (total, heights, log) => {
       okCursor.status === "verified" && okCursor.cursor === null);
     // the depth bound refuses past 512 levels, and a SHARED subtree
     // still passes (sharing expands under serialization; only cycles
-    // and excessive depth refuse) (round-45)
+    // and excessive depth refuse)
     const mkDeep = (L) => { const d = { id: "01".repeat(32) };
       let cur = d; for (let i = 0; i < L; i++) { cur.next = {}; cur = cur.next; } return d; };
-    // the boundary is EXACT (round-46): 510 nested levels pass (the
+    // the boundary is EXACT: 510 nested levels pass (the
     // page envelope and document array occupy the first path slots) and
     // 511 refuse
     const okDeep = await provedQueryPage({ type: "receipt", limit: 2,
@@ -474,7 +474,7 @@ const ledger = (total, heights, log) => {
       fetchVerifiedPage: async () => ({ status: "verified", height: "70",
         documents: [{ id: "01".repeat(32), left: shared, right: shared }], cursor: null }) });
     ok("a shared acyclic subtree passes the walker", okShared.status === "verified");
-    // sharing cannot get past the bound (round-47): a subtree first seen
+    // sharing cannot get past the bound: a subtree first seen
     // shallow still counts its full expansion when referenced deep
     const subtree = {};
     { let cur = subtree; for (let i = 0; i < 300; i++) { cur.next = {}; cur = cur.next; } }
@@ -485,7 +485,7 @@ const ledger = (total, heights, log) => {
         fetchVerifiedPage: async () => ({ status: "verified", height: "70",
           documents: [{ id: "01".repeat(32), shallow: subtree, deep: prefix }], cursor: null }) }),
       /depth bound/);
-    // the SHARED-reuse boundary is exact too (round-48): the same
+    // the SHARED-reuse boundary is exact too: the same
     // shape passes at a 208-level prefix and refuses at 209
     const mkShared = (L) => { const sub48 = {};
       { let c = sub48; for (let i = 0; i < 300; i++) { c.next = {}; c = c.next; } }
@@ -498,7 +498,7 @@ const ledger = (total, heights, log) => {
     ok("a shared reuse exactly at the bound passes", okAt.status === "verified");
     // a NULL-PROTOTYPE identifier is plain data at the boundary yet no
     // string: the identifier check must refuse it, never crash in the
-    // regular expression's coercion (round-49)
+    // regular expression's coercion
     for (const [what, bad] of [["a one-element array cursor", ["01".repeat(32)]],
       ["a null-prototype cursor", Object.create(null)]]) {
       await rejects(`${what} refuses through the declared startAfter path`,

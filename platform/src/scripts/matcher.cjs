@@ -228,7 +228,7 @@ function matchRequests(pending) {
 
       // 1. finish whatever a crashed run left, before looking at new work. A LOCAL
       // settlement journal (v1 mode) must stop a v3 run too: the old code's isV3 branch
-      // silently skipped it, abandoning the stranded pair (review batch-2 blocker, B11)
+      // silently skipped it, abandoning the stranded pair (an independent review batch-2 blocker, B11)
       const matchState = match.load(env);
       if (isV3() && matchState.settlement) {
         throw new Error("a LOCAL settlement journal exists (pool " + matchState.settlement.poolId +
@@ -338,7 +338,7 @@ function matchRequests(pending) {
           const leaverIdentity = await identityFor(leaverId);
           // another engine may have created the settlement for this exit between our
           // pending-query and now; the unique byExit index turns that race into a clean
-          // rejection, which we treat as "resume theirs" rather than an error (review
+          // rejection, which we treat as "resume theirs" rather than an error (an independent review
           // batch-2 minor, B10)
           let sdoc = (await client.platform.documents.get("poolLedger.settlement", {
             where: [["exitId", "==", pair.exit.getId()]],

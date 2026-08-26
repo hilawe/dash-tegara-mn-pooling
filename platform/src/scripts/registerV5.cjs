@@ -1,6 +1,6 @@
 /**
  * Publish the pool-ledger contract v5, the bundled schema revision the gap pass and the
- * 2026-07-12 review rounds accumulated. Derived from the registered v1 definition the
+ * 2026-07-12 reviews accumulated. Derived from the registered v1 definition the
  * way registerV3/V4 are, carrying every v3/v4 change forward and adding four of its own,
  * so the diff against registerV4.cjs IS the design change:
  *

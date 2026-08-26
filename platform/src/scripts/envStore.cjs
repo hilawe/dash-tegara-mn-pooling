@@ -124,13 +124,13 @@ const loadEnv = () => {
   return env;
 };
 
-// LOCK PLACEMENT (round-3 blocker, resolved round-5): the documented container recipe
+// LOCK PLACEMENT (a review blocker, resolved a review): the documented container recipe
 // bind-mounts exactly TWO paths, the .env.local FILE and the .env.local.state DIRECTORY.
 // A lock created merely BESIDE the env file (a sibling) lands in each container's private
 // overlay, so two containers would each hold their "own" lock and interleave freely on
 // the SHARED env file and state dir. STATE_DIR is the only path mounted as a shared
 // DIRECTORY, so BOTH lock families live there UNCONDITIONALLY and fail closed when it is
-// absent (round-5 re-check: any conditional/memoized "home" lets one process resolve the
+// absent (a review re-check: any conditional/memoized "home" lets one process resolve the
 // sibling while another resolves the state dir). This is not a regression:
 // `requireStateDirLocked` already refuses every owned write without STATE_DIR and the
 // design never creates it implicitly at runtime, so STATE_DIR is present for the whole of
@@ -149,7 +149,7 @@ const requireLockHome = () => {
 // never commit in between and be clobbered (independent-review read-then-use window finding,
 // 2026-07-12). Contention is a loud refusal, never a wait, so a clobber is impossible
 // and a collision is visible.
-// OWNERSHIP-SAFE, NO AUTO-DIVERT (round-5 re-check blocker): the earlier 30 s stale
+// OWNERSHIP-SAFE, NO AUTO-DIVERT (a review re-check blocker): the earlier 30 s stale
 // takeover broke mutual exclusion under a container pause or host suspension (process A
 // pauses mid-hold past the timeout, B diverts and enters, A resumes and both write, and a
 // path-only unlock could then remove B's lock). The env lock now uses the SAME owner-token
@@ -189,16 +189,16 @@ const unlockEnv = () => {
 
 // A long-held per-OPERATION lock, distinct from the short env-file lock above: one
 // completion-protocol command (complete / receipt / abandon) per pool at a time, held
-// across the WHOLE command including its network awaits (round-2 review blocker: two
+// across the WHOLE command including its network awaits (a review blocker: two
 // concurrent completes could each freeze a different node hash, and the loser's frozen
 // draft could then drive an immutable receipt that contradicts the live pool).
-// OWNERSHIP-SAFE and FAIL-CLOSED (round-3 review): the lock directory carries an owner
+// OWNERSHIP-SAFE and FAIL-CLOSED (a review): the lock directory carries an owner
 // token, release removes the lock only when the token is this process's own, and a
 // stale-looking lock is NEVER stolen automatically (two waiters both judging a lock
 // stale could divert it twice; a slow-but-live completion could be stolen from and then
 // its release would unlock the thief's successor). A crashed run's lock is cleaned up
 // by the operator, explicitly, with the age shown.
-// the operation lock ALWAYS lives in the shared STATE_DIR, unconditionally (round-5
+// the operation lock ALWAYS lives in the shared STATE_DIR, unconditionally (a review
 // re-check blocker): STATE_DIR is the ONLY path the documented container recipe mounts
 // as a shared DIRECTORY (the env file is mounted alone, so its parent is container-
 // private), so a home that ever falls back to the env-file sibling would let two
@@ -221,7 +221,7 @@ const acquireOpLock = (name) => {
     if (e.code !== "EEXIST") throw e;
     let ageMin = "unknown";
     try { ageMin = Math.round((Date.now() - fs.statSync(p).mtimeMs) / 60000); } catch { /* raced */ }
-    // a TYPED contention error (round-7 re-check): callers that convert "held" into a
+    // a TYPED contention error (a review re-check): callers that convert "held" into a
     // benign mid-flight skip (done prune) must NOT swallow a real fs error (permissions,
     // a vanished dir) the same way, so mark this one so only it is treated as contention.
     const held = new Error(`another completion-protocol run holds the operation lock for this pool (${p}, ` +
@@ -288,7 +288,7 @@ const writeEnvFile = (out) => {
 // authority, and the key stays operator-mutable before that first record.
 const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIPT_DRAFT_",
   "E2_START_EPOCH_"];
-// CONTRACT_V8_PENDING and CONTRACT_V8_ID are OWNED (round-7 re-check P1, tightened in the
+// CONTRACT_V8_PENDING and CONTRACT_V8_ID are OWNED (a review re-check P1, tightened in the
 // second re-check): the register publish-intent marker AND the resulting contract id must
 // both survive a concurrent foreign saveEnv from a process that loaded state before they
 // were written; a plain key could be clobbered back out, re-opening the silent-republish
@@ -302,14 +302,14 @@ const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIP
 // and source) and E2_GATE_CAPTURE (the canonical-gate artifact) are owned AND
 // WRITE-ONCE (below): the E2 spec makes both immutable once any capture or journal
 // record exists, and owned-key survival alone protects only against foreign saves,
-// not against updateEnvKey itself (spec round 31, finding 4).
+// not against updateEnvKey itself (specification revision 31, finding 4).
 const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE", "CONTRACT_V8_PENDING", "CONTRACT_V8_ID",
   "CONTRACT_V9_PENDING", "CONTRACT_V9_ID",
   "CONTRACT_V11_PENDING", "CONTRACT_V11_ID",
   "E2_EXPECTED_CHAIN_ID", "E2_GATE_CAPTURE"];
 const isOwnedKey = (k) => OWNED_KEYS.includes(k) || OWNED_PREFIXES.some((p) => k.startsWith(p));
 
-// THE WRITE-ONCE CLASS (E2 spec rounds 31 and 32): set when absent; a rewrite with
+// THE WRITE-ONCE CLASS (E2 specification revisions 31 and 32): set when absent; a rewrite with
 // the EXACT SAME value is an idempotent no-op; a DIFFERING update or ANY deletion
 // REFUSES. Value-agnostic on purpose: the composite pin's shape validation belongs
 // to its reader (readChainIdPin below), so this gate cannot rot into a format
@@ -427,7 +427,7 @@ const saveEnv = (env, opts = {}) => {
   // journalOwner callers already hold the lock and loaded fresh state inside it; their
   // env is the AUTHORITATIVE state OF THEIR OWN FAMILY, so the sync (values written,
   // absent keys deleted) is SCOPED to the COMPOUND_ journal family the one journalOwner
-  // caller (compoundJournal.mutate) actually owns. Round-3 review blocker: the earlier
+  // caller (compoundJournal.mutate) actually owns. A review found: the earlier
   // full-sync treated every owned prefix as this caller's deletion domain, so a journal
   // write racing a completion from another container (where the env lock was not shared)
   // deleted the freshly frozen RECEIPT_DRAFT_ and could do the same to a FORMATION_
@@ -695,7 +695,7 @@ const hasImmutablePool = () => ledgerCap("immutablePool");
 // hasE2Records, and the cap KEY follows the table's noun convention (e2Records)
 const hasE2Records = () => ledgerCap("e2Records");
 
-// THE COMPOSITE CHAIN-ID PIN'S ONE READER (E2 spec rounds 29 through 33): the owned
+// THE COMPOSITE CHAIN-ID PIN'S ONE READER (E2 specification revisions 29 through 33): the owned
 // write-once key E2_EXPECTED_CHAIN_ID holds ONE JCS object with members exactly
 // `chainId` (the exact chain identifier string, required equal to the target
 // network's Tenderdash genesis document at pin time) and `source` (an object with

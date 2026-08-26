@@ -92,7 +92,7 @@ function assertActualOutput(o) {
  *                    "RANGE_LOCAL", pHeight? } (pHeight required for FIRST_APPEARANCE)
  */
 function deriveEligibility({ stateAtHMinus1, listRoot, hMinus1, journal, base }) {
-  // round 4, MAJOR: a string hMinus1 flowed into the returned listHeight and every
+  // a review, MAJOR: a string hMinus1 flowed into the returned listHeight and every
   // comparison below, yielding a plausible typed state instead of a named refusal
   if (!Number.isSafeInteger(hMinus1) || hMinus1 < 0) {
     fail(`hMinus1 must be a safe non-negative integer (got ${JSON.stringify(hMinus1)})`);
@@ -103,7 +103,7 @@ function deriveEligibility({ stateAtHMinus1, listRoot, hMinus1, journal, base })
   if (stateAtHMinus1 !== "ABSENT") fail(`unknown walk state ${JSON.stringify(stateAtHMinus1)}`);
   const term = journal ? journal.terminalHeight : null;
   if (term !== null && term !== undefined && !Number.isSafeInteger(term)) {
-    // build review round 3, MAJOR: a STRING terminal height was coerced by comparison
+    // build review a review, MAJOR: a STRING terminal height was coerced by comparison
     // and produced ABSENT_TERMINAL, a wrong answer from malformed input
     fail(`journal.terminalHeight must be a safe integer or null (got ${JSON.stringify(term)})`);
   }
@@ -119,7 +119,7 @@ function deriveEligibility({ stateAtHMinus1, listRoot, hMinus1, journal, base })
   if (base && base.kind === "pre-dml") {
     // under a pre-DML base the distinction IS provable (the walk starts before any
     // deterministic entry can exist): absence with no prior appearance is pre-appearance
-    // TYPED BEFORE COMPARED (round 5, MAJOR): a transition height "abc" compared false, so no
+    // TYPED BEFORE COMPARED (a review, MAJOR): a transition height "abc" compared false, so no
     // appearance was found and the answer came back ABSENT_PRE_APPEARANCE, which is a decision
     // about member eligibility derived from evidence this code could not read.
     const transitions = (journal && journal.transitions) || [];
@@ -214,7 +214,7 @@ const HEX32_RE = /^[0-9a-f]{64}$/;
 
 /**
  * Validate the tagged unions and the eligibility object BEFORE any precedence is applied
- * (build review round 3, MAJOR): unvalidated inputs produced CLASSIFICATIONS instead of
+ * (build review a review, MAJOR): unvalidated inputs produced CLASSIFICATIONS instead of
  * errors -- `coinbase: {kind:"garbage"}` returned NOT_PAYEE, and a STRING terminal height
  * was coerced by comparison into ABSENT_TERMINAL. Malformed input must never reach the
  * matrix.

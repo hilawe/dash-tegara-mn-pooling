@@ -88,7 +88,7 @@ function encodeValue(o, path, depth, budget) {
   if (t === "bigint") fail(`BigInt at ${at} (serialize as a decimal string)`);
   if (t === "undefined") fail(`undefined at ${at} (a nullable field is serialized as explicit null)`);
   if (t === "function" || t === "symbol") fail(`${t} at ${at}`);
-  // THE CONTAINER DOMAIN (repository-access review, MUST-FIX). Refusing sparse holes was
+  // THE CONTAINER DOMAIN (repository-access review, a required fix). Refusing sparse holes was
   // not enough, because the encoder read containers through Object.keys and array indices
   // and silently ignored everything else they carried. Reproduced, all silent:
   //   an own non-index property on an array   [1,2] with .foo="x"  ->  [1,2]   (foo erased)
@@ -100,7 +100,7 @@ function encodeValue(o, path, depth, budget) {
   // to provide. The conversion from value to bytes must be TOTAL over what it accepts, so
   // anything it cannot represent is refused by name instead of quietly dropped.
   if (typeof o === "object" && o !== null) {
-    // PROXIES ARE REFUSED (round 5, MAJOR). Every earlier guard here described a property of a
+    // PROXIES ARE REFUSED (a review, MAJOR). Every earlier guard here described a property of a
     // value; a Proxy is not a value but a hook that runs on every read, so it defeats all of
     // them at once. Reproduced: a Proxy whose get trap added a property to its target while
     // returning the first value serialized to {"a":1} while the target ended up
@@ -114,7 +114,7 @@ function encodeValue(o, path, depth, budget) {
     if (Object.getOwnPropertySymbols(o).length > 0) {
       fail(`symbol-keyed property at ${at} (outside the canonical domain)`);
     }
-    // ARRAYS ARE NOT EXEMPT FROM THE PROTOTYPE RULE (round 8, MUST-FIX, a soundness-review finding). This guard used
+    // ARRAYS ARE NOT EXEMPT FROM THE PROTOTYPE RULE (a review, a required fix, a soundness-review finding). This guard used
     // to run only for non-arrays, so `Array.isArray` was the whole of the array admission test.
     // That is a test of the exotic-object kind, not of behaviour: an Array SUBCLASS, or an array
     // handed a replacement prototype, is still an array by that test while carrying methods its
@@ -134,7 +134,7 @@ function encodeValue(o, path, depth, budget) {
       fail(`non-plain object at ${at} (${(o.constructor && o.constructor.name) || "unknown type"}); ` +
            "only plain objects and arrays are in the canonical domain");
     }
-    // DATA PROPERTIES ONLY, ENUMERABLE ONLY (round 4, MAJOR: the domain was still not
+    // DATA PROPERTIES ONLY, ENUMERABLE ONLY (a review, MAJOR: the domain was still not
     // total). Object.keys sees only enumerable string keys, so a NON-ENUMERABLE own
     // property serialized to nothing, silently: {a:1} with a hidden own property produced
     // {"a":1}, and the gate then validated bytes that do not cover the object's state. An
@@ -165,7 +165,7 @@ function encodeValue(o, path, depth, budget) {
              "(it would not appear in the serialized form)");
       }
     }
-    // SPARSE ARRAYS ARE OUTSIDE THE DOMAIN (confirmation round, MUST-FIX). `map` SKIPS
+    // SPARSE ARRAYS ARE OUTSIDE THE DOMAIN (confirmation round, a required fix). `map` SKIPS
     // holes rather than visiting them, so a hole neither reached the `undefined` refusal
     // below nor produced a value. Two reproduced outcomes, both bad: `[Array(1)]`
     // serialized to `[]`, silently changing the value, and `[, 1]` serialized to `[,1]`,
@@ -176,7 +176,7 @@ function encodeValue(o, path, depth, budget) {
         fail(`array hole at ${at}[${i}] (a sparse array is outside the canonical domain)`);
       }
     }
-    // THE ENCODER WALKS THE INDICES ITSELF (round 8, MUST-FIX, a soundness-review finding). `o.map` is a property
+    // THE ENCODER WALKS THE INDICES ITSELF (a review, a required fix, a soundness-review finding). `o.map` is a property
     // read on caller-supplied data, so whatever function it resolves to decides which members
     // reach the bytes. The prototype guard above already refuses the arrays that can carry a
     // replacement, and this loop removes the mechanism as well, on the same principle the Proxy

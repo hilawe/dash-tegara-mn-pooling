@@ -19,7 +19,7 @@
  *                               embedded domain tag re-derived from the envelope's own
  *                               network fields (so a checkpoint copied from another chain
  *                               or another devnet fails here)
- * verifyCoreWalk is IMPLEMENTED and no longer among the blocked list below (round 6, MINOR: this
+ * verifyCoreWalk is IMPLEMENTED and no longer among the blocked list below (a review, MINOR: this
  * header still called it blocked while the same file placed it in IMPLEMENTED). It performs the
  * checks whose evidence the record carries, including the diff-chain walk with list STATE, the
  * list root against the coinbase commitment, and the coinbase's binding into its block. It still
@@ -56,7 +56,7 @@ const {
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest();
 const sha256d = (b) => sha256(sha256(b));
 /**
- * STRICT hex decode (round 5, MAJOR). `Buffer.from(value, "hex")` stops at the first
+ * STRICT hex decode (a review, MAJOR). `Buffer.from(value, "hex")` stops at the first
  * character that is not hex and returns what it managed to read, with no error and no
  * indication that it truncated. `Buffer.from("zz", "hex")` is an EMPTY buffer, and
  * `Buffer.from("aabZ", "hex")` is one byte. That turned malformed evidence into a verifier
@@ -217,7 +217,7 @@ function verifyTransitionHashes(env) {
  * makes a checkpoint copied from another chain, or from another devnet sharing a base
  * genesis, fail here rather than pass as evidence (a soundness-review finding).
  *
- * THE DEVNET HEIGHT-ONE BLOCK duty IS PERFORMED when a Core node is supplied (round 5, MINOR:
+ * THE DEVNET HEIGHT-ONE BLOCK duty IS PERFORMED when a Core node is supplied (a review, MINOR:
  * this header still said the duty was blocked after the implementation landed, which is the
  * kind of stale claim the whole review cycle exists to catch). Given a node exposing
  * getBlockHexByHeight, the block is retrieved and its hash, parent, proof of work and coinbase
@@ -239,7 +239,7 @@ function verifyTransitionHashes(env) {
  */
 function readGenesisCoinbase(block) {
   try {
-    // ONE COMPACTSIZE READER IN THE BUILD (round 8, MUST-FIX, a soundness-review finding). This function used to keep
+    // ONE COMPACTSIZE READER IN THE BUILD (a review, a required fix, a soundness-review finding). This function used to keep
     // its own readVarInt, which applied neither the canonical-width rule nor MAX_SIZE. A block
     // whose transaction count, input or output count, or any script length used a wider-than-
     // needed encoding parsed cleanly here, while Dash Core refuses those same bytes in
@@ -260,7 +260,7 @@ function readGenesisCoinbase(block) {
       return { error: `count is ${txCount}; a genesis block carries exactly one transaction` };
     }
     const txStart = r.off;
-    // VERSION AND TYPE ARE TWO FIELDS, AND THE TYPE SELECTS THE LAYOUT (round 9, MUST-FIX,
+    // VERSION AND TYPE ARE TWO FIELDS, AND THE TYPE SELECTS THE LAYOUT (a review, a required fix,
     // a soundness-review finding). This read four bytes and discarded both values, then required the parse to end
     // after locktime. Dash's deserializer splits the same 32 bits into nVersion and nType and
     // reads a vExtraPayload AFTER locktime whenever the version is at least SPECIAL_VERSION and
@@ -272,7 +272,7 @@ function readGenesisCoinbase(block) {
     const txType = r.u16("transaction type");
     const vinCount = r.varint("tx input count");
     if (vinCount !== 1) return { error: "input count is not 1" };
-    // THE INPUT MUST BE A COINBASE INPUT (round 6, MUST-FIX). This advanced past the prevout
+    // THE INPUT MUST BE A COINBASE INPUT (a review, a required fix). This advanced past the prevout
     // without looking at it, so a one-input ORDINARY transaction with a suitably shaped script was
     // described as a coinbase. A coinbase spends a null prevout: 32 zero bytes and index 0xffffffff.
     const prevoutHash = r.read(32, "prevout hash");
@@ -283,13 +283,13 @@ function readGenesisCoinbase(block) {
     const scriptSig = r.read(r.varint("scriptSig length"), "scriptSig");
     r.read(4, "sequence");
     const voutCount = r.varint("tx output count");
-    // CONTEXT-FREE TRANSACTION VALIDITY (round 9, MUST-FIX, a soundness-review finding). The outputs were walked for
+    // CONTEXT-FREE TRANSACTION VALIDITY (a review, a required fix, a soundness-review finding). The outputs were walked for
     // their bytes and nothing else, so a coinbase declaring ZERO outputs parsed cleanly and the
     // duty could complete over a transaction Dash refuses outright. Every rule below is Dash's,
     // taken from the function it applies to every transaction in a block
     // [8c9f166a3:src/consensus/tx_check.cpp, called at src/validation.cpp:3857]. No rule is added
     // that Dash does not have, because a rule Dash lacks produces a false REJECTION of a valid
-    // block, which is the defect shape of round 9 finding 6.
+    // block, which is the defect shape of a review finding 6.
     //
     // `allowEmptyTxOut` is true only for quorum-commitment and MNHF-signal transactions
     // [tx_check.cpp:14-24], and a devnet genesis coinbase is neither
@@ -321,7 +321,7 @@ function readGenesisCoinbase(block) {
       }
       r.read(payloadLength, "vExtraPayload");
     }
-    // THE SERIALIZED TRANSACTION-SIZE CEILING (round 10, MUST-FIX, a soundness-review finding). Dash declines any
+    // THE SERIALIZED TRANSACTION-SIZE CEILING (a review, a required fix, a soundness-review finding). Dash declines any
     // transaction serializing above MAX_LEGACY_BLOCK_SIZE, 1,000,000 bytes
     // [8c9f166a3:src/consensus/tx_check.cpp:31-33, src/consensus/consensus.h:10]. Nothing here
     // bounded it: an output script is limited only by the shared CompactSize ceiling of
@@ -329,7 +329,7 @@ function readGenesisCoinbase(block) {
     // function and still be 1,000,067 bytes, which the reviewer built and this verifier accepted
     // with ran:true ok:true.
     //
-    // THIS WAS A MISS IN THE ROUND-9 FOLD, not a newly introduced gap. That fold read this very
+    // THIS WAS A MISS IN THE a review FOLD, not a newly introduced gap. That fold read this very
     // function to build the transaction-domain boundary and implemented the extra-payload bound
     // at tx_check.cpp:34-35 while skipping the size ceiling on the two lines directly above it.
     // The check must come after the parse because the size is not known until the transaction has
@@ -348,7 +348,7 @@ function readGenesisCoinbase(block) {
       return { error: `carries a ${scriptSig.length}-byte coinbase script, outside Dash's ` +
                       `[${minCbSize}, 100] range` };
     }
-    // THE BLOCK MUST END HERE (round 6, MUST-FIX). The parse stopped after the first transaction
+    // THE BLOCK MUST END HERE (a review, a required fix). The parse stopped after the first transaction
     // without requiring the buffer to be consumed, so a valid one-transaction block followed by
     // trailing bytes was accepted. A genesis block is exactly one transaction and nothing else.
     if (r.off !== block.length) {
@@ -358,7 +358,7 @@ function readGenesisCoinbase(block) {
 
     // scriptSig: the BIP34 height push, then the name push. Dash emits `CScript() << 1`, which
     // is OP_1 (0x51); a one-byte push of 0x01 is accepted as the equivalent encoding.
-    // THE BIP34 PREFIX IS COMPARED AS BYTES, NOT AS A SCRIPT NUMBER (round 9, MUST-FIX, a soundness-review finding).
+    // THE BIP34 PREFIX IS COMPARED AS BYTES, NOT AS A SCRIPT NUMBER (a review, a required fix, a soundness-review finding).
     // This used to accept a two-byte push of 0x01 alongside OP_1, and the comment called it "the
     // equivalent encoding". It is equivalent as a SCRIPT NUMBER and not as BYTES, and Dash
     // compares bytes: it builds `CScript expect = CScript() << nHeight` and requires the coinbase
@@ -373,7 +373,7 @@ function readGenesisCoinbase(block) {
     let sp = 0;
     if (scriptSig[sp] === 0x51) sp += 1;
     else return { error: "scriptSig does not begin with the BIP34 height-one push OP_1" };
-    // BOTH PUSH FORMS DASH'S BUILDER EMITS (round 9, MINOR, finding 6). This accepted only a
+    // BOTH PUSH FORMS DASH'S BUILDER EMITS (a review, MINOR, finding 6). This accepted only a
     // direct push of 1 to 75 bytes, so a devnet name of 76 bytes or more was refused BY NAME even
     // though Dash produces and accepts it: `CScript::operator<<` writes a direct push below
     // OP_PUSHDATA1 and switches to OP_PUSHDATA1 plus a one-byte length at 76 and above
@@ -389,7 +389,7 @@ function readGenesisCoinbase(block) {
     } else if (pushOp === 0x4c) {                       // OP_PUSHDATA1
       nameLength = scriptSig[sp + 1];
       if (nameLength === undefined) return { error: "the OP_PUSHDATA1 devnet-name push has no length" };
-      // NO MINIMAL-PUSH RULE HERE (round 10, MINOR). This used to decline OP_PUSHDATA1 for a
+      // NO MINIMAL-PUSH RULE HERE (a review, MINOR). This used to decline OP_PUSHDATA1 for a
       // length a direct push could encode, reasoning that Dash's BUILDER would have written the
       // shorter form. That reasoning confuses how Dash CONSTRUCTS the block with what Dash
       // VALIDATES. At height one the only rules applied to this scriptSig are the BIP34 byte
@@ -422,7 +422,7 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
       Buffer.from("302a300506032b6570032100", "hex"), authority]);
     const key = crypto.createPublicKey({ key: spki, format: "der", type: "spki" });
 
-    // THE ADOPTED PINS, WHICH THIS CHECKER IS ASSIGNED AND NEVER READ (round 12, MAJOR).
+    // THE ADOPTED PINS, WHICH THIS CHECKER IS ASSIGNED AND NEVER READ (a review, MAJOR).
     // The registry gives this checker the rule "epoch ids distinct and strictly increasing; every
     // checkpoint matches its adoptedEpochPins entry", and lists `adoptedEpochPins` in its own
     // evidence. The module referenced that field zero times while the executable specification
@@ -491,7 +491,7 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
     // The signatures and the chain-identity binding are now PROVED. On devnet the registry
     // additionally requires the height-one genesis block to be retrieved and authenticated.
     //
-    // THE DUTY IS NOW PERFORMED, NOT PRESUMED (repository-access review round 4, MUST-FIX).
+    // THE DUTY IS NOW PERFORMED, NOT PRESUMED (repository-access review a review, a required fix).
     // The previous version returned OK for ANY truthy coreNode, `{}` included, so an
     // attestation could be minted for a retrieval-and-validation duty nothing had performed,
     // and the positive fixture REQUIRED that wrong outcome. A verifier's ok:true must mean
@@ -499,7 +499,7 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
     // `getBlockHexByHeight(height)` returning the raw block (or at least its 80-byte
     // header) as hex; a coreNode without it leaves the component BLOCKED, never completed.
     //
-    // What is checked, and why each piece is needed (round 5, MUST-FIX: the previous version
+    // What is checked, and why each piece is needed (a review, a required fix: the previous version
     // checked an 80-byte HEADER only, called the name commitment "committed under the verified
     // hash", and validated nBits so loosely that nBits 0x2200ffff expanded to a target beyond
     // the 256-bit range, which every hash satisfies. Two of the registry's four named checks
@@ -518,7 +518,7 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
     //                registry asks for a nonempty commitment rather than a match against a
     //                declared name, and the envelope carries no devnet-name field to match
     //                against, so nonempty is both what is required and what is checkable.
-    // WHAT THIS RESULT DOES AND DOES NOT COVER (round 12, MAJOR). The registry assigns this
+    // WHAT THIS RESULT DOES AND DOES NOT COVER (a review, MAJOR). The registry assigns this
     // checker five rules. Three are performed here: the authority signatures, the chain-identity
     // domain binding, and now the epoch ordering with its adopted pins. TWO ARE NOT, and naming
     // them is the point, because a completed result that silently covers three of five is the
@@ -562,7 +562,7 @@ function verifyCheckpointRecognition(env, { coreNode } = {}) {
       }
 
       // ---- proof of work, with the bounds consensus actually applies ----
-      // Round 6, MUST-FIX: this checked only that the expanded target was nonzero and below 2^256
+      // a review, a required fix: this checked only that the expanded target was nonzero and below 2^256
       // and never applied the NETWORK LIMIT, so nBits 0x2100ffff, whose target sits above the
       // devnet limit and below 2^256, passed. CheckProofOfWork rejects on negative, zero, OVERFLOW
       // or target > powLimit before it compares the hash [8c9f166a3:src/pow.cpp:236-252], and the
@@ -683,7 +683,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
     const ledgerByHeight = new Map();
     for (const row of (env.coverage.coreLedger || [])) ledgerByHeight.set(row.height, row);
 
-    // ---- THE RETAINED HEADER CHAIN, indexed by block hash (round 6, MAJOR) ----
+    // ---- THE RETAINED HEADER CHAIN, indexed by block hash (a review, MAJOR) ----
     // The walk needs the header to authenticate anything: the coinbase is bound to a block by the
     // header's merkle root, and nothing else in the record can supply it.
     let headersByHash;
@@ -693,7 +693,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
       return BAD(`the retained coreHeaderChain does not parse (${(e && e.message) || e})`);
     }
 
-    // ---- SEED THE LIST AT THE BASE (round 6, MAJOR: there was no list state at all) ----
+    // ---- SEED THE LIST AT THE BASE (a review, MAJOR: there was no list state at all) ----
     // A diff is a DELTA, so a root can only be derived by transforming the previous list. Where
     // the base list comes from is answered by the format, not chosen here
     // (docs/CORE_WALK_DUTY_STATEMENT.md): a rooted base retains every entry in
@@ -719,7 +719,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
     } else {
       return BAD(`the base package names an unknown kind ${JSON.stringify(bp.kind)}`);
     }
-    // ---- THE WALK'S ENDPOINTS AND ITS INTERVAL, BOTH REQUIRED (round 7 MAJOR + round 8 a soundness-review finding) ----
+    // ---- THE WALK'S ENDPOINTS AND ITS INTERVAL, BOTH REQUIRED (a review MAJOR + a review a soundness-review finding) ----
     // These were one check incomplete in two ways, so they are folded together.
     //
     // The hash chain used to start from an OPTIONAL value: `previousBlockHash` was read from the
@@ -801,7 +801,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
         return BAD(`${where}: the retained cbTxRaw is not the coinbase the diff carries`);
       }
       // APPLY THE DELTA, then take the root over the RESULTING list. Computing it over
-      // diff.mnList is the root of the CHANGES, which is what round 6 caught: a row carrying two
+      // diff.mnList is the root of the CHANGES, which is what a review caught: a row carrying two
       // of three entries as its delta produced a root matching nothing, and a full list relabelled
       // as a diff from another base passed, because no base list was ever read.
       try {
@@ -810,7 +810,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
         return BAD(`${where}: the diff does not apply to the list at the previous height ` +
                    `(${(e && e.message) || e})`);
       }
-      // ---- AUTHENTICATE THE COINBASE BEFORE BELIEVING ITS PAYLOAD (round 6, MAJOR) ----
+      // ---- AUTHENTICATE THE COINBASE BEFORE BELIEVING ITS PAYLOAD (a review, MAJOR) ----
       // Previously the coinbase was read out of the diff and its payload treated as a value Dash
       // Core committed, with cbTxMerkleTree and the row's cbTxInclusionProof both unused. Flipping
       // one byte of the tree left every check passing. The binding is: the header retained for this
@@ -835,7 +835,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
         return BAD(`${where}: the coinbase ${diff.cbTx.txid} is not among the transactions its own ` +
                    "proof establishes, so it is not bound to this block");
       }
-      // THE SEPARATELY SERIALIZED PROOF IS EVIDENCE TOO (round 9, MINOR, finding 5). The binding
+      // THE SEPARATELY SERIALIZED PROOF IS EVIDENCE TOO (a review, MINOR, finding 5). The binding
       // above uses the partial merkle tree embedded in protxDiffRaw, and the row's own
       // cbTxInclusionProof was never read at all, so a required field could carry any
       // schema-valid hex without changing the outcome. The proof-codec profile maps it to
@@ -878,7 +878,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
       }
       rootsChecked++;
 
-      // ---- THE AUDITED MEMBER, DERIVED FROM THE LIST JUST AUTHENTICATED (round 9, MAJOR, a soundness-review finding)
+      // ---- THE AUDITED MEMBER, DERIVED FROM THE LIST JUST AUTHENTICATED (a review, MAJOR, a soundness-review finding)
       // Everything above proves the WHOLE list: the delta applies, the recomputed root matches the
       // commitment inside a coinbase that is itself proven into its block. And then the two fields
       // that describe THIS pool at this height were simply believed. The loop never read
@@ -891,7 +891,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
       //
       // That is the whole point of rebuilding the list. Authenticating a root and not asking what
       // it says about the member being audited leaves the eligibility, the entitlement and the
-      // reward classification resting on an assertion, and the round-9 review is right that it
+      // reward classification resting on an assertion, and the review is right that it
       // becomes a real claim path the moment the outstanding duties land.
       //
       // Both directions are refused, and the ENTRY BYTES are compared as well as the state, since
@@ -925,7 +925,7 @@ function verifyCoreWalk(env, { protocolVersion = 70240 } = {}) {
             return BAD(`${where}: the Core ledger's coinbase bytes differ from the walk's`);
           }
           // the Core ledger's own proof field, under the same codec and the same duty as the
-          // walk row's (round 9, MINOR, finding 5). It was the second required field the
+          // walk row's (a review, MINOR, finding 5). It was the second required field the
           // verifier never read.
           const ledgerProof = decodeMerkleBranch(cb.inclusionProof,
                                                  `${where} coreLedger coinbase inclusionProof`);

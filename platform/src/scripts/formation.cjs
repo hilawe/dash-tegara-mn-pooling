@@ -76,7 +76,7 @@ const { fetchAll, fetchUpTo } = require("./query.cjs");
 // string. MAX_SLOT_COUNT caps a legit book at creation; MAX_PLEDGE_CLAIMS is the scan
 // ceiling, set ABOVE MAX_SLOT_COUNT so a full legit book plus a grief-detection window fits
 // before truncation refuses (a truncated scan means far more claims than any legit book).
-// the constants live in formationCore since round 16, so ADMISSION reads the same
+// the constants live in formationCore since a review, so ADMISSION reads the same
 // capacity rule completion enforces (one shared bound, not two copies)
 const { MAX_SLOT_COUNT, MAX_PLEDGE_CLAIMS } = require("./formationCore.cjs");
 const { loadEnv, updateEnvKey, reserveAddrIndex, activeContractId, isV5, isV6, isV7, isV8,
@@ -112,7 +112,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
   if (cmd === "done") {
     // (hoisted ABOVE the Dash.Client construction: the constructor itself needs a
     // DAPI config, and housekeeping must run with none at all)
-    // housekeeping over the RETAINED finalized manifests (review follow-on, review):
+    // housekeeping over the RETAINED finalized manifests (review follow-on):
     // `done` lists them with ages; `done prune <days>` deletes those older, keeping
     // the .prev generation the owned-file store always leaves behind. This branch
     // runs BEFORE any wallet or Platform work: it is purely local (review finding,
@@ -155,10 +155,10 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     let pruned = 0, unknown = 0, inflight = 0;
     for (const r of rows2) {
       // NEVER prune a DONE manifest whose matching ACTIVE manifest OR frozen DRAFT still
-      // exists (round-6, extended round-7 P2): a completion writes FORMATION_DONE_ then
+      // exists (a review, extended a review P2): a completion writes FORMATION_DONE_ then
       // clears FORMATION_ (active) then clears RECEIPT_DRAFT_ as separate locked writes,
       // so during that window the DONE coexists with the active key and/or the draft, and
-      // a legacy pre-round-6 crash could leave DONE + DRAFT with no active key, which the
+      // a legacy pre-a review crash could leave DONE + DRAFT with no active key, which the
       // current recovery still treats as valid input. Pruning the DONE in any of those
       // states could then let recovery clear the draft with no retained manifest, losing
       // the audit record. Hold the per-pool op lock across the check AND the delete so a
@@ -170,7 +170,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       try {
         acquireOpLock(suffix); held = true;
       } catch (e) {
-        // ONLY genuine lock contention becomes a benign mid-flight skip (round-7
+        // ONLY genuine lock contention becomes a benign mid-flight skip (a review
         // re-check P2): a real fs error (missing dir, permissions) must propagate, not
         // masquerade as "a completion is running" and let prune exit success.
         if (!e || e.code !== "OPLOCK_CONTENDED") throw e;
@@ -494,7 +494,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         // DIP3) exposes no share table, so fall back to the existence-only claim honestly.
         const shareTable = await fetchShareTable(proTxHex.toLowerCase());
         if (!shareTable) {
-          // CROSS-VERSION FAIL-CLOSED (round-7): an ABSENT share table is ambiguous. A
+          // CROSS-VERSION FAIL-CLOSED: an ABSENT share table is ambiguous. A
           // vanilla DIP3 node genuinely has none, but a PRE-capability fork build (before
           // protx info exposed state.shares) returns the SAME empty shape for a real #187
           // shared registration, which would silently downgrade the required allocation
@@ -677,17 +677,17 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       if (doc) {
         verifyReceiptAgainstDraft(doc, draft);
         {
-          const freshPool = await getPool(poolIdStr); // round-6: fresh
+          const freshPool = await getPool(poolIdStr); // a review: fresh
           requireReceiptBindsPool(doc.toObject(), freshPool.toObject(), poolIdStr,
             { receiptOwnerId: doc.getOwnerId().toString(),
               poolOwnerId: freshPool.getOwnerId().toString() });
-        } // round-6: fresh pool bind
+        } // a review: fresh pool bind
         console.log(`completion receipt already recorded (${doc.getId().toString()}), matches the draft and pool`);
         return doc;
       }
       // build the receipt FIRST (documents.create awaits SDK init and the contract
       // fetch internally), THEN re-fetch the FULL pool immediately before broadcast and
-      // require it to match the draft on EVERY draft-sourced field (round-4 blocker: the
+      // require it to match the draft on EVERY draft-sourced field (a review blocker: the
       // old check read only proTxHash and ran before create's awaits, so an external
       // writer holding operator credentials could change a field, or the hash, inside
       // that window and the immutable receipt would then contradict the pool). The op
@@ -734,11 +734,11 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       }
       verifyReceiptAgainstDraft(doc, draft);
       {
-        const freshPool = await getPool(poolIdStr); // round-6: fresh p
+        const freshPool = await getPool(poolIdStr); // a review: fresh p
         requireReceiptBindsPool(doc.toObject(), freshPool.toObject(), poolIdStr,
           { receiptOwnerId: doc.getOwnerId().toString(),
             poolOwnerId: freshPool.getOwnerId().toString() });
-      } // round-6: fresh pool bind
+      } // a review: fresh pool bind
       return doc;
     };
 
@@ -836,7 +836,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     // divergence later means either the draft or the pool document was altered, and
     // an immutable receipt must not be written from either uncertainty
     // slotIndex/nodeType are pool CREATION constants and must always match the draft.
-    // The operator FEE is CONTEXT-DEPENDENT (round-6 re-check): while the pool is still
+    // The operator FEE is CONTEXT-DEPENDENT (a review re-check): while the pool is still
     // FORMING the draft's fee must equal the pool's, because the receipt records the
     // completion-time fee and a pre-flip drift would freeze a stale value into the
     // immutable receipt. Once the pool is LIVE (post-flip recovery, readback), the pool
@@ -880,7 +880,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       }
     };
     // an existing on-ledger receipt must bind to the CURRENT pool before it is accepted or
-    // before local state is finalized (round-6): re-fetched fresh at the point of use, so a
+    // before local state is finalized: re-fetched fresh at the point of use, so a
     // credentialed external pool mutation during an await cannot slip a contradicting
     // receipt past. On v8, hash + status + pool constants; fee excluded (historical, as
     // above). On an immutable pool the hash and status have no pool side (invariant list
@@ -966,7 +966,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
     const finalizeCompletion = (poolIdStr, manifest) => {
       const activeKey = manifestKeyOf(poolIdStr);
       const doneKey = "FORMATION_DONE_" + journal.suffixFor(activeContractId(env), poolIdStr);
-      // ORDER (round-6): write DONE first, clear the draft next, and clear the ACTIVE key
+      // ORDER: write DONE first, clear the draft next, and clear the ACTIVE key
       // LAST. The active key is the "a completion is in flight" signal that `done prune`
       // checks before deleting a DONE, so keeping it until the very end shrinks the window
       // in which a concurrent prune could delete the just-written DONE to a single write.
@@ -975,7 +975,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // extra locked write would add a failure point to a v1..v7 completion
       if (isV8()) {
         updateEnvKey(receiptDraftKeyOf(poolIdStr), undefined);
-        // a completed formation SUPERSEDES any prior abandon of the same pool (round-7
+        // a completed formation SUPERSEDES any prior abandon of the same pool (a review
         // re-check P2): a stale FORMATION_ABANDONED_ left behind could later be picked as
         // a manifest source and falsely contradict this completion's receipt
         updateEnvKey("FORMATION_ABANDONED_" + journal.suffixFor(activeContractId(env), poolIdStr), undefined);
@@ -1101,7 +1101,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       console.log(`fill: ${DASHfmt(pledged)} / ${DASHfmt(target)} DASH across ${rows.length} pledge(s)` +
         (pledged === target ? "  <- FULL, ready to complete" : ""));
       for (const r of rows) console.log(`  ${DASHfmt(r.amount)} DASH by ${r.owner} (request ${r.id})`);
-      // proactive L1 check for a LIVE pool (review follow-on, review): the on-ledger
+      // proactive L1 check for a LIVE pool (review follow-on): the on-ledger
       // state asserts a node; when Core is reachable, confirm the node is actually in
       // the DMN list rather than waiting for an eventual settlement failure.
       //
@@ -1216,7 +1216,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       const po = pool.toObject();
       // the M1 owner binding, BEFORE the manifest is even read (review blocker): the
       // executing operator must own this pool, or completion could occupy a foreign
-      // pool's unique receipt slot. UNCONDITIONAL (confirm-pass round 16, must-fix): the
+      // pool's unique receipt slot. UNCONDITIONAL (a confirmation pass, must-fix): the
       // final pool replacement is signed by the operator on EVERY mutable ledger, and the
       // old isV8 gate let a v1-v7 completion mutate public records (shares created,
       // requests settled) before dying at the replacement Platform refuses, the exact
@@ -1286,7 +1286,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         }
         // the fallback derivation index is a PERSISTENT counter (owned FORMATION_ key),
         // never the loop index: restarting at 0 per completion handed different members
-        // of different pools the SAME addresses (holistic-round F8, review). ATOMICALLY
+        // of different pools the SAME addresses (holistic-round F8). ATOMICALLY
         // reserve the range up front (F-H): the counter is global and the per-pool op lock
         // does not serialize two different-pool completions, so a split read+write could
         // hand two pools the same base and re-collide. reserveAddrIndex advances it under
@@ -1588,7 +1588,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
       // funded identity plant one foreign share on the pool and wedge the flip forever, a
       // permanent availability DoS. The receipt commits to the MANIFEST allocation, not the
       // live share set, so a NON-participant share carries no weight and must not block. Each
-      // participant's share is still verified field-by-field (round-6), so a mutated real
+      // participant's share is still verified field-by-field, so a mutated real
       // share is still caught. This also bounds the readback to <=8 indexed lookups instead
       // of an unbounded fetchAll over an dishonest party-inflatable collection (F-G).
       let participantBps = 0;
@@ -1657,7 +1657,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         requireSlotsMatchFresh(fresh.toObject());
         let freshHash = Buffer.from(fresh.toObject().proTxHash);
         if (core.isFormingHash(freshHash)) {
-          // FLIP-FIRST ordering guard (round-4 blocker): a receipt must never exist while
+          // FLIP-FIRST ordering guard (a review blocker): a receipt must never exist while
           // the pool is still forming (the flip precedes the receipt). If one is already
           // there, it is an anomaly (a squatter refused by owner-only would not have
           // landed, so this is our own inconsistent state or a credentialed external
@@ -1671,7 +1671,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
                 "this pool while it is still FORMING; the flip must precede the receipt, so this is an " +
                 "anomalous state. Refusing to flip; the manifest and draft are kept, resolve by hand.");
             }
-            // and the pool must still match the frozen draft BEFORE the flip (round-5): if
+            // and the pool must still match the frozen draft BEFORE the flip: if
             // slotIndex/nodeType/fee drifted since the draft froze, flipping first would
             // leave a live pool whose only publishable receipt contradicts it (and a mixed
             // transition, if ever accepted, would atomically record the stale receipt).
@@ -1693,16 +1693,16 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
               console.log(`pool flipped LIVE with its receipt in ONE transition (mixed probe OK): ` +
                 `proTxHash ${proTxHex}, receipt ${receiptDoc.getId().toString()}`);
             } catch (e) {
-              // ONLY fall back on the known one-transition-limit rejection (round-4
+              // ONLY fall back on the known one-transition-limit rejection (a review
               // blocker: catching EVERY error meant a duplicate-unique, i.e. a receipt
               // that appeared under a race, would still flip the pool). Anything else,
               // including a duplicate-unique, rethrows WITHOUT flipping.
-              // ONLY the one-transition-limit rejection falls back (round-4). Match it by
+              // ONLY the one-transition-limit rejection falls back. Match it by
               // the typed error name (robust to any message wrapping), else by EXACT
               // message equality. A SUBSTRING match is unsafe: a compound message such as
               // "Amount of document transitions must be less or equal to 1; duplicate
               // unique index" would then fall back and flip past a receipt that already
-              // exists, re-opening the laundering path (round-4 re-check-2).
+              // exists, re-opening the laundering path (a review re-check-2).
               const msg = (e && e.message) || String(e);
               const isTxnLimit = (e && e.name === "MaxDocumentsTransitionsExceededError")
                 || msg === "Amount of document transitions must be less or equal to 1";
@@ -1719,7 +1719,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
               fresh = await getPool(poolIdStr);
               requireSlotsMatchFresh(fresh.toObject());
               freshHash = Buffer.from(fresh.toObject().proTxHash);
-              // RE-QUERY for a receipt immediately before the sequential flip (round-4
+              // RE-QUERY for a receipt immediately before the sequential flip (a review
               // re-check): a credentialed external writer could have created one DURING
               // the mixed probe's create/broadcast awaits, and Platform may surface the
               // transition-count error before the uniqueness check, so the earlier
@@ -1733,9 +1733,9 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
                   "it. The manifest and draft are kept, resolve by hand.");
               }
               // re-check the draft against the freshly re-fetched pool before the
-              // sequential flip too (round-5): the pool could have drifted during the
+              // sequential flip too: the pool could have drifted during the
               // mixed-probe awaits
-              // requireFee from the RE-FETCHED hash (round-6 re-check-2): a concurrent
+              // requireFee from the RE-FETCHED hash (a review re-check-2): a concurrent
               // actor could have flipped the pool during the mixed attempt, and post-flip
               // the fee is historical
               requireDraftMatchesPool(receiptDraft, fresh.toObject(), { requireFee: core.isFormingHash(freshHash) });
@@ -1816,16 +1816,16 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
         where: [["poolId", "==", pool.getId()]],
       }))[0] || null;
       // sources in priority: ACTIVE (a completion in flight) > DONE (retained record) >
-      // ABANDONED (round-7 P1: a completion that landed during/after an abandon still has
+      // ABANDONED (a review P1: a completion that landed during/after an abandon still has
       // its recovery inputs here, so `receipt` can finalize rather than strand it).
       // THE STALENESS FILTER IS LEDGER-DEPENDENT (invariant list item 12). On v8 the
       // archive is used ONLY when its committed realHash matches the pool's CURRENT hash
-      // (round-7 re-check P2): a stale archive from an EARLIER abandon of this same pool
+      // (a review re-check P2): a stale archive from an EARLIER abandon of this same pool
       // (later re-formed under a different hash) must never be picked as the manifest
       // source, or it would falsely contradict the real completion's receipt. On an
       // immutable pool there is no live hash, and the honest equivalent is STRICTER: the
       // archive is consulted only when an EXISTING RECEIPT matches its committed hash (the
-      // lost-race finalize round-7 P1 protects), and never as a source to publish from,
+      // lost-race finalize a review P1 protects), and never as a source to publish from,
       // because a receipt-less ledger carries no evidence the abandoned completion's
       // registration ever happened, and publishing from the archive alone would resurrect
       // an abandoned completion on no evidence.
@@ -2029,14 +2029,14 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
 
       if (existing) {
         const o = existing.toObject();
-        // the receipt must be owned by the pool's operator (round-6): with no local draft
+        // the receipt must be owned by the pool's operator: with no local draft
         // there is otherwise nothing binding the receipt's creator to the pool owner
         if (existing.getOwnerId().toString() !== pool.getOwnerId().toString()) {
           throw new Error(`the receipt is owned by ${existing.getOwnerId().toString()} but the pool by ` +
             `${pool.getOwnerId().toString()}; a receipt not written by the pool's operator is an anomaly, ` +
             "resolve by hand");
         }
-        // the nodeType -> targetDuffs invariant (round-6): the schema only bounds targetDuffs
+        // the nodeType -> targetDuffs invariant: the schema only bounds targetDuffs
         // by a minimum, so a receipt could pair a regular nodeType with an evo target; the
         // two must agree
         if (!hasParedReceipt() && String(core.TARGETS[o.nodeType]) !== String(o.targetDuffs)) {
@@ -2045,7 +2045,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           throw new Error(`the receipt's targetDuffs ${o.targetDuffs} is not the ${o.nodeType} target ` +
             `${core.TARGETS[o.nodeType]}; internally contradictory receipt, treat it as suspect`);
         }
-        // bind the receipt to CURRENT pool state (round-3, re-fetched round-6): re-read the
+        // bind the receipt to CURRENT pool state (a review, re-fetched a review): re-read the
         // pool HERE, after the receipt query await, so a credentialed external pool mutation
         // during the window cannot slip a contradicting receipt past. A receipt for a still-
         // forming pool, or one whose hash contradicts the live pool, must stop loudly. The
@@ -2070,7 +2070,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           }
         }
         // the pool's CREATION-TIME constants (slotIndex, nodeType) must match the
-        // receipt even when no local draft or manifest survives (round-4: after a prune
+        // receipt even when no local draft or manifest survives (a review: after a prune
         // the branches below have nothing to compare against, so this is the only check
         // that binds those fields). The operator FEE is deliberately excluded, because
         // the pool's fee is mutable and may legitimately change after completion, so a
@@ -2144,8 +2144,8 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
             bad.push("targetDuffs contradicts the manifest");
           }
           // slotIndex/nodeType are pool CREATION constants and must match, compared
-          // against the FRESH poolNow (round-6 re-check: the pre-query po could be stale
-          // and falsely reject). The fee is NOT compared to the current pool (round-5),
+          // against the FRESH poolNow (a review re-check: the pre-query po could be stale
+          // and falsely reject). The fee is NOT compared to the current pool,
           // because the pool fee is mutable and may legitimately change after
           // completion (the receipt records the completion-time fee).
           if (Number(o.slotIndex) !== Number(poolNow.slotIndex)
@@ -2386,7 +2386,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           "Resume `complete` with the committed hash, or unwind the shares with their owners first.");
       }
 
-      // RE-FETCH pool and shares immediately before the mutation (round-7 P1): the checks
+      // RE-FETCH pool and shares immediately before the mutation (a review P1): the checks
       // above ran before this point, and the op lock excludes only the completion-protocol
       // commands, not a member creating a share or an operator-credentialed flip. Deleting
       // the manifest after the pool went live (losing the only inputs `receipt` recovers
@@ -2414,7 +2414,7 @@ const DASHfmt = (duffs) => (Number(duffs) / 100000000).toFixed(8);
           "run started; the manifest is their only explanation, refusing to delete it. Kept.");
       }
 
-      // ARCHIVE before clearing (round-7 P1): a residual microscopic window remains
+      // ARCHIVE before clearing (a review P1): a residual microscopic window remains
       // between the re-fetch and the synchronous clears, and abandon is destructive, so
       // persist the manifest and draft under FORMATION_ABANDONED_ (an owned FORMATION_
       // key) FIRST. `receipt` consults this archive if the pool is later found live under

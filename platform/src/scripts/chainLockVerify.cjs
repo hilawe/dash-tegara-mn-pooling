@@ -135,7 +135,7 @@ function deriveQuorumScore({ llmqType, quorumHash, requestId }) {
  * caller's input here rather than something this module derives.
  */
 function selectSignatoryQuorum(bls, quorums, requestId) {
-  // THE LIBRARY IS REQUIRED, NOT OPTIONAL (round 5, MAJOR). The point parse used to live in the
+  // THE LIBRARY IS REQUIRED, NOT OPTIONAL (a review, MAJOR). The point parse used to live in the
   // endpoint below, so this exported selector answered from lexical checks alone and accepted
   // `ff` repeated 48 times, a correctly sized value that is not a curve point. Selecting a
   // signing quorum from candidates whose keys have not been parsed is not a meaningful

@@ -207,11 +207,11 @@ eq("inside a suspension the position is UNRECOGNIZED",
      suspensions: [{ start: { kind: "observed", banHeight: H0 - 1 }, endHeight: H0, endReason: "RANGE_END" }] } }),
    { status: "UNRECOGNIZED", bindingRef: 0 });
 
-// ---- NO PREPARED CAPTURE CAN ARRIVE THROUGH THE CONTEXT (round 8 finding 5) ----
+// ---- NO PREPARED CAPTURE CAN ARRIVE THROUGH THE CONTEXT (a review finding 5) ----
 // The exported recognizeAt re-derives from the checkpoints in front of it and has no prepared
 // parameter, so a caller cannot preload bounds through the context by ANY means. Four earlier
 // designs each placed authority in a marker on the caller's object (a flag, an array identity,
-// a WeakMap brand, a module-private Symbol slot), and the round-8 defeat was a Proxy whose get
+// a WeakMap brand, a module-private Symbol slot), and the review defeat was a Proxy whose get
 // trap answered any SYMBOL key with a fabricated capture, so a height outside every real epoch
 // came back RECOGNIZED. These cases pin the honest outcome.
 {
@@ -222,7 +222,7 @@ eq("inside a suspension the position is UNRECOGNIZED",
      { status: "DEFERRED", bindingRef: null });
 
   // a Proxy that answers EVERY property read, symbol keys included, with a fabricated capture
-  // whose bounds cover all heights. The round-8 slot read ctx[PREPARED] would have taken this.
+  // whose bounds cover all heights. The a review slot read ctx[PREPARED] would have taken this.
   const fabricated = { bounds: [{ fromCoreHeight: 0, toCoreHeight: Number.MAX_SAFE_INTEGER }],
                        susIntervals: [] };
   const anyKeyProxy = new Proxy(ctxOf(positive), {
@@ -335,7 +335,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
 }
 
 // ---------------------------------------------------------------------------
-// Confirmation round (2026-07-25), MUST-FIX: firstClosing checked its ORDER precondition
+// Confirmation round (2026-07-25), a required fix: firstClosing checked its ORDER precondition
 // but not the TYPE, and an order guard written with relational operators is silently
 // vacuous on non-numeric values. This is the same class as the suspension-bounds defect
 // folded the round before, reached through a different exported function.
@@ -377,7 +377,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
 }
 
 // ---------------------------------------------------------------------------
-// Confirmation round 2 (2026-07-25). The previous round's fixes were partly reachable
+// Confirmation a review (2026-07-25). The previous review's fixes were partly reachable
 // around, and the exported primitives accepted malformed heights. Each case below is the
 // reviewer's own, reproduced before the fix and driven here.
 // ---------------------------------------------------------------------------
@@ -391,7 +391,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
     suspendedAt: () => false, ...extra,
   });
 
-  // MUST-FIX: the epoch check used to be skippable by a caller-supplied flag. The memo is
+  // a required fix: the epoch check used to be skippable by a caller-supplied flag. The memo is
   // now a module-private WeakSet, so passing the flag cannot suppress the validation.
   throws("unordered epochs still fail closed when the caller supplies the old flag",
     () => recognizeAt(150, ctxOver([epoch(300, 399), epoch(100, 199)], { epochOrderChecked: true })),
@@ -447,7 +447,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
     lifecycle: { suspensions: [], terminalHeight: null }, baseHeight: 1, ...extra,
   });
 
-  // MUST-FIX: the memo remembered an array IDENTITY, so mutating the array in place after a
+  // a required fix: the memo remembered an array IDENTITY, so mutating the array in place after a
   // successful validation skipped the next check and returned a wrong recognition.
   const cps = [epoch(100, 299), epoch(300, 399)];
   const ctx = ctxOver(cps);
@@ -462,7 +462,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
   const bounds = assertEpochOrder(cps2);
   ok("assertEpochOrder returns frozen captured bounds",
      Object.isFrozen(bounds) && bounds.length === 2 && bounds[0].toCoreHeight === 299);
-  // Round 5 replaced this property. A caller-supplied capture used to be honoured when branded,
+  // a review replaced this property. A caller-supplied capture used to be honoured when branded,
   // and that was the defect: the brand pointed at a MUTABLE source, so a capture taken before a
   // mutation stayed trusted after it. Captures now live in a module-private slot, so what a
   // caller puts on the context is ignored and the mutated array is re-validated.
@@ -498,7 +498,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
   // block.
   const rows = [{ height: 1, coreChainLockedHeight: 200 }, { height: 2, coreChainLockedHeight: 300 }];
   const idx = prepareClosingIndex(rows);
-  // the caller-visible `prepared` marker is GONE (round 4, MAJOR: any object carrying
+  // the caller-visible `prepared` marker is GONE (a review, MAJOR: any object carrying
   // prepared:true was trusted outright); preparedness is now a module-private brand
   ok("prepareClosingIndex returns a frozen captured index",
      Object.isFrozen(idx) && Object.isFrozen(idx.anchors) && Object.isFrozen(idx.rows[0]));
@@ -545,7 +545,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
     ok("the Python checker exposes a mapping to compare", false);
   }
 
-  // THE WIDER RULE TOO, not only the names (round 4, MINOR): the dependency graph, the
+  // THE WIDER RULE TOO, not only the names (a review, MINOR): the dependency graph, the
   // barred set and the combined-component set are copied across the same four places, and a
   // drift there reaches the JavaScript derivation before the Python gate declines the result.
   {
@@ -560,7 +560,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
       { cwd: SCHEMA_DIR, encoding: "utf8" }));
 
     // THE REGISTRY IS THE FOURTH SOURCE, and it was never consulted for these three rules
-    // (round 6, MINOR): the comment claimed four-way coverage while the comparison ran between
+    // (a review, MINOR): the comment claimed four-way coverage while the comparison ran between
     // JavaScript and Python only, so a drift in the NORMATIVE document would have gone unseen by
     // the very check that exists to catch drift.
     const registry = JSON.parse(fs.readFileSync(
@@ -590,7 +590,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
     const jsCombined = Object.keys(VERIFIER_OF).filter((n) => n !== "schedule").sort();
     ok("the COMBINED_REQUIRED set matches the Python executable specification",
        JSON.stringify(jsCombined) === JSON.stringify([...py.COMBINED_REQUIRED].sort()));
-    // NO ESCAPE HATCH FOR AN ABSENT SIDE (round 5, MINOR). This used to fall through to a
+    // NO ESCAPE HATCH FOR AN ABSENT SIDE (a review, MINOR). This used to fall through to a
     // passing branch when the Python graph could not be read, and it could NEVER be read,
     // because DEPS was a local inside check_semantics. So the one comparison that mattered
     // most was vacuous while reporting success. The Python literal is now at module scope
@@ -619,7 +619,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
 }
 
 // ---------------------------------------------------------------------------
-// Repository-access round 4. The previous round's captures were sound but UNBRANDED, so a
+// Repository-access a review. The previous review's captures were sound but UNBRANDED, so a
 // caller could hand in fabricated "prepared" data and get the same wrong answers the
 // removed function override used to give. Each case below was reproduced first.
 // ---------------------------------------------------------------------------
@@ -649,7 +649,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
        epochBounds: assertEpochOrder([epoch(100, 399)]) }).status === "UNRECOGNIZED");
   ok("the real epoch still recognizes its own heights",
      recognizeAt(350, honest).status === "RECOGNIZED");
-  // THE ROUND-5 CASE: a capture taken before the source changed must not survive the change.
+  // THE a review CASE: a capture taken before the source changed must not survive the change.
   {
     const lc = { suspensions: [] };
     const stale = suspensionIntervals(lc, 1);
@@ -685,7 +685,7 @@ ok("a valid surrogate PAIR is accepted", canonicalize({ a: "\ud83d\ude00" }).len
   const idx2 = prepareClosingIndex(rows);
   // A FABRICATED index must be re-validated. The first version of this check omitted the OLD
   // caller-settable marker, so it would still have passed against the very code it was meant
-  // to constrain (round 5, MINOR): a regression that trusted `prepared: true` again would not
+  // to constrain (a review, MINOR): a regression that trusted `prepared: true` again would not
   // have failed it. Both shapes are driven now, with and without the marker.
   ok("a fabricated index WITHOUT the old marker is re-validated rather than trusted", (() => {
     const fabricated = { anchors: [250], rows: [{ height: 999, coreChainLockedHeight: 1 }] };

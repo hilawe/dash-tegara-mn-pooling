@@ -1,6 +1,6 @@
 /**
- * The failure-injection crash matrix for the formation RECEIPT state machine (round 1's
- * Lens-3 recommendation, and the mechanical base round 4 looks for above), on BOTH receipt
+ * The failure-injection crash matrix for the formation RECEIPT state machine (a review's
+ * Lens-3 recommendation, and the mechanical base a review looks for above), on BOTH receipt
  * ledgers: v8 (the default, pool flips live) and v9 via TEGARA_HARNESS_LEDGER=v9
  * (immutable pool, receipt publication only, no flip). It does for the receipt flow what
  * envStoreCrashTest does for the state store: stop REAL execution at every mutating
@@ -15,7 +15,7 @@
  * `complete` with a crash at K, then DRIVE RECOVERY the way an operator would (clear a
  * crash-held op lock, re-run `complete`, and run `receipt`), and assert the invariants.
  *
- * Independent cases (round 3's awkward-to-run-live re-check items) follow the matrix:
+ * Independent cases (a review's awkward-to-run-live re-check items) follow the matrix:
  * two stale op-lock waiters, draft recovery against a stale .val.prev, and an existing
  * receipt against a wrong/forming pool.
  *
@@ -102,7 +102,7 @@ const runChild = (args, crashAfter, extraEnv = {}) => {
   }
 };
 
-// INDEPENDENT expected receipt (round-4 + re-check): the oracle must NOT reuse the code's
+// INDEPENDENT expected receipt (a review and its re-check): the oracle must NOT reuse the code's
 // own output NOR the same formationCore helpers it validates (a shared-helper defect would
 // otherwise agree with itself). The allocation preimage is rebuilt here from the canonical
 // spec directly: the fixed-shape array, owners sorted by their DECODED 32-byte id (via
@@ -157,11 +157,11 @@ const assertReceiptCorrect = (label, r) => {
   ok(`${label}: allocationRows`, d.allocationRows === EXPECTED.allocationRows);
   ok(`${label}: allocationHash`, d.allocationHash === EXPECTED.allocationHash);
 };
-// the completion record must name exactly REAL_HASH (round-4: poolLive only checked
+// the completion record must name exactly REAL_HASH (a review: poolLive only checked
 // non-forming). On v8 the pool itself answers. On v9 the pool has NO equivalent and this
 // must not weaken to "a receipt exists": the v9 form is that ONE receipt exists, VERIFIES
 // against the pool through the shared six-duty check, and names exactly REAL_HASH
-// (checking merely present is the round-4 mistake one document over).
+// (checking merely present is the review mistake one document over).
 const poolLiveUnderRealHash = () => {
   const p = ledger().docs.find((d) => d.id === POOL);
   if (!PARED) return p.data.status === "live" && p.data.proTxHash === REAL_HASH;
@@ -227,7 +227,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
   ok("independent oracle agrees with formationCore.allocationHash", coreHash === EXPECTED.allocationHash);
 }
 
-// the mock's schema validator actually catches the false-green the round-4 review named
+// the mock's schema validator actually catches the false-green the review named
 // (a raw string passed where a byteArray is required), in the SHAPE of the ledger under
 // test: the pared receipt drops the three pool-pinned fields, and carrying one anyway must
 // be rejected the way additionalProperties:false would reject it
@@ -490,7 +490,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
   ok("mock rejects a share replace walking shareBps out of range",
     tr({ shareBps: 20000 }) !== null);
   // THE KEY CHECK'S INDEPENDENT OBSERVATION: every listed type now carries a value
-  // validator (votePreference was the last, confirm-pass round 8), and none of the value
+  // validator (votePreference was the last, a confirmation pass), and none of the value
   // branches reads unknown keys, so the unknown-property refusals below are what observe
   // the key allowlist itself; severing it leaves every value case green and fails exactly
   // these.
@@ -501,7 +501,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
   ok("mock accepts a legitimate votePreference replace", trv({ choice: "no" }) === null);
   ok("mock rejects a votePreference replace introducing an unknown property (the key check's own observation)",
     /unknown property sneaky/.test(trv({ sneaky: 1 }) || ""));
-  // votePreference replace VALUES are schema-bounded too (confirm-pass round 8, major:
+  // votePreference replace VALUES are schema-bounded too (a confirmation pass:
   // the documented key-check-only exception was not schema parity, and a governance
   // writer regression walking choice outside the enum or shortening delegateTo passed)
   ok("mock rejects a votePreference replace walking choice outside the enum",
@@ -524,7 +524,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     /status "not-a-status" not in the enum/.test(trq({ status: "not-a-status" }) || ""));
   ok("mock rejects a membershipRequest replace walking amountDuffs negative",
     /amountDuffs is not a nonnegative integer/.test(trq({ amountDuffs: -1 }) || ""));
-  // pledgeSlot replace VALUES are schema-bounded too (closing confirm-pass round 3,
+  // pledgeSlot replace VALUES are schema-bounded too (a closing confirmation pass,
   // major: the type was listed in the allowlist while its merged values went unchecked,
   // so a replace walking slotNo past the ledger ceiling or emptying the reward script
   // persisted). The ceiling is ledger-dependent, read the same way the create validator
@@ -543,7 +543,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     /rewardScript is not a 1\.\.34 byteArray/.test(trs({ rewardScript: Buffer.alloc(0) }) || ""));
   ok("mock accepts a pledgeSlot replace with a valid byte reward script",
     trs({ rewardScript: Buffer.from("76a914" + "22".repeat(20) + "88ac", "hex") }) === null);
-  // settlement and rewardAccrual replaces (confirm-pass round 11, major: both were absent
+  // settlement and rewardAccrual replaces (a confirmation pass: both were absent
   // from REPLACE_KEYS, so the matcher's real phase transition went unvalidated and any
   // accrual replacement passed blind)
   const setRec = { type: "settlement", data: { phase: "prepared" } };
@@ -576,7 +576,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     /provenance not in the enum/.test(vr({ ...goodReq, provenance: "stolen-valor" }) || ""));
   ok("request create: an unknown property is refused",
     /unknown property surprise/.test(vr({ ...goodReq, surprise: 1 }) || ""));
-  // EVERY validator's required loop demands OWN properties (confirm-pass round 6, E1:
+  // EVERY validator's required loop demands OWN properties (a confirmation pass, E1:
   // `p[k]` read the prototype chain, so Object.create over valid props passed all five
   // validators with zero own fields, and create then stored a record holding only
   // $createdAt, which real DPP refuses). Each is pinned with its own valid fixture
@@ -620,7 +620,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       ok(`${label} validator: an INHERITED-only property bag is refused (own properties, not the prototype)`,
         /missing/.test(v(Object.create(good)) || ""));
     }
-    // ...and OPTIONAL fields are judged by OWN presence only (confirm-pass round 7,
+    // ...and OPTIONAL fields are judged by OWN presence only (a confirmation pass,
     // minor, the false-refusal mirror): a v8 pool with every required field OWN and a
     // slotCount reachable only through the prototype serializes as a valid BOOKLESS pool
     // (create copies own entries), so refusing it as one-sided was stricter than the
@@ -647,7 +647,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
     ok("the CREATE PATH routes membershipRequest through the validator (wiring, not only the function)",
       rw.code === 3 && /status not in the enum/.test(rw.out));
-    // ...and votePreference's wiring is observed the same way (confirm-pass round 8: the
+    // ...and votePreference's wiring is observed the same way (a confirmation pass: the
     // severed-wiring mutation failed nothing until this probe existed, the same lesson as
     // the request's probe above)
     const voteProbe = `
@@ -662,7 +662,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
     ok("the CREATE PATH routes votePreference through the validator (wiring, not only the function)",
       rv.code === 3 && /choice not in the enum/.test(rv.out));
-    // the same wiring observation for the two types round 10 added, applied the day they
+    // the same wiring observation for the two types a review added, applied the day they
     // arrived rather than a round later
     const wiredCase = (type, propsJs) => {
       const probe = `
@@ -683,7 +683,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       '{ poolId: Buffer.alloc(32, 1), exitId: Buffer.alloc(32, 2), joinId: Buffer.alloc(32, 3), leaverId: Buffer.alloc(32, 4), joinerId: Buffer.alloc(32, 5), amountDuffs: 1, shareBps: 1, phase: "not-a-phase" }');
     ok("the CREATE PATH routes settlement through the validator (wiring)",
       se.code === 3 && /phase not in the enum/.test(se.out));
-    // the strict per-ledger TYPE model (confirm-pass round 12): a poolLedger type absent
+    // the strict per-ledger TYPE model (a confirmation pass): a poolLedger type absent
     // from the selected contract is refused like the real SDK refuses an undefined
     // document type, never resolved as an empty page (the always-empty answer hid two
     // capability-blind call sites across this round, reserve's and the debris sweep's)
@@ -698,7 +698,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       catch (e) { return { code: e.status, out: (e.stdout || "") + (e.stderr || "") }; } })();
     ok("mock refuses a query for a type the selected ledger does not define (v1 settlement)",
       rt.code === 3 && /not defined by the selected ledger/.test(rt.out));
-    // PER-LEDGER PROPERTY SHAPES (confirm-pass round 13, major: the validators assumed
+    // PER-LEDGER PROPERTY SHAPES (a confirmation pass: the validators assumed
     // the v8 shape everywhere, refusing valid base documents and accepting
     // later-capability fields the earlier contracts refuse). Each case swaps the ledger
     // env and re-requires the mock, the same pattern as the v8 create block.
@@ -750,7 +750,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
         ok("v4: an accrual without kind is refused (required from its introduction)",
           /missing kind/.test(tryV(() => m.validateAccrualProps({ ...baseAcc, shareBps: 5000 })) || ""));
       });
-      // REPLACE allowlists are version-aware too (confirm-pass round 14: the static
+      // REPLACE allowlists are version-aware too (a confirmation pass: the static
       // superset admitted v5/v7 fields into v1 replaces the earlier contracts refuse)
       withMock("v1", (m) => {
         const rep = (type, data, pending) => tryV(() => m.assertReplaceAllowed({ type, data }, pending));
@@ -774,7 +774,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
             poolId: "08".repeat(32), funderId: "09".repeat(32), epochHeight: 5, amountDuffs: 2 } })) === null);
       });
       // the v7 book ceiling is the PUBLISHED contract's 10000, not the v8 source's 512
-      // (confirm-pass round 15, minor: the reviewer's 625-slot regular book is
+      // (a confirmation pass: the reviewer's 625-slot regular book is
       // schema-valid on v7 and totals the tier exactly, and the mock refused it)
       withMock("v7", (m) => {
         ok("v7: a schema-valid 625-slot book is accepted (the published ceiling is 10000)",
@@ -802,13 +802,13 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
           /cannot be deleted/.test(tryV(() => m.assertMutationAllowed("delete",
             { type: "pledgeSlot", data: {} })) || ""));
       });
-      // ...and the v7+ claim stays mutable (the round-14 rule must not overreach)
+      // ...and the v7+ claim stays mutable (the review rule must not overreach)
       withMock("v8", (m) => {
         ok("v8: a claim replace stays allowed (sizeless mutable claims from v7)",
           tryV(() => m.assertMutationAllowed("replace", { type: "pledgeSlot", data: {} })) === null);
       });
     }
-    // the UNIQUE byPoolOwnerProposal index at create (confirm-pass round 9, E-1): one
+    // the UNIQUE byPoolOwnerProposal index at create (a confirmation pass, E-1): one
     // owner, one preference per pool and proposal; the same owner's second vote on the
     // same pair is refused, a different proposal or a different owner is not
     const led9 = { docs: [{ type: "votePreference", id: "seeded-v", ownerId: "op",
@@ -823,7 +823,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       cv("op", "05".repeat(32), "07".repeat(32)) === null);
     ok("vote create: a DIFFERENT owner on the same pair is accepted",
       cv("other", "05".repeat(32), "06".repeat(32)) === null);
-    // the two inherited types' unique indexes (confirm-pass round 10): one accrual per
+    // the two inherited types' unique indexes (a confirmation pass): one accrual per
     // (pool, funder, epoch, kind), and each exit or join settles at most once
     const led10 = { docs: [
       { type: "rewardAccrual", id: "seeded-a", ownerId: "op", data: {
@@ -857,7 +857,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       cs({ poolId: "08".repeat(32), exitId: "0f".repeat(32), joinId: "0e".repeat(32),
         leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
         amountDuffs: 1, shareBps: 1, phase: "prepared" }) === null);
-    // THE v3 EXCEPTION (confirm-pass round 17, E-1): the registered v3 publish predates
+    // THE v3 EXCEPTION (a confirmation pass, E-1): the registered v3 publish predates
     // the byJoin index (registerV4.cjs is the first carrying it), so on v3 a second
     // settlement against the same join is ACCEPTED by the published schema while a
     // reused exit stays refused; env-swapped, ledgerVersion() reads dynamically
@@ -872,7 +872,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
         /duplicate unique index byExit/.test(cs({ poolId: "08".repeat(32), exitId: "0a".repeat(32),
           joinId: "1e".repeat(32), leaverId: "0c".repeat(32), joinerId: "0d".repeat(32),
           amountDuffs: 1, shareBps: 1, phase: "prepared" }) || ""));
-      // THE RANGE IS PINNED MEMBER BY MEMBER (round-17 checker, finding 1): the suite's
+      // THE RANGE IS PINNED MEMBER BY MEMBER (a review, finding 1): the suite's
       // default ledger exercises the gate at one point only, so a gate wrongly disabled
       // on any single later ledger would stay green; every publish carrying byJoin is
       // driven here explicitly
@@ -909,7 +909,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     // rewardAccrual's key list is EMPTY on purpose (no legitimate replacement), so the
     // first-key acceptance case does not apply to it; its refusal-of-anything is pinned
     // separately below. The POOL's first key (status) exists only on the mutable ledgers
-    // (round-14: the allowlist is capability-filtered, v9 subtracts poolStatus, and v9's
+    // (a review: the allowlist is capability-filtered, v9 subtracts poolStatus, and v9's
     // pool replace is refused upstream as immutable anyway), so its acceptance case runs
     // on the mutable pass only.
     if (keys.length > 0 && !(type === "pool" && PARED)) {
@@ -926,7 +926,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
   // POOL REPLACE VALUE BOUNDS (pass 16, F2): the flip invariants pinned status and
   // proTxHash and nothing else, so a replace walking slotCount to 0, which the published
   // schema refuses at minimum 1, passed the matrix. The merged document now validates.
-  // the flip's replace validator semantics are the MUTABLE ledgers' (round-14: on v9 the
+  // the flip's replace validator semantics are the MUTABLE ledgers' (a review: on v9 the
   // pool is immutable and its replace is refused upstream by assertMutationAllowed, which
   // has its own cases; the capability filter correctly strips status there, so driving
   // these value bounds under v9 would only observe the filter, not the bounds)
@@ -949,11 +949,11 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     ok("pool replace: slotCount 513 is refused",
       /slotCount out of 1\.\.512/.test(attemptP({ slotDuffs: 50000000000, slotCount: 513 }) || ""));
     // the one-sided case needs a BOOKLESS base record: the shared base above carries
-    // slotDuffs, so merging a slotCount onto it is two-sided. ACCEPTED as of round 18
+    // slotDuffs, so merging a slotCount onto it is two-sided. ACCEPTED as of a later review
     // (finding 2): the published v7/v8 pool schemas carry no dependentRequired, so a
     // one-sided merged result is schema-valid on the mutable ledgers and the earlier
     // refusal was the mock being wider than the contract it models. The base is a
-    // COMPLETE v8 pool minus the book (round-18 checker, finding 1: the first draft
+    // COMPLETE v8 pool minus the book (a review, finding 1: the first draft
     // carried only status and proTxHash, a record the schema cannot hold), and both
     // one-sided directions are pinned (its finding 2)
     const bookless = { type: "pool", data: { status: "forming",
@@ -1032,10 +1032,10 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       /unknown property/.test(vp({ ...goodV8, $surprise: 1 }) || ""));
     ok("v8 pool create: a real system field ($createdAt) is allowed",
       vp({ ...goodV8, $createdAt: 1 }) === null);
-    // one-sided ACCEPTED as of round 18 (finding 2): neither the v7 nor the v8
+    // one-sided ACCEPTED as of a later review (finding 2): neither the v7 nor the v8
     // published pool schema carries dependentRequired, so a one-sided book is
     // schema-valid here; only the v9 contract refuses it (pinned in the immutable
-    // mock-schema block). Both directions, and the v7 selection too (round-18
+    // mock-schema block). Both directions, and the v7 selection too (a review
     // checker, finding 2: one direction alone leaves a direction-specific
     // survivor)
     ok("v8 pool create: a one-sided slot book (slotCount only) is accepted (the published schema has no dependentRequired)",
@@ -1199,7 +1199,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       malformed.code === 3 && /slotNo out of 0\.\.511/.test(malformed.out));
     ok("end-to-end: neither refusal left a document behind",
       ledger().docs.filter((d) => d.type === "pledgeSlot").length === e2eBefore + 1);
-    // THE bySlot INDEX ON REPLACE (confirm-pass round 24, major): the published
+    // THE bySlot INDEX ON REPLACE (a confirmation pass): the published
     // pledgeSlot is unique on (poolId, slotNo) and slotNo is a replaceable key, so a
     // replace moving a claim onto the occupied slot 7 must refuse AT BROADCAST, where
     // the other claims are visible, exactly like the pass-17 pool-flip clash. A move
@@ -1216,14 +1216,14 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
         rewardScript: Buffer.from(${JSON.stringify(slotScriptE2E)}, "hex") }`;
     const g8 = drive(slotCreate(mineFields));
     ok("end-to-end: the second claim lands on the free slot 8", g8.code === 0);
-    // selected by the COMPOSITE key, and required to exist (round-24 checker, finding
+    // selected by the COMPOSITE key, and required to exist (a review, finding
     // 3: a slotNo-only pick could grab an older claim in another pool)
     const claimAt = (poolHex, slotNo) => ledger().docs.find((d) => d.type === "pledgeSlot"
       && String(d.data.poolId).toLowerCase() === poolHex && Number(d.data.slotNo) === slotNo);
     const moved = claimAt(poolHexE2E, 8);
     ok("end-to-end: the created claim is findable by its composite (poolId, slotNo) key", !!moved);
     const movedId = (moved || {}).id;
-    // the refusal must be ATOMIC over the whole claim set (round-24 checker, finding 2:
+    // the refusal must be ATOMIC over the whole claim set (a review, finding 2:
     // asserting only the moved claim would miss a mutation that deletes the occupant
     // and then throws the expected message)
     const slotSetBefore = JSON.stringify(ledger().docs.filter((d) => d.type === "pledgeSlot"));
@@ -1232,7 +1232,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
       rClash.code === 3 && /duplicate unique index bySlot for pledgeSlot/.test(rClash.out));
     ok("end-to-end: the refused replace left the ENTIRE claim set byte-identical",
       JSON.stringify(ledger().docs.filter((d) => d.type === "pledgeSlot")) === slotSetBefore);
-    // SELF-EXCLUSION (round-24 checker, finding 4): a claim rewriting its own current
+    // SELF-EXCLUSION (a review, finding 4): a claim rewriting its own current
     // slot number must not clash with itself
     const rSelf = drive(slotReplace(movedId, 8));
     ok("end-to-end: a replace writing the claim's OWN slot number is accepted (no self-clash)",
@@ -1240,7 +1240,7 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
     const rFree = drive(slotReplace(movedId, 9));
     ok("end-to-end: the same replace onto the FREE slot 9 is accepted (the refusal is the collision)",
       rFree.code === 0 && !!claimAt(poolHexE2E, 9));
-    // THE KEY IS COMPOSITE (round-24 checker, finding 1: dropping the poolId comparison
+    // THE KEY IS COMPOSITE (a review, finding 1: dropping the poolId comparison
     // would make slotNo globally unique and every same-pool case would still pass): a
     // claim in a DIFFERENT pool moves onto slot 7 freely, because pool A's occupied 7
     // does not block pool B's
@@ -1344,7 +1344,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   `receipt-publish, ${stoppedClean} loud-and-receiptless stops (all ${N} boundaries converged or stopped safely)`);
 
 // ---- receipt-command matrix 1: crash while `receipt` PUBLISHES from a live-no-receipt
-//      state (round-4 harness gap: recovery runs were never themselves interrupted) ----
+//      state (a review harness gap: recovery runs were never themselves interrupted) ----
 {
   writeSeed();
   // reach the recoverable no-receipt intermediate state with the draft + active manifest
@@ -1390,7 +1390,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
   snapshot();
   let CN = 0;
   for (;;) { restore(); const r = runChild(["receipt", POOL], CN); if (r.code !== 97) break; CN++; if (CN > 200) break; }
-  // guard against a vacuous pass (round-4 re-check): the reconcile path DOES cross local
+  // guard against a vacuous pass (a review re-check): the reconcile path DOES cross local
   // write boundaries, so CN must be non-zero or the matrix below asserts nothing
   ok(`receipt reconcile crosses a boundary set (${CN})`, CN > 0);
   console.log(`receipt-reconcile matrix: ${CN} fault boundaries`);
@@ -1408,7 +1408,7 @@ console.log(`recovery paths: ${recoveredByComplete} via complete-resume, ${recov
 }
 
 // ---- independent case: a legitimate POOL FEE CHANGE after completion must NOT make
-//      `receipt` falsely reject the (historical-fee) receipt (round-5 P2) ----
+//      `receipt` falsely reject the (historical-fee) receipt (a review P2) ----
 // SKIPPED on the immutable-pool ledger, where the state this case injects CANNOT EXIST:
 // the pool's fee is pinned at creation, so "the fee changed after completion" is a fixture
 // the real ledger cannot produce, and a fixture that cannot exist proves nothing (the
@@ -1483,7 +1483,7 @@ if (PARED) {
 }
 
 // ---- independent case C: a corrupt draft is refused, never written blind ----
-//      DETERMINISTIC (round-6): reach a state that certainly HAS a draft (halt at the
+//      DETERMINISTIC: reach a state that certainly HAS a draft (halt at the
 //      last pre-receipt boundary, which freezes the draft and retains it), then corrupt it.
 {
   writeSeed();
@@ -1498,7 +1498,7 @@ if (PARED) {
   ok("a corrupt draft writes no receipt", receipts().length === 0);
 }
 
-// ---- independent case D0: a fee change BEFORE the flip must REFUSE (round-6 re-check:
+// ---- independent case D0: a fee change BEFORE the flip must REFUSE (a review re-check:
 //      the receipt records the completion-time fee, so a pre-flip drift must never let a
 //      stale draft fee freeze into the immutable receipt) ----
 // SKIPPED on the immutable-pool ledger for the same unrepresentable-fixture reason as the
@@ -1519,7 +1519,7 @@ if (PARED) {
 }
 
 // ---- independent case D: a legitimate POOL FEE CHANGE while the pool is live WITHOUT a
-//      receipt (draft present) must NOT brick recovery (round-6: requireDraftMatchesPool
+//      receipt (draft present) must NOT brick recovery (a review: requireDraftMatchesPool
 //      used to reject on fee) ----
 // SKIPPED on the immutable-pool ledger: the fee cannot change there, so the state this
 // case reaches is unrepresentable, and its concern (a live pool whose mutable fee drifted
@@ -1721,7 +1721,7 @@ if (!PARED) {
   }
 }
 
-// ---- independent case F3 (closing wave, folder-access reviewer): a DRAFT-ONLY abandon
+// ---- independent case F3 (closing wave, repository-access reviewer): a DRAFT-ONLY abandon
 //      archive is a LEGITIMATE writer output, not damage. `abandon` on a pool with a frozen
 //      draft but NO committed manifest emits {manifest:null, draft:"<frozen draft>"} (the
 //      abandon writer: `manifest: hasManifest ? envHere[key] : null`, owners taken from the
@@ -1838,7 +1838,7 @@ if (!PARED) {
       df !== undefined && JSON.parse(fs.readFileSync(path.join(STATE_DIR, df), "utf8")).feeIsCompletionTime === true);
   }
   // the draft is LOST (the state loss the rebuild path exists for), and the pool fee
-  // then drifts legitimately (the fee is mutable after completion, round-5)
+  // then drifts legitimately (the fee is mutable after completion, a review)
   for (const f of fs.readdirSync(STATE_DIR)) {
     if (/^RECEIPT_DRAFT_[0-9A-F]{20}\.val$/.test(f)) fs.rmSync(path.join(STATE_DIR, f));
   }
@@ -1942,7 +1942,7 @@ if (!PARED) {
     optOut.code !== 0 && /incoherent record/.test(optOut.out));
 }
 
-// ---- independent case DEBRIS CALLER ENUMERATION (confirm-pass round 11, must-fix):
+// ---- independent case DEBRIS CALLER ENUMERATION (a confirmation pass, must-fix):
 //      votePreference and settlement are poolId-referencing families the sweep never
 //      enumerated, so a sweep could delete a pool around a preference (orphaning it, its
 //      owner never consulted) and a settlement's member history protected nothing. Drives
@@ -2003,7 +2003,7 @@ if (!PARED) {
     rC.code === 0 && /settled an exit or join/.test(rC.out)
     && ledger().docs.some((d) => d.id === POOL)
     && ledger().docs.some((d) => d.type === "settlement"));
-  // (d) the v1 LEDGER has no settlement type at all (confirm-pass round 12, major: the
+  // (d) the v1 LEDGER has no settlement type at all (a confirmation pass: the
   // first draft queried it unconditionally, so on v1 the SDK refused the unknown type
   // before the plan could run and the whole sweep wedged; the reserve fold was this exact
   // shape). The strict mock now refuses absent types like the real SDK, so this drives
@@ -2032,7 +2032,7 @@ if (!PARED) {
   }
 }
 
-// ---- independent case PRE-V8 OWNER BINDING (confirm-pass round 16, must-fix): the M1
+// ---- independent case PRE-V8 OWNER BINDING (a confirmation pass, must-fix): the M1
 //      owner binding was v8-gated while the final pool replacement is operator-signed on
 //      EVERY mutable ledger, so a v1-v7 completion of a foreign-owned pool mutated public
 //      records (shares created, requests settled) before dying at the replacement
@@ -2070,7 +2070,7 @@ if (!PARED) {
   }
 }
 
-// ---- independent case LEGACY CAST READER DELEGATION (confirm-pass round 10, major):
+// ---- independent case LEGACY CAST READER DELEGATION (a confirmation pass):
 //      castReceipt.cjs built its own choice map and never read delegateTo, the exact
 //      divergence ledgerTally.cjs's header says the F6 fold existed to end, so a targeted
 //      delegation fell into the untargeted net and the legacy publisher computed a
@@ -2124,7 +2124,7 @@ if (!PARED) {
   }
 }
 
-// ---- independent case AUDIT RECEIPT CONTRADICTION (closing confirm-pass round 4,
+// ---- independent case AUDIT RECEIPT CONTRADICTION (a closing confirmation pass,
 //      major): the ledger audit collapsed "no receipt" and "a receipt exists but does
 //      not verify" into one node-unknown state, so a ledger holding a contradicting
 //      receipt could report AUDIT OK with exit 0 against the script's own header. A
@@ -2286,7 +2286,7 @@ if (PARED) {
 }
 
 // ---- independent case E: abandon ARCHIVES before clearing, and receipt RECOVERS from
-//      the archive when the completion turns out to have landed anyway (round-7 P1).
+//      the archive when the completion turns out to have landed anyway (a review P1).
 //      On v8 the late evidence is the pool live under the abandoned hash; on v9 it is a
 //      RECEIPT matching the archived manifest, and with NO receipt the archive must NOT
 //      publish on its own (the abandon stands; invariant list item 12). ----
@@ -2318,7 +2318,7 @@ if (PARED) {
   ok("receipt RECOVERS from the abandon archive", r.code === 0 && receipts().length === 1
     && (!PARED || /finalized/.test(r.out)));
   assertReceiptCorrect("abandon-archive receipt", receipts()[0]);
-  ok("finalization CLEARED the abandon archive (round-7 re-check)",
+  ok("finalization CLEARED the abandon archive (a review re-check)",
     !fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_ABANDONED_") && f.endsWith(".val")));
   ok("archive recovery RETAINED a FORMATION_DONE_ record (F-E re-check)",
     fs.readdirSync(STATE_DIR).some((f) => f.startsWith("FORMATION_DONE_") && f.endsWith(".val")));
@@ -2358,7 +2358,7 @@ if (PARED) {
 }
 
 // ---- independent case H: a STALE archive whose committed hash != the live pool hash is
-//      IGNORED, so it cannot make a valid receipt read as contradictory (round-7 re-check P2) ----
+//      IGNORED, so it cannot make a valid receipt read as contradictory (a review re-check P2) ----
 {
   writeSeed();
   runChild(["complete", POOL, REAL_HASH]); // clean: DONE + receipt B under REAL_HASH
@@ -2401,8 +2401,8 @@ if (PARED) {
   ok("case F converged to the completion record", poolLiveUnderRealHash());
 }
 
-// ---- independent case G: done prune KEEPS a DONE whose sibling DRAFT survives (round-7
-//      P2, the pre-round-6 half-finalized DONE+DRAFT legacy state) ----
+// ---- independent case G: done prune KEEPS a DONE whose sibling DRAFT survives (a review
+//      P2, the pre-a review half-finalized DONE+DRAFT legacy state) ----
 {
   writeSeed();
   runChild(["complete", POOL, REAL_HASH]); // clean: writes DONE, clears active + draft

@@ -157,7 +157,7 @@ ok("v1 resolves to the original namespace with no register requirement",
 // would have silently admitted v9 to places written against the v8 shape. The v8
 // squatting probe uses ledgerIsExactly for that reason; formation.cjs, whose migration
 // (phases C to E) made it capability-correct, deliberately uses the completion-receipt
-// capability so its receipt command serves v9 too (round 21 corrected this comment,
+// capability so its receipt command serves v9 too (a review corrected this comment,
 // which said both used ledgerIsExactly). These cases pin the exactness distinction.
 ok("ledgerIsExactly is exact where the capability is not",
   withLedger("v9", () => S.hasCompletionReceipt() === true && S.ledgerIsExactly("v8") === false));

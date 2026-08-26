@@ -2,7 +2,7 @@
 
 The machine-readable companion of `LIFECYCLE_JOURNAL_AND_SEAM_DESIGN.md` (revision 27),
 build-order item 0. The design note carries the rules and their reasons; THIS package
-carries the closed wire definition and the executable proof that it is closed. Across eleven review rounds the checker came to RE-DERIVE every decision the envelope
+carries the closed wire definition and the executable proof that it is closed. across successive reviews the checker came to RE-DERIVE every decision the envelope
 asserts instead of accepting labels; the round records in the repo root map every finding.
 
 ## The package
@@ -125,7 +125,7 @@ performs the pinned byte-reversal, so the conversion rule is exercised by the ve
   decoderId and digest-embedding artifactRef; the exact lineage extent over the platform
   audit interval; and adjacent entries differing in at least one bundle-identity field
   (change points, not deployments; a soundness-review finding).
-- `verifyCheckpointRecognition` (semantic portion, round-7): the governing `recognize`
+- `verifyCheckpointRecognition` (semantic portion, a review): the governing `recognize`
   outcome RE-DERIVED per height for the audited L1 position (region resolution,
   activation, suspension and terminal gating from the reconstructed journal) and required
   to match the serialized height-level `recognition`; the v2 decoder takes the signer public key and the
@@ -196,7 +196,7 @@ performs the pinned byte-reversal, so the conversion rule is exercised by the ve
    L1 state, so a false-zero or wrong-L1 selection is a runtime-authenticated rejection;
    the suite (placeholder L1) enforces owner-vector internal consistency and discloses the
    L1 binding.
-6. DETERMINISM BINDINGS (revision 16, confirmation-round-3 majors 2, 3, 4): three fields
+6. DETERMINISM BINDINGS (revision 16, a confirmation pass): three fields
    that were free strings are now closed or bound, so two conforming producers cannot emit
    different canonical bytes for the same facts.
    - The decoder EXECUTION DESCRIPTOR (`runtime`, `entryPoint`, `inputFormat`) is a closed

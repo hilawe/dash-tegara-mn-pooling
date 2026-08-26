@@ -80,7 +80,7 @@ const loadObservations = () => {
             poolOwnerId: pool.getOwnerId().toString() });
           auditReceiptOk = verdict.ok === true;
           // A PRESENT RECEIPT THAT DOES NOT VERIFY IS AN INCONSISTENCY, never ordinary
-          // unfinished state (closing confirm-pass round 4, major): collapsing it into
+          // unfinished state (a closing confirmation pass, major): collapsing it into
           // node-unknown let the incomplete-share warning branch continue past it, and a
           // ledger holding a contradicting receipt was reported AUDIT OK with exit 0,
           // against this script's own header. Receipt ABSENCE stays a non-failure (a pool

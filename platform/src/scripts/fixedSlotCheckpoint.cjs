@@ -1,7 +1,7 @@
 /**
  * The NARROW TRUSTED CHECKPOINT, the governed-prototype pool-recognition component of the
  * fixed-slot design (`tegara/docs/FIXED_SLOT_SHARE_SPEC.md`, section 4, review-complete
- * through round 12). This is the punch-list item the fourth-session handoff owes for P7 and
+ * through a review). This is the punch-list item the fourth-session handoff owes for P7 and
  * P8: a signed binding list from ONE trusted recognition authority, byte-canonical so two
  * implementations hash and validate it identically, fail-stop on any inconsistency, with no
  * migration or recovery machinery. It is a DISCLOSED TRUST POINT (the authority decides
@@ -53,7 +53,7 @@
  *   region 3  a height at or above the last adopted epoch's         -> DEFERRED, finalize
  *             end-exclusive height                                     nothing, replay when
  *                                                                      an epoch is adopted
- * Region 3 never permanently closes through an epoch (the round-11 correction): permanent
+ * Region 3 never permanently closes through an epoch (the review correction): permanent
  * unrecognition of a SPECIFIC pool comes only from that pool's terminal latch, which is
  * client-side lifecycle knowledge independent of epoch windows, passed into `recognize`
  * by the caller.

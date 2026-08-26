@@ -1,7 +1,7 @@
 /**
- * Fixtures for the peer client's HANDSHAKE STATE MACHINE (round 8, a soundness-review finding).
+ * Fixtures for the peer client's HANDSHAKE STATE MACHINE (a review, a soundness-review finding).
  *
- * WHY THESE EXIST. Round 8 found that the capture client validated every frame correctly and
+ * WHY THESE EXIST. a review found that the capture client validated every frame correctly and
  * then dispatched on the command name with no notion of ORDER, so a peer sending a
  * checksum-valid `mnlistdiff` before any `version` produced a completed capture whose common
  * protocol version was recorded as 0. The review also noted the deeper problem: the client's
@@ -64,7 +64,7 @@ ok("a numeric string offer inside the decoder's range is accepted",
 throws("a nonnumeric offer is refused rather than becoming NaN",
   () => validateOfferedVersion("abc"), /not an integer/);
 throws("a fractional offer is refused", () => validateOfferedVersion("70240.5"), /not an integer/);
-// THE OFFER IS BOUND BY WHAT THE DECODER READS, NOT BY DASH'S PEER FLOOR (round 10, MAJOR).
+// THE OFFER IS BOUND BY WHAT THE DECODER READS, NOT BY DASH'S PEER FLOOR (a review, MAJOR).
 // Staying above 70221 keeps a Dash peer talking to us; it does not mean the bytes we collect can
 // be parsed. 70229 is the case the review named: a perfectly acceptable peer version, and one
 // whose mnlistdiff layout the pinned decoder declines.
@@ -74,7 +74,7 @@ throws("70229 specifically is refused, since the decoder starts at 70230",
   () => validateOfferedVersion(70229), /outside the range this capture's decoder reads/);
 throws("an offer above the decoder's range is refused",
   () => validateOfferedVersion(CAPTURE_MAX_VERSION + 1), /outside the range this capture's decoder reads/);
-// THE CONSTRUCTOR ENFORCES THE SAME RULE AS THE COMMAND-LINE PATH (round 12, MINOR). It is an
+// THE CONSTRUCTOR ENFORCES THE SAME RULE AS THE COMMAND-LINE PATH (a review, MINOR). It is an
 // exported entry point and used to take its offer on trust, so a caller reaching it directly with
 // a nonnumeric value produced NaN, both range comparisons against NaN were false, and the session
 // completed with a common version that serializes as null. Same unusable capture, different route.
@@ -105,7 +105,7 @@ ok("a peer below the minimum protocol version is refused",
    /below the minimum/.test(parsePeerVersion(versionBody(MIN_PEER_PROTO_VERSION - 1)).error || ""));
 
 // ---- ordering: nothing is accepted before the peer's version ----
-// This is the round-8 defect itself. Before the fold each of these produced a capture.
+// This is the review defect itself. Before the fold each of these produced a capture.
 for (const early of ["mnlistdiff", "verack", "ping", "inv"]) {
   const { s, captures, refusals } = session();
   s.handle(early, DIFF);
@@ -115,7 +115,7 @@ for (const early of ["mnlistdiff", "verack", "ping", "inv"]) {
 }
 
 // ---- ordering: the happy path, and the common version it records ----
-// THIS CASE USED TO NEGOTIATE 70229 AND REQUIRE SUCCESS (round 10, MAJOR). That is below the
+// THIS CASE USED TO NEGOTIATE 70229 AND REQUIRE SUCCESS (a review, MAJOR). That is below the
 // decoder's supported floor, so the fixture was requiring the client to report a completed
 // capture whose bytes the only available consumer declines. It now negotiates a version inside
 // the decoder's range, and the out-of-range case below is asserted as a refusal instead.
@@ -136,7 +136,7 @@ for (const early of ["mnlistdiff", "verack", "ping", "inv"]) {
   ok("the payload is recorded", captures[0].payloadHex === "deadbeef" && captures[0].byteLength === 4);
 }
 
-// ---- the negotiated version must be one the decoder reads (round 10, MAJOR) ----
+// ---- the negotiated version must be one the decoder reads (a review, MAJOR) ----
 // The peer is entirely acceptable to Dash here. What is not acceptable is spending a capture on a
 // layout nothing in this build can parse, so the session stops BEFORE the request goes out rather
 // than collecting bytes and leaving a consumer to discover the problem.

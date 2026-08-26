@@ -29,7 +29,7 @@ module.exports = async (ctx) => {
       const po = pool.toObject();
       const core = require("../formationCore.cjs");
       // WHETHER THIS POOL IS OPEN. Where the v5 lifecycle field exists it must AGREE
-      // with the placeholder-hash convention, both saying forming (round 18, D-1); the
+      // with the placeholder-hash convention, both saying forming (a review, D-1); the
       // hash alone decides on the earlier ledgers. An immutable pool has neither field
       // and cannot answer at all, so the admission rule below decides instead and this
       // expression is not evaluated there (Buffer.from(undefined) would throw).
@@ -56,7 +56,7 @@ module.exports = async (ctx) => {
         forming = admission.ok;
       } else {
         // WHERE THE v5 LIFECYCLE FIELD EXISTS, it AND the hash namespace must both say
-        // forming; without it (v1-v4) the hash decides alone (confirm-pass round 18,
+        // forming; without it (v1-v4) the hash decides alone (a confirmation pass,
         // D-1): completion's nothing-to-do check reads the HASH on every mutable ledger
         // (formation.cjs, "already LIVE"), so a v5 pool whose proTxHash flipped to a
         // real hash while status stayed "forming" was admitted here and refused there,
@@ -88,7 +88,7 @@ module.exports = async (ctx) => {
       }
 
       // THE MUTABLE-POOL OPERATOR BINDING, the same rule reserve enforces (confirm-pass
-      // round 15, D-1): completion's final pool replacement is signed by the operator on
+      // a review, D-1): completion's final pool replacement is signed by the operator on
       // EVERY mutable ledger, so a pool some other identity owns can never complete under
       // this operator, and admitting a pledge into it strands the contribution. The check
       // was v8-gated in formation while the replacement is not. Fail closed on an
@@ -145,7 +145,7 @@ module.exports = async (ctx) => {
       //   one owner stay admissible.
       const ownersAfterPledge = new Set([...joins.map((d) => d.getOwnerId().toString()), myId]).size;
       core.requireOwnerCapacity(ownersAfterPledge);
-      // UNCONDITIONAL (confirm-pass round 23, major): same rule as reserve, the
+      // UNCONDITIONAL (a confirmation pass): same rule as reserve, the
       // member's environment cannot speak for the operator's completion profile
       core.requireCompletableOwnerCount({
         distinctOwnersAfterClaim: ownersAfterPledge,

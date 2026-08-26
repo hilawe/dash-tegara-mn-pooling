@@ -34,7 +34,7 @@ const HASH32 = { type: "array", byteArray: true, minItems: 32, maxItems: 32 };
   const v3 = JSON.parse(JSON.stringify(poolLedgerContract));
 
   // 1. reconstructible accruals
-  // KNOWN v3 LIMITATION (review batch-2, B12): epochHeight alone keys a pool's
+  // KNOWN v3 LIMITATION (a review, batch 2, finding B12): epochHeight alone keys a pool's
   // distribution events, but a reward and a dissolution can land at the SAME fork height,
   // and this unique index then cannot hold both. v4 adds a `kind` field
   // ("reward" | "principal") to rewardAccrual inside the unique index (registerV4.cjs).
