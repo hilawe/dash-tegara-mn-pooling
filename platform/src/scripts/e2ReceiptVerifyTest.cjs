@@ -350,6 +350,42 @@ const conformanceVariants = (obj, knownHex) => ({
     verify(fix, { deps }), /stage two .* did not verify/);
   ok("stage one had succeeded before stage two refused (both stages ran)",
     deps._calls.stageOne.length === 1 && deps._calls.stageTwo.length === 1);
+
+  // A ROOT MUST BE A ROOT. This required only `typeof === "string"`, so a stage
+  // one answering with a non-root string passed it to stage two, and a stage two
+  // returning true VERIFIED the record over something that cannot be a state
+  // root. A derived root is a 32-byte digest, so 64 lower-case hex characters.
+  for (const [what, root] of [["an empty string", ""], ["a non-hex string", "not-a-root"],
+    ["a short hex string", "ab".repeat(16)], ["an over-long hex string", "ab".repeat(40)],
+    ["upper-case hex", "AB".repeat(32)]]) {
+    await rejects(`a stage-one root that is ${what} refuses, even when stage two would verify`,
+      verify(fix, { stageOne: () => ({ ok: true, rootHashHex: root }), stageTwo: () => true }),
+      /stage one .* did not return/);
+  }
+
+  // STAGE TWO ANSWERS WITH THE BOOLEAN true, NOT MERELY SOMETHING TRUTHY. The
+  // implementation compares against `true`; the only adverse case here was
+  // `false`, so relaxing the comparison to `!stageTwo` went unnoticed and a
+  // truthy malformed answer would have verified the record.
+  for (const [what, value] of [["the string true", "true"], ["the number 1", 1],
+    ["an object", { ok: true }], ["an array", []]]) {
+    await rejects(`a stage two answering ${what} refuses (the contract is the boolean, not truthiness)`,
+      verify(fix, { stageTwo: () => value }), /stage two .* did not verify/);
+  }
+
+  // A MISSING DEPENDENCY IS A FAULT, NOT A STATEMENT ABOUT THE RECORD. This used
+  // to answer `{ status: "refused" }` naming the absent decoder, which reads as
+  // the record being nonconforming, before any record had been inspected.
+  for (const k of ["decodeProofCarrier", "decodeMetadata", "decodeTransfer",
+    "verifyStageOne", "verifyStageTwo"]) {
+    const holed = { ...mkDeps({}) };
+    delete holed[k];
+    await faults(`an absent deps.${k} is a hard fault, never a refusal about the record`,
+      verifyReceipt({ receipt: fix.receipt, parts: fix.parts,
+        reservation: { status: "unserved" }, entitlementRow: fix.entitlementRow,
+        incomeIdentity: fix.incomeIdentity, chainIdPin: fix.chainIdPin, deps: holed }),
+      /is absent or not a function/);
+  }
 }
 
 // ---- the reservation conformance ----
@@ -637,6 +673,33 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
     ok("the test-only surface still carries the stages this suite drives",
       typeof verifyModule.__testing.reassembleProof === "function"
       && typeof verifyModule.__testing.verifyCarrierConformance === "function");
+    // and it carries NOTHING ELSE. assertCanonicalSplit was exported here and no
+    // suite ever drove it, so it was a contract defended for nobody; it is used
+    // internally and stays that way. Pinned so it cannot drift back unnoticed.
+    ok("the test-only surface is exactly the two stages this suite drives",
+      Object.keys(verifyModule.__testing).sort().join(",")
+        === "reassembleProof,verifyCarrierConformance");
+  }
+  {
+    // THE EXPORTED PINS MUST BE THE ONES THE VERIFIER ENFORCES. The suite checked
+    // only that the NAMES were present, so a published value disagreeing with the
+    // enforced one would have gone unnoticed, and a consumer reading the export
+    // would have been told something the verifier does not do. Each is bound here
+    // to the refusal the verifier actually raises.
+    const fix = mkReceipt(smallCarrier);
+    const badPv = await verify(fix, { deps: { ...mkDeps(),
+      decodeMetadata: (h) => ({ ...mkDeps().decodeMetadata(h), protocolVersion: 999 }) } });
+    ok("the exported protocol pin is the value the verifier enforces",
+      badPv.status === "refused"
+      && badPv.reason.includes(`is not the pinned ${verifyModule.PROTOCOL_VERSION_PIN}`));
+    ok("the exported route registry is the set the verifier accepts, and it is frozen",
+      Object.isFrozen(verifyModule.ROUTE_REGISTRY)
+      && verifyModule.ROUTE_REGISTRY.length >= 1);
+    const badRoute = await verifyCaptureRecord({ capture: { ...capture, heightRoute: "not-a-route" },
+      servedFor: { poolId: POOL, accrualId: ACC }, chainIdPin: CHAIN, deps: mkDeps() });
+    ok("a route outside the exported registry refuses, naming the registry",
+      badRoute.status === "refused" && /route registry/.test(badRoute.reason)
+      && !verifyModule.ROUTE_REGISTRY.includes("not-a-route"));
   }
 
   // ---- THE VERDICT UNION IS CLOSED AT TWO ----
@@ -691,6 +754,22 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
     await rejects(`a throwing ${decoder} is EVIDENCE, returned as a refusal naming the decode`,
       verify(fix, { deps: { ...mkDeps(), [decoder]: () => { throw new Error("bad bytes"); } } }),
       /does not decode/);
+  }
+  // AND EACH REFUSAL IS A FRESH OBJECT. The boundary says the decoder failure is
+  // converted into a NEW refusal inside the verifier's own frame, and nothing
+  // bound that: a review's mutation cached refusals by reason and handed the
+  // same object back for repeated failures, with every suite still green. A
+  // shared result is a value two callers can both hold and one can mutate, which
+  // is the kind of aliasing this boundary exists to keep out.
+  {
+    const boom = { deps: { ...mkDeps(), decodeProofCarrier: () => { throw new Error("bad bytes"); } } };
+    const r1 = await verify(fix, boom);
+    const r2 = await verify(fix, boom);
+    ok("two decode refusals carry the same reason", r1.reason === r2.reason);
+    ok("but they are DISTINCT objects, freshly built per failure (never a cached one)",
+      r1 !== r2);
+    r1.status = "verified"; // a caller mutating its own copy
+    ok("mutating one refusal cannot reach the other", r2.status === "refused");
   }
   // AND THE FORMATTING OF WHAT THEY THREW MUST BE TOTAL. Each decoder catch
   // interpolates the caught value into the refusal it raises, so a value that

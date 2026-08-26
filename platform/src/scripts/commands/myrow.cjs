@@ -23,7 +23,7 @@ module.exports = async (ctx) => {
       const prefUpdated = myPrefDoc ? Number(myPrefDoc.toObject().$updatedAt || myPrefDoc.toObject().$createdAt) : null;
       // my WEIGHT matters as much as my choice: a snapshot that keeps my choice but
       // shrinks my bps neutralizes my vote and still self-authenticates (both
-      // batch-5 packet reviewers converged on this), so the standing snapshot's bps
+      // independent reviewers converged on this), so the standing snapshot's bps
       // is compared against my actual share, same adjudication rules as the choice
       const myShareDoc = (await client.platform.documents.get("poolLedger.share", {
         where: [["poolId", "==", poolId], ["$ownerId", "==", Identifier.from(myId)]],

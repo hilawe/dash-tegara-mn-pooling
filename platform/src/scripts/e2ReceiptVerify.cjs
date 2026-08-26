@@ -253,8 +253,16 @@ const runTwoStages = async ({ carrierHex, metadata, transitionBytes, deps }) => 
     blockInfo: { timeMs: BigInt(metadata.timeMs), height: BigInt(metadata.height),
       coreHeight: metadata.coreChainLockedHeight, epoch: metadata.epoch },
   });
-  if (!stageOne || stageOne.ok !== true || typeof stageOne.rootHashHex !== "string") {
-    refuse("stage one (the state-transition result proof) did not return a non-null successful result with the derived root hash");
+  // THE ROOT MUST BE A ROOT, not merely a string. This checked `typeof ===
+  // "string"`, so a stage one answering `{ ok: true, rootHashHex: "not-a-root" }`
+  // passed its result to stage two, and a stage two returning true VERIFIED the
+  // record over a root that cannot be one. A derived state root is a 32-byte
+  // digest, so its hex form is 64 lower-case hex characters, and anything else is
+  // a malformed proof-stage result, which the specification names as evidence of
+  // nonconformance rather than something to carry forward.
+  if (!stageOne || stageOne.ok !== true || typeof stageOne.rootHashHex !== "string"
+    || !/^[0-9a-f]{64}$/.test(stageOne.rootHashHex)) {
+    refuse("stage one (the state-transition result proof) did not return a non-null successful result with a 64-hex derived root hash");
   }
   const stageTwo = await deps.verifyStageTwo({
     rootHashHex: stageOne.rootHashHex, carrierHex, metadata,
@@ -268,7 +276,10 @@ const runTwoStages = async ({ carrierHex, metadata, transitionBytes, deps }) => 
 /**
  * Verify one on-ledger transferReceipt with its served parts, entitlement
  * row and reservation answer. Refuses on any conformance failure; returns
- * { ok: true, reservationAspect } where reservationAspect is "proved" or
+ * { status: "verified", reservationAspect, carrierHex, subjectDigest, decoded }.
+ * There is no `ok` member and no path has ever set one: the wrapper tags the
+ * result with `status`, and every consumer reads that.
+ * reservationAspect is "proved" or
  * "unproved" (an unservable or unverifiable reservation query leaves the
  * aspect UNPROVED, never a silent pass and never a refusal; a served
  * mismatch or a proved absence REFUSES).
@@ -278,8 +289,16 @@ const runTwoStages = async ({ carrierHex, metadata, transitionBytes, deps }) => 
  */
 const verifyReceiptInner = async ({ receipt, parts, reservation, entitlementRow,
   incomeIdentity, chainIdPin, deps }) => {
+  // A MISSING DEPENDENCY IS A FAULT, NOT A REFUSAL. This used to call refuse(),
+  // which the wrapper turns into `{ status: "refused" }`, so `verifyReceipt({})`
+  // answered with a statement ABOUT THE RECORD before any record was looked at.
+  // A refusal means a clause of the specification is violated by the record; a
+  // dependency that is absent says nothing about the record and everything about
+  // the caller, so it aborts.
   for (const k of ["decodeProofCarrier", "decodeMetadata", "decodeTransfer", "verifyStageOne", "verifyStageTwo"]) {
-    if (typeof (deps && deps[k]) !== "function") refuse(`verifyReceipt needs deps.${k}`);
+    if (typeof (deps && deps[k]) !== "function") {
+      throw new Error(`e2ReceiptVerify: deps.${k} is absent or not a function; a missing dependency is a caller fault, never evidence about the record; refusing hard`);
+    }
   }
   // structural grammar per the frozen schema
   if (!receipt || typeof receipt !== "object") refuse("the receipt input must be an object");
@@ -567,5 +586,7 @@ const verifyCapturePair = settleSync(verifyCapturePairInner);
 module.exports = {
   PART_BOUND_B, ROUTE_REGISTRY, PROTOCOL_VERSION_PIN,
   verifyReceipt, verifyCaptureRecord, verifyCapturePair, verifyReceiptWithCapture,
-  __testing: { assertCanonicalSplit, reassembleProof, verifyCarrierConformance },
+  // assertCanonicalSplit is NOT here: it is used internally and no suite drives
+  // it directly, so exporting it defended a contract for nobody
+  __testing: { reassembleProof, verifyCarrierConformance },
 };

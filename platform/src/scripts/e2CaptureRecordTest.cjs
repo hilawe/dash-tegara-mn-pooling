@@ -138,6 +138,51 @@ const mkReceiptCapture = () => ({
     ok("a failing max seq falls through to the next candidate", r.basis === sup1);
   }
   {
+    // THE CALLBACK ANSWERS WITH A BOOLEAN. A review found this read for
+    // TRUTHINESS, so a verdict object saying refused selected the candidate,
+    // because an object is truthy: an explicitly negative verification result
+    // chose the basis. The contract was written down nowhere, which is how a
+    // caller following the verification boundary used elsewhere in this
+    // repository could hand over a verdict and get a silent yes.
+    const refusing = async () => ({ status: "refused", reason: "signature did not verify" });
+    await rejects("a verdict object is not a yes: the callback must answer with a boolean",
+      selectSupersessionBasis(signedHeader, [sup1, sup2], refusing),
+      /answered with object rather than a boolean/);
+    const verifying = async () => ({ status: "verified" });
+    await rejects("a VERIFIED verdict object is refused too: the contract is the type, not the meaning",
+      selectSupersessionBasis(signedHeader, [sup1, sup2], verifying),
+      /rather than a boolean/);
+    for (const [what, value] of [["null", null], ["undefined", undefined], ["a truthy string", "yes"]]) {
+      await rejects(`a callback answering ${what} is a fault, never a selection`,
+        selectSupersessionBasis(signedHeader, [sup1, sup2], async () => value),
+        /rather than a boolean/);
+    }
+  }
+  {
+    // A THROW FROM THE CALLBACK IS A FAULT AND PROPAGATES. The module says so in
+    // a comment and nothing bound it: every existing test resolves true or
+    // false, so a mutation that swallowed the rejection and moved to the next
+    // candidate would have gone unnoticed.
+    await rejects("a THROWING signature callback propagates as a fault, never a fall-through",
+      selectSupersessionBasis(signedHeader, [sup1, sup2],
+        async () => { throw new Error("the curve library is unavailable"); }),
+      /the curve library is unavailable/);
+  }
+  {
+    // A MALFORMED KEY IS THE CALLER'S FAULT, NOT EVIDENCE ABOUT THE RECORD. The
+    // blanket catch used to report "this signature does not verify" for a null
+    // key or a broken curve library, which converts a dependency failure into a
+    // statement about a member's record.
+    for (const [what, key] of [["null", null], ["a short buffer", new Uint8Array(32)],
+      ["a hex string", "02".repeat(33)]]) {
+      await rejects(`a public key that is ${what} is a fault, never a false verdict`,
+        verifyCaptureSignature(signedHeader, key), /not a 33-byte compressed point/);
+    }
+    // and the RECORD's own signature bytes stay evidence: malformed is false
+    ok("malformed signature bytes in the record are evidence, and verify false",
+      await verifyCaptureSignature({ ...signedHeader, sig: "00".repeat(65) }, publicKey) === false);
+  }
+  {
     const r = await selectSupersessionBasis(signedHeader, [sup1, sup2], verifiesNone);
     ok("no verifying candidate leaves the original as the basis", r.basis === "original");
   }

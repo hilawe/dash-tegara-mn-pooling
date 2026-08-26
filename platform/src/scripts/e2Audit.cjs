@@ -156,7 +156,11 @@ class AuditInputRefusal extends Error {
   }
 }
 // The module's OWN refusals, recorded by identity at the only site that
-// throws them (round-60). The class is exported so consumers and tests can
+// throws them. THE CLASS IS NOT ON THE PUBLIC SURFACE: it sits under
+// `__testing`, because `runAudit` converts its own instances into a returned
+// `{ verdict: "REFUSED-INPUT", reason }` and a caller never sees one thrown.
+// This comment used to say it was exported for consumers, which was a contract
+// offered to nobody. Tests
 // READ thrown refusals against it, which makes `instanceof` reproducible
 // from outside the module: an injected adapter can throw an object
 // inheriting the exported prototype, or a Proxy whose getPrototypeOf trap
@@ -717,18 +721,23 @@ const buildReport = ({ poolId, contractId, expectedChainId, startSource,
     }
     const e = d.value;
     if (!e || typeof e !== "object") {
-      refuse("every per-epoch row carries epochIndex, condition (token or null), r (canonical decimal string or null) and its diagnostics array");
+      refuse("every per-epoch row carries epochIndex, condition (token or null), r (canonical decimal string or null), undistributedCredits (canonical decimal string) and its diagnostics array");
     }
-    requirePlainClosed("a per-epoch row", e, ["epochIndex", "condition", "r", "diagnostics"]);
+    requirePlainClosed("a per-epoch row", e,
+      ["epochIndex", "condition", "r", "diagnostics", "undistributedCredits"]);
     if (!Number.isSafeInteger(e.epochIndex)
       || !(e.condition === null || (typeof e.condition === "string" && e.condition.length > 0))
       || !(e.r === null || isDec(e.r))
+      || !isDec(e.undistributedCredits)
       || !Array.isArray(e.diagnostics)) {
       refuse("every per-epoch row carries epochIndex, condition (token or null), r (canonical decimal string or null) and its diagnostics array");
     }
     u32Field("a per-epoch row's epochIndex", e.epochIndex);
+    // the row is REBUILT rather than copied, so a member added to the shape must
+    // be added here too or it is validated and then silently dropped
     epochRows.push({ epochIndex: e.epochIndex, condition: e.condition, r: e.r,
-      diagnostics: stringArray("a per-epoch row's diagnostics", e.diagnostics) });
+      diagnostics: stringArray("a per-epoch row's diagnostics", e.diagnostics),
+      undistributedCredits: e.undistributedCredits });
   }
   if (lag !== null) {
     requirePlainClosed("lag", lag, ["lagCount", "undistributedCredits"]);
@@ -1789,7 +1798,12 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       return { doc: null, note: `${what}: proved absent (an expected record at a known unique key)` };
     }
     // a NONCONFORMING served answer contributes NOTHING, its height
-    // included: only a conforming answer's proof enters the range
+    // included: only a conforming answer's proof enters the range. An answer
+    // bound to a DIFFERENT key than the one asked for attests nothing about the
+    // key requested, so letting its height widen the published range would show
+    // a reader evidence the run does not have. The specification said "every
+    // query performed" until 2026-08-25 and now says every query performed AND
+    // ACCEPTED (a soundness-review finding); this is the site that decides which.
     if (!KEY_BINDS[type](ans.doc, key)) {
       epochLabels.push("REFUSED");
       return { doc: null, note: `${what}: the served answer is for a DIFFERENT key (a nonconforming answer)` };
@@ -1831,7 +1845,14 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   for (const epochIndex of intervalEpochs) {
     const bucket = classifyRecordEpoch(epochIndex, resolution).bucket;
     const epochLabels = [];
-    const rowOut = { epochIndex, condition: null, r: null, diagnostics: [] };
+    // THE PER-EPOCH UNDISTRIBUTED AMOUNT (a soundness-review finding). The specification requires the
+    // report to give this per epoch and the reader kept only a run-wide total,
+    // which a reader cannot decompose after the fact: a total says how much went
+    // undistributed and never in which epoch. It starts at zero, which is the
+    // right value for every row emitted before the receipt walk runs.
+    let epochUndistributed = 0n;
+    const rowOut = { epochIndex, condition: null, r: null, diagnostics: [],
+      undistributedCredits: "0" };
     const epochObject = epochInfo.get(epochIndex);
     if (!epochObject) {
       // UNREACHABLE THROUGH `runAudit`, WHICH IS NOT THE SAME AS UNREACHABLE
@@ -2092,6 +2113,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
           reservationPresence: "UNPROVED", ordering: "OPERATOR-PROVIDED" });
         epochComplete = false;
         undistributed += BigInt(row.amountCredits);
+        epochUndistributed += BigInt(row.amountCredits);
         continue;
       }
       const accrualId = nid(accrual.id);
@@ -2175,6 +2197,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
           reservationPresence: orphanReservation, ordering: "OPERATOR-PROVIDED" });
         epochComplete = false;
         undistributed += BigInt(row.amountCredits);
+        epochUndistributed += BigInt(row.amountCredits);
         continue;
       }
       if (fetchedReservation && fetchedReservation.transitionHash !== receipt.transitionHash) {
@@ -2264,7 +2287,10 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         reservationPresence: reservation.label, ordering: ordering.label });
       receiptEvaluations.push({ epochIndex, accrualId,
         transfer: transfer.label, reservation: reservation.label, ordering: ordering.label });
-      if (transfer.label !== "CAPTURE-VERIFIED") undistributed += BigInt(row.amountCredits);
+      if (transfer.label !== "CAPTURE-VERIFIED") {
+        undistributed += BigInt(row.amountCredits);
+        epochUndistributed += BigInt(row.amountCredits);
+      }
     }
     // WHAT THE POSITION CHECK CANNOT SEE. An append is taken only at the
     // position its row index names, so a row appending twice or out of order
@@ -2307,6 +2333,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       // the record-set ASPECT'S label, applied after the aspect label is
       // known (the empty-set identity), so nothing is recorded here
     }
+    rowOut.undistributedCredits = String(epochUndistributed);
     perEpoch.set(epochIndex, rowOut);
     recordSetLabels.push(...(epochLabels.length ? epochLabels : ["READ-CHECKED"]));
     if (bucket === "in-scope" && !epochComplete) {
@@ -2643,7 +2670,8 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
     if (resolution.interval.endEpoch !== null) {
       for (let e = resolution.interval.startEpoch; e <= resolution.interval.endEpoch; e++) {
         const row = ledger.perEpoch.get(e);
-        epochs.push(row || { epochIndex: e, condition: null, r: null, diagnostics: [] });
+        epochs.push(row || { epochIndex: e, condition: null, r: null, diagnostics: [],
+          undistributedCredits: "0" });
       }
     }
 
@@ -2702,7 +2730,7 @@ module.exports = {
   // deliberately NOT part of the caller contract. Invariants that hold through
   // the entry are not promised for these.
   __testing: {
-    ENCODING_CEILING, U32_MAX,
+    U32_MAX,
     AuditInputRefusal, rankOf, labelAtLeast, aggregateWeakest,
     computeNormativeEpoch, resolveStartSource, resolveInterval,
     classifyRecordEpoch, gradeVerdict, buildOpenEndedAnnotation, buildReport,
