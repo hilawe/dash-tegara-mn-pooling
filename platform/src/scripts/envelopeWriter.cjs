@@ -1,7 +1,7 @@
 /**
  * envelopeWriter - THE PRODUCTION ENTRY POINT for emitting an audit envelope.
  *
- * WHY THIS EXISTS (build review round 3, MUST-FIX). `auditSeam.buildEnvelope` is a
+ * WHY THIS EXISTS (build review a review, a required fix). `auditSeam.buildEnvelope` is a
  * DERIVATION PRIMITIVE: it computes the decision surface from evidence and canonicalizes
  * it. It does NOT validate. A reviewer fed it 72 negative-evidence cases; it accepted 67,
  * and 63 of the envelopes it produced were then REJECTED by the normative schema and

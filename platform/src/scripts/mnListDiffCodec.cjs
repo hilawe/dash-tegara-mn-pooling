@@ -100,7 +100,7 @@ class Reader {
   hash(what) { return Buffer.from(this.read(32, what)).reverse().toString("hex"); }
   /**
    * CompactSize, with the CANONICAL-WIDTH and MAX_SIZE rules Dash applies
-   * [8c9f166a3:src/serialize.h:288-317] (round 6, MAJOR: this accepted every width and checked
+   * [8c9f166a3:src/serialize.h:288-317] (a review, MAJOR: this accepted every width and checked
    * neither, so `fd0300` was read as 3 and a 3647-byte payload parsed cleanly with no remainder;
    * consuming every byte is not the same as being a decoder of the consensus wire domain).
    *
@@ -286,7 +286,7 @@ function readTransaction(r) {
   }
   const lockTime = r.u32("tx locktime");
   let extraPayload = null;
-  // THE PINNED PREDICATE IS BOTH FIELDS (round 12, MINOR). This read an extra payload whenever the
+  // THE PINNED PREDICATE IS BOTH FIELDS (a review, MINOR). This read an extra payload whenever the
   // type was nonzero, but the serialization the profile pins reads one only when the version is at
   // least SPECIAL_VERSION AND the type is not TRANSACTION_NORMAL
   // [8c9f166a3:src/primitives/transaction.h:328]. A transaction with a version below 3, a nonzero
@@ -380,7 +380,7 @@ function parseMnListDiff(payload, { protocolVersion } = {}) {
  * Returns { merkleRoot, matched } where `matched` are the txids the tree proves, or throws. This
  * is what BINDS a coinbase to a block: the extracted root must equal the block header's merkle
  * root, and the coinbase txid must be among the matches. Without it the walk was reading a
- * transaction out of the diff and calling its payload a value Dash Core committed, which round 6
+ * transaction out of the diff and calling its payload a value Dash Core committed, which a review
  * showed by flipping one byte of the tree and watching every check still pass.
  *
  * Every refusal below is one the C++ makes, and each matters: an empty set, more hashes than
@@ -399,7 +399,7 @@ function extractMerkleMatches(pmt) {
   if (nTransactions === 0) fail("the partial merkle tree covers no transactions");
   // THE COUNT BOUND Dash applies [src/merkleblock.cpp:168-170]: a block cannot hold more
   // transactions than its size limit allows at the lower bound of 60 bytes each, so a count above
-  // MaxBlockSize()/60 describes a block that cannot exist. Round 7: without it, nTransactions of
+  // MaxBlockSize()/60 describes a block that cannot exist. A review found that without it, nTransactions of
   // 0xffffffff was ACCEPTED and returned a root, so a fabricated tree could claim a root for an
   // impossible block. The bound also keeps the tree height small enough that the width arithmetic
   // below stays inside the 32-bit range JavaScript bitwise operators use, which is a second reason
@@ -449,7 +449,7 @@ function extractMerkleMatches(pmt) {
 
 /** the 80-byte headers of a retained header chain, indexed by the block hash each one produces */
 function indexHeaderChain(headerChainHex) {
-  // STRICT HEX FIRST (round 7). Buffer.from(x,"hex") truncates at the first non-hex character, so
+  // STRICT HEX FIRST. Buffer.from(x,"hex") truncates at the first non-hex character, so
   // a chain whose TAIL is malformed decoded to its valid PREFIX and was accepted: one real header
   // followed by "zz" indexed one header and silently discarded the rest. The length check below
   // cannot catch it, because the truncated length is still a multiple of 80. Same defect class as
@@ -459,7 +459,7 @@ function indexHeaderChain(headerChainHex) {
     fail("the header chain is not an even-length lowercase hex string");
   }
   const buf = Buffer.from(headerChainHex, "hex");
-  // THE COUNT PREFIX THE NORMATIVE CODEC DEFINES (round 11, MAJOR, a soundness-review finding). This read byte zero as
+  // THE COUNT PREFIX THE NORMATIVE CODEC DEFINES (a review, MAJOR, a soundness-review finding). This read byte zero as
   // the first header and required a whole number of 80-byte headers, but the pinned proof-codec
   // profile defines `dash-header-chain-v1` as "a header-COUNT prefix (u32 little-endian) followed
   // by that many consecutive 80-byte Dash CBlockHeader wire serializations"
@@ -523,7 +523,7 @@ function parseStandaloneEntry(buf, { protocolVersion } = {}) {
 }
 
 /**
- * APPLY A DIFF TO A LIST, which is the step the walk was missing (round 6, MAJOR).
+ * APPLY A DIFF TO A LIST, which is the step the walk was missing (a review, MAJOR).
  *
  * A CSimplifiedMNListDiff is a DELTA, not a snapshot [8c9f166a3:src/evo/smldiff.cpp:122-151]. It
  * carries removals in `deletedMNs` and new-or-CHANGED entries in `mnList`. Deriving the list at a

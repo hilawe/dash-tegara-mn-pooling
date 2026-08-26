@@ -6,7 +6,7 @@
  * "forming or live" by itself. On v9 it cannot, because it is immutable and carries neither
  * proTxHash nor status, so a receipt-less pool is open, in flight and abandoned all at once
  * and the honest answer is UNDETERMINED. Anything that turns that into a definite state
- * without new evidence is the collapse three v9 review rounds each killed, and the cases
+ * without new evidence is the collapse three v9 reviews each killed, and the cases
  * below fail if someone reintroduces it.
  *
  * The second property is that a receipt which FAILS the shared check is never treated as
@@ -55,7 +55,7 @@ const paredReceiptFor = (m) => {
   const rows = core.allocationPreimage(GC, m);
   // every real receipt carries proTxHash (required on both shapes); its earlier absence
   // here was itself a fixture-producibility gap the a soundness-review finding binding exposed. poolId as
-  // BYTES for the same producibility reason (round 20: the schema types it byteArray
+  // BYTES for the same producibility reason (a review: the schema types it byteArray
   // and the shape gate now refuses the base58-string form)
   return { poolId: core.toId32(GP), proTxHash: Buffer.from(m.realHash, "hex"), slotIndex: 0,
     formatVersion: 1, allocationRows: rows,
@@ -76,7 +76,7 @@ const v8Pool = (hash) => ({ slotIndex: 0, nodeType: "regular", operatorFeeBps: 2
   proTxHash: hash,
   // a malformed hash is a deliberate fixture in several cases below, and isFormingHash
   // throws on it, so the status is derived only for a well-formed hash; the malformed
-  // cases carry "live" so the round-5 pool shape gate reaches the FIELD UNDER TEST (the
+  // cases carry "live" so the review pool shape gate reaches the FIELD UNDER TEST (the
   // hash) instead of refusing on a missing status the case is not about
   status: (Buffer.isBuffer(hash) && hash.length === 32)
     ? (core.isFormingHash(hash) ? "forming" : "live") : "live" });

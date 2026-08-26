@@ -83,7 +83,7 @@ are formally proposed for Dash.
 
 ## The life of a pool
 
-The accounting layer went through nine ledger revisions as review rounds removed ways the
+The accounting layer went through nine ledger revisions as reviews removed ways the
 books could mislead. The current ledger, v9, has one organizing idea. THE POOL DOCUMENT
 NEVER CHANGES. It is written once, at creation, carrying only the pool's constants, which
 slot of the covenant it maps to, the node type, the operator's fee, and the collateral
@@ -126,7 +126,7 @@ completion receipt last. The receipt is the completion. It names the node, embed
 exact allocation, and can never be edited or deleted.
 
 Earlier ledger revisions marked completion by editing the pool document, a step the code
-called the flip. Review rounds kept finding ways an edit-in-place could mislead a reader
+called the flip. reviews kept finding ways an edit-in-place could mislead a reader
 who caught the books mid-change, so v9 removed the edit entirely. A record that cannot
 change cannot be caught mid-change.
 
@@ -165,7 +165,7 @@ implementation can discover.
 
 A receipt that fails any of these establishes nothing, and no reader treats it as merely
 absent either. It is surfaced as a contradiction for a person to resolve. This came out
-of the design reviews in a specific form. Three separate review rounds each proposed some
+of the design reviews in a specific form. Three separate reviews each proposed some
 version of treating a receipt's presence as proof of a live pool, and each was rejected,
 because the accounting layer cannot enforce rules that span two documents, so presence
 alone can always be made to lie.
@@ -250,7 +250,7 @@ Each verification level is recorded on the receipt itself:
 | `node-existence-only` | The named node exists on the blockchain. Amounts unchecked. |
 | `amount-reward-verified` | The node exists, is genuinely shared, and its share table matches the frozen member list, amount and reward destination pairwise. Share owner keys and refund destinations are outside the frozen list and stay unverified, a recorded residual. |
 
-## What a long review round changed, and what it says about the method
+## What a long review changed, and what it says about the method
 
 Between late July and early August 2026 the assembled design was reviewed repeatedly and
 independently, by reviewers working from the complete source and by reviewers reading it
@@ -359,7 +359,7 @@ rounds have run end to end, one of them verified against a real shared registrat
 covenant's test build. The code is open source under the MIT license, with the
 failure-injection suites running on both ledger revisions in every build.
 
-The August 2026 review round is closed as a body of work but the design is NOT being
+the August review is closed as a body of work but the design is NOT being
 described as review-complete. The project's own rule is that the line closes only when a
 fresh full review pass returns a clean verdict, and the last pass did not; its remaining
 findings are the concurrent-reservation limit named above, which is a design decision

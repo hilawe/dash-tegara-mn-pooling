@@ -1006,7 +1006,7 @@ async function recordAndVerifyAccruals(client, env, state, operator) {
         console.log(`\n=== ALREADY DISTRIBUTED: fork height ${obs.height} has ${prior.length} ` +
           `${isV4() ? `"${obsKind}" ` : ""}accruals summing ${sum} duffs for this pool; ` +
           "refusing to pay it twice ===");
-        // KNOWN LIMITATION on v3 and below (review batch-2, B12): a reward and a
+        // KNOWN LIMITATION on v3 and below (a review, batch 2, finding B12): a reward and a
         // dissolution CAN occur at the same fork height, and the pre-v4 accrual key
         // [poolId, funderId, epochHeight] cannot hold both. v4 fixed this at the schema
         // (kind is inside the unique key, registerV4.cjs).

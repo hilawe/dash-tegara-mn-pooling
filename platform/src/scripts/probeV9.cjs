@@ -24,7 +24,7 @@
  * Run (scratch env mounted as .env.local, v9 already published there):
  *   LEDGER=v9 PROBE_CONFIRM=leave-probe-evidence node src/scripts/probeV9.cjs
  * LEDGER=v9 is REQUIRED, checked ahead of the probe's own environment load and client
- * construction (confirm-pass round 25): the shared reader P6 verifies through selects
+ * construction (a confirmation pass): the shared reader P6 verifies through selects
  * its receipt shape from the global LEDGER, so an unset selector wrote the permanent
  * evidence and then wrongly failed its own verification against the v1 shape.
  * The second identity is registered on first run and persisted as PROBE_SECOND_ID.
@@ -63,7 +63,7 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
       "whose documents readers already consume.");
     process.exit(2);
   }
-  // AHEAD OF THE PROBE'S OWN ENV LOAD AND CLIENT CONSTRUCTION (confirm-pass round 25,
+  // AHEAD OF THE PROBE'S OWN ENV LOAD AND CLIENT CONSTRUCTION (a confirmation pass,
   // the round's one finding; this check precedes the loadEnv call and everything after
   // it): this suite writes permanent v9 evidence and then verifies it through the
   // PROFILE-SELECTED shared reader, so the selector must name v9 or P6 refuses a valid
@@ -175,7 +175,7 @@ const isSchema = (e) => /dependentRequired|JsonSchema|schema|missing property|re
 
     // ---- P6..P8: receipts ----
     const proTx = crypto.randomBytes(32);
-    // the P6 receipt's embedded allocation is CANONICAL (vetting round 2026-08-03,
+    // the P6 receipt's embedded allocation is CANONICAL (vetting a review-08-03,
     // finding 3): an earlier probe used a hollow placeholder that was schema-valid but
     // failed the shared verifier, so the acceptance evidence it left reads permanently
     // as a contradiction (recorded in the canonical publish run doc). Acceptance

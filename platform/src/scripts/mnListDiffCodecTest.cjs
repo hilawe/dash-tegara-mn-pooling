@@ -173,7 +173,7 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
 }
 
 // ---------------------------------------------------------------------------
-// ROUND 6 MAJOR: the parser accepted NON-CANONICAL CompactSize and checked no size ceiling, so
+// A REVIEW FOUND: the parser accepted NON-CANONICAL CompactSize and checked no size ceiling, so
 // consuming every byte did not mean the encoding was one Dash would accept. Both rules are the
 // ones in src/serialize.h:288-317, and both are applied to the SAME helper every count in the
 // frame, the transaction, the bitsets and the quorum sections goes through.
@@ -222,14 +222,14 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
 }
 
 // ---------------------------------------------------------------------------
-// ROUND 7, from a review run that was cut off by its provider's filter after naming two candidate
+// A LATER REVIEW, from a run that was cut off by its provider's filter after naming two candidate
 // gaps. Both reproduced, so the leads were worth more than the missing report.
 // ---------------------------------------------------------------------------
 {
   const { indexHeaderChain, extractMerkleMatches } = require("./mnListDiffCodec.cjs");
   const header = fx.blockHeaderRaw;
   // `dash-header-chain-v1` is a u32 little-endian COUNT followed by that many 80-byte headers
-  // (round 11, a soundness-review finding). These used to pass the bare header, which is not the codec's shape.
+  // (a review, a soundness-review finding). These used to pass the bare header, which is not the codec's shape.
   const chainOf = (...headers) => {
     const n = Buffer.alloc(4);
     n.writeUInt32LE(headers.length, 0);
@@ -248,7 +248,7 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
   ok("the real retained header still indexes to its block",
      indexHeaderChain(chainOf(header)).has(fx.blockHash));
 
-  // THE COUNT PREFIX IS PART OF THE CODEC AND PART OF THE EVIDENCE (round 11, MAJOR, a soundness-review finding).
+  // THE COUNT PREFIX IS PART OF THE CODEC AND PART OF THE EVIDENCE (a review, MAJOR, a soundness-review finding).
   // `dash-header-chain-v1` is a u32 little-endian count followed by that many 80-byte headers.
   // The reader used to start at byte zero, so it DECLINED every conforming chain (84 bytes for one
   // header does not divide by 80) and ACCEPTED unprefixed bytes that are outside the codec. The
@@ -267,7 +267,7 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
   throws("a count smaller than the headers supplied is refused",
     () => indexHeaderChain(chainOf(header, header).replace(/^02000000/, "01000000")),
     /declares 1 header\(s\) and carries 2/);
-  // TWO DISTINCT HEADERS, so the assertion establishes what its label says (round 12, MINOR).
+  // TWO DISTINCT HEADERS, so the assertion establishes what its label says (a review, MINOR).
   // This used to pass the SAME header twice and require a map size of one, which proves the
   // prefixed byte string is accepted and proves nothing about indexing two headers: a regression
   // that read only the first would still satisfy it. A second header is made by flipping a byte,
@@ -305,12 +305,12 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
   ok("the real tree still extracts its single transaction",
      extractMerkleMatches(diff.cbTxMerkleTree).matched.length === 1);
 
-  // (3) THE TWO REFUSALS NO INPUT HAD EVER REACHED (round 7, MINOR, closed 2026-07-30). Both
+  // (3) THE TWO REFUSALS NO INPUT HAD EVER REACHED (a review, MINOR, closed 2026-07-30). Both
   // checks were present and neither was guarded: the real tree holds ONE transaction, so it
   // extracts a single match and never descends to an internal node, and the oversized-count
   // cases above stop at the count bound. Removing either check therefore left the whole suite
   // green. These drive the function DIRECTLY with the smallest tree that reaches each branch,
-  // which is why they work where the round-7 attempt through a spliced envelope did not.
+  // which is why they work where the review attempt through a spliced envelope did not.
   //
   // The identical-branch case needs two transactions, so the tree is one level deep and the
   // root is an internal node with both children present. Bits are read least-significant-first
@@ -337,7 +337,7 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
 }
 
 // ---------------------------------------------------------------------------
-// THE MISSING-DELETE REFUSAL, driven directly (round 7, MINOR, closed 2026-07-30).
+// THE MISSING-DELETE REFUSAL, driven directly (a review, MINOR, closed 2026-07-30).
 //
 // The suite's delta case was labelled as exercising a deletion of a missing entry, but the
 // spliced payload it used inherited the capture's EMPTY deletedMNs, so the loop that raises this
@@ -372,7 +372,7 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
 }
 
 // ---------------------------------------------------------------------------
-// TWO DECODER REFUSALS THAT EXISTED WITHOUT A FIXTURE (round 8, finding 4, closed 2026-07-30).
+// TWO DECODER REFUSALS THAT EXISTED WITHOUT A FIXTURE (a review finding, closed 2026-07-30).
 // Both were implemented and neither was driven: the supported-range and short-read branches had
 // focused cases, these two did not, and the positive exact-consumption assertion does not guard
 // the trailing-byte refusal because a valid capture leaves nothing over either way. Removing
@@ -409,7 +409,7 @@ const diff = parseMnListDiff(raw, { protocolVersion: fx.protocolVersionOffered }
 }
 
 // ---------------------------------------------------------------------------
-// THE EXTRA-PAYLOAD PREDICATE IS BOTH FIELDS (round 12, MINOR). The reader consumed an extra
+// THE EXTRA-PAYLOAD PREDICATE IS BOTH FIELDS (a review, MINOR). The reader consumed an extra
 // payload whenever the type was nonzero, while the pinned serialization reads one only when the
 // version is at least SPECIAL_VERSION *and* the type is not TRANSACTION_NORMAL
 // [8c9f166a3:src/primitives/transaction.h:328]. Nothing in the suite drove a transaction with a

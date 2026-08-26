@@ -363,7 +363,7 @@ ok("verify: wrong expected contract not ok (cross-contract)",
     !core.verifyReceiptAllocation(GC, r).ok && /poolId/.test(core.verifyReceiptAllocation(GC, r).reason));
 }
 
-// --- review round: input-boundary robustness of the verifier and decoder ---
+// --- review: input-boundary robustness of the verifier and decoder ---
 // decodeId32 is total over 32-byte ids: a valid id with leading zero bytes is shorter than 43
 // chars (8 zero bytes + 24 0xff -> 41 chars) and must still decode
 const SHORT_ID = "11111111QLbz7JHiBTspS962RLKV8GndWFwiEaqKL"; // 8x 0x00 then 24x 0xff
@@ -580,7 +580,7 @@ for (const [name, thrown] of [
 //                             single-owner claim breaks the first reservation of
 //                             every pool, which is the accepting row an author skips
 //   first invalid             1 owner, book full
-//   NO DEMO PARAMETER (round 23, major): the member's environment cannot speak for the
+//   NO DEMO PARAMETER (a review, major): the member's environment cannot speak for the
 //   operator's completion profile, so the old demo opt-out is gone and a demo-shaped
 //   argument must change nothing
 {
@@ -606,7 +606,7 @@ for (const [name, thrown] of [
 // (number, string, bigint all convert through toBig), and no disable path by design.
 {
   // refusal rows require the THREW prefix, so a mutation returning the message text as
-  // a VALUE cannot satisfy them (round-17-style checker shape, applied at write time)
+  // a VALUE cannot satisfy them (a review-style checker shape, applied at write time)
   const t = (v) => { try { return core.nodeTypeForCollateral(v); } catch (e) { return `THREW: ${e.message}`; } };
   ok("collateral 1000 DASH names regular", t(100000000000n) === "regular");
   ok("collateral 4000 DASH names evo", t(400000000000n) === "evo");

@@ -69,7 +69,7 @@ const manifest = (target = REGULAR) => {
 };
 const receiptFor = (m) => {
   const rows = core.allocationPreimage(GC, m);
-  // poolId as BYTES, the producible form (round 20: the schema types it byteArray and
+  // poolId as BYTES, the producible form (a review: the schema types it byteArray and
   // the shape gate refuses the base58-string form)
   return { poolId: core.toId32(GP), proTxHash: Buffer.from(m.realHash, "hex"), slotIndex: 0,
     formatVersion: 1, allocationRows: rows, allocationHash: core.allocationHash(rows),

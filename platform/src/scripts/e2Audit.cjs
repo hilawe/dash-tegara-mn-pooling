@@ -79,7 +79,7 @@ const isDec = (s) => typeof s === "string" && DEC_RE.test(s);
 
 // a display formatter for refusal messages that never itself throws:
 // JSON.stringify throws on BigInt and on cycles, which would turn a
-// structured refusal into a bare TypeError (the round-3 check's finding 6)
+// structured refusal into a bare TypeError (the review check's finding 6)
 const show = (v) => {
   try { const s = JSON.stringify(v); return s === undefined ? String(v) : s; }
   catch { try { return String(v); } catch { return "[unrepresentable value]"; } }
@@ -89,18 +89,18 @@ const show = (v) => {
 // interpolates exactly as `${v}` would (String reproduces the same text),
 // but an object with a null prototype has no toString and `${obj}` throws
 // an untyped TypeError instead of yielding the intended record-set
-// refusal (round-53). show() is used only for the non-primitive case, so
+// refusal. show() is used only for the non-primitive case, so
 // normal integer and string field values read unchanged.
 const scalarShow = (v) => (v === null || typeof v !== "object") ? String(v) : show(v);
-// Array.isArray on a REVOKED Proxy throws a TypeError (round-57): an injected
+// Array.isArray on a REVOKED Proxy throws a TypeError: an injected
 // value must be classifiable without an escaping fault, so a throw is treated
 // as "not a usable plain object" (true) and the boundary refuses it.
 const safeIsArray = (v) => { try { return Array.isArray(v); } catch { return true; } };
-// a TOTAL formatter for a CAUGHT value (round-58): a thrown value can be a
+// a TOTAL formatter for a CAUGHT value: a thrown value can be a
 // null-prototype object or carry a throwing `message` getter, so reading
 // `e.message` or interpolating `e` can throw a SECOND untyped fault out of the
 // catch. Every access is guarded, so a diagnostic never escapes as a raw
-// TypeError. This is the same class the plain-data catch handled in round 57.
+// TypeError. This is the same class the plain-data catch handled in a review.
 const errText = (e) => {
   try { const m = e && e.message; if (typeof m === "string") return m; } catch { /* fall through */ }
   try { return String(e); } catch { return "(an unreadable thrown value)"; }
@@ -108,7 +108,7 @@ const errText = (e) => {
 
 // closed shapes are PLAIN OWN-PROPERTY objects: prototype-carried members,
 // non-enumerable members and symbol keys all refuse, so a "closed literal"
-// claim cannot be sidestepped through object mechanics (round-3 finding 3)
+// claim cannot be sidestepped through object mechanics (a review finding 3)
 const requirePlainClosed = (name, obj, members, required = members) => {
   if (!obj || typeof obj !== "object") refuse(`the report needs the literal ${name} object`);
   const proto = Object.getPrototypeOf(obj);
@@ -519,8 +519,8 @@ const gradeVerdict = ({ branch, aspects, inReportRefusal, coverage, annotation }
     // consumer can always read the examined-receipt count; grading
     // deliberately leaves an examinedCount of zero UNCAPPED, which is
     // the frozen empty-set identity (an epoch with no expected receipts
-    // inherits the record-set label) (round-40).
-    // CLAIM WIDTH (round-54): gradeVerdict/buildReport validate the count's
+    // inherits the record-set label).
+    // CLAIM WIDTH: gradeVerdict/buildReport validate the count's
     // type, cross-aspect equality and the zero-count cap, but a positive
     // count is CALLER-ASSERTED for a direct exported-function caller. Only
     // runAudit binds it to evidence, deriving it from the number of receipt
@@ -574,8 +574,8 @@ const gradeVerdict = ({ branch, aspects, inReportRefusal, coverage, annotation }
     refuse("the deactivation-bounded branch carries no open-ended annotation");
   }
 
-  // the three per-receipt aspects carry EQUAL counts (round-42; the claim
-  // narrowed round-64). Equality is what this check establishes and all it
+  // the three per-receipt aspects carry EQUAL counts (a review; the claim
+  // narrowed a review). Equality is what this check establishes and all it
   // establishes: three aspects could each carry a count of one over three
   // DIFFERENT receipts and pass, because integers cannot witness set
   // identity. Through `runAudit` the sets genuinely are the same one, by
@@ -583,7 +583,7 @@ const gradeVerdict = ({ branch, aspects, inReportRefusal, coverage, annotation }
   // but `gradeVerdict` is exported and cannot see that, so it must not claim
   // it. The zero-count labels are NOT forced to the record-set label, because
   // a missing expected receipt contributes its refusal without an evaluation
-  // (round-39).
+  //.
   {
     const counts = RECEIPT_ASPECT_KEYS
       .map((k) => aspects[k].evaluated ? aspects[k].examinedCount : null)
@@ -591,10 +591,10 @@ const gradeVerdict = ({ branch, aspects, inReportRefusal, coverage, annotation }
     if (counts.some((c) => c !== counts[0])) {
       refuse("the per-receipt aspects carry equal examinedCounts (equality is checked here; that the three counts describe the SAME receipts is established by the entry's control flow, not by this check)");
     }
-    // the count is CONSUMED by grading (round-43): with nothing
+    // the count is CONSUMED by grading: with nothing
     // examined, a per-receipt label can come only from record-set
     // inheritance or a degradation contribution, so no label may
-    // outrank both. The round-39 missing-expected case stays valid
+    // outrank both. The a review missing-expected case stays valid
     // (its contributions are all at or below OPERATOR-PROVIDED).
     if (counts.length && counts[0] === 0) {
       const bound = Math.max(rankOf("OPERATOR-PROVIDED"), rankOf(aspects.recordSet.label));
@@ -690,7 +690,7 @@ const buildReport = ({ poolId, contractId, expectedChainId, startSource,
   if (interval.endEpoch !== null && interval.endEpoch < interval.startEpoch) {
     refuse(`the report interval [${interval.startEpoch}, ${interval.endEpoch}] is reversed`);
   }
-  // the branch invariant (round-3 finding 1): a proved deactivation
+  // the branch invariant (a review finding 1): a proved deactivation
   // boundary always bounds the interval, so a bounded report with a null
   // end is incoherent evidence, never a gradable state
   if (branch === "deactivation-bounded" && interval.endEpoch === null) {
@@ -822,14 +822,14 @@ const buildReport = ({ poolId, contractId, expectedChainId, startSource,
 // aspects
 // (binding, temporalOrder, shareConformance, balance) are PINNED
 // UNVERIFIABLE constants pending their own evidence routes: no
-// evaluator derives them, and no caller supplies them (round-39).
+// evaluator derives them, and no caller supplies them.
 //
 // WHAT IT STILL DOES NOT ESTABLISH, stated: the network reads are
 // INJECTED (the discovery fetch, the verified page fetch, the known-key
 // proved reads, the receipt-verifier crypto pipeline, and the capture
 // signature basis), so their cryptographic and transport obligations are
 // the acceptance-stage adapters', exactly as for every prior unit. The
-// BOUNDARY PROOFS are the same kind of seam (round-47): provedActivation
+// BOUNDARY PROOFS are the same kind of seam: provedActivation
 // and provedDeactivation are scalar epoch numbers whose PROOF provenance
 // is the harness's declared obligation, like incomeIdentity; supplying
 // one asserts a proved boundary, and this module validates only its
@@ -874,7 +874,7 @@ const { enumerateProved, plainDataSnapshot } = require("./e2ProvedQuery.cjs");
 
 const startKeyOf = (poolId) => `E2_START_EPOCH_${poolId.toUpperCase()}`;
 
-// identifier equality NORMALIZES to the raw 32 bytes (the spec's round-33
+// identifier equality NORMALIZES to the raw 32 bytes (the spec's a review
 // rule): base58 and 64-hex spellings of one identifier compare equal, and
 // anything that decodes to neither compares equal to nothing
 const idHex = (v) => {
@@ -893,18 +893,18 @@ const nid = (v) => {
   const h = idHex(v);
   if (h !== null) return h;
   // TOTAL over adapter inputs, and the fallback can never LOOK like an
-  // identifier (round-51): String([hex]) is that hex, so a one-element
+  // identifier: String([hex]) is that hex, so a one-element
   // array would coerce into a valid-looking key; only a STRING keeps
   // its own text (for diagnostics), every other non-identifier value is
   // bracketed so no grammar check can accept it. A null-prototype
-  // object has no toString, so the coercion is guarded (round-48).
+  // object has no toString, so the coercion is guarded.
   if (typeof v === "string") return v;
   try { return `[non-identifier ${String(v)}]`; } catch { return "[unstringifiable value]"; }
 };
 // a credits field is a JSON INTEGER under the safe ceiling: any other
 // scalar type is nonconforming however its text reads, so the comparator
 // yields null (never equal to a decimal string) for a non-integer
-// (round-32)
+//
 const intStr = (v) => (Number.isSafeInteger(v) ? String(v) : null);
 
 // every proved-read answer declares one of the four statuses, a SERVED
@@ -918,9 +918,9 @@ const intStr = (v) => (Number.isSafeInteger(v) ? String(v) : null);
 // walk lives in e2ProvedQuery, which also applies it to every enumerated
 // document): a getter-backed member is not stable evidence, because each
 // read can serve a different value. The property established is one of
-// the CAPTURE, not of the input (round-62): a Proxy can report a base
+// the CAPTURE, not of the input: a Proxy can report a base
 // prototype it does not have, so what the walk guarantees is that the
-// returned graph is plain data carrying the validated members. VALIDATE-AND-CAPTURE (round-53): the walk returns a plain-data
+// returned graph is plain data carrying the validated members. VALIDATE-AND-CAPTURE: the walk returns a plain-data
 // copy reconstructed from the descriptors it validated, and every caller
 // reads THAT copy, never the injected object, so a Proxy cannot pass the
 // walk and then serve a different value through its get trap. Callers must
@@ -931,8 +931,8 @@ const requirePlainData = (what, obj) => {
   return value;
 };
 
-// perform a proved adapter read TOTALLY (round-57; the INVOCATION brought
-// inside the guard round-61): a value that is resistant to property access,
+// perform a proved adapter read TOTALLY (a review; the INVOCATION brought
+// inside the guard a review): a value that is resistant to property access,
 // for example a REVOKED Proxy resolved by the adapter's promise, throws at the
 // language-level `await` (the promise resolution's thenable check) before
 // requireAnswer's own boundary runs. Reading inside a guard converts that into
@@ -940,7 +940,7 @@ const requirePlainData = (what, obj) => {
 // resolved value passes through unchanged.
 //
 // THE ARGUMENT IS A THUNK, NOT A PROMISE, and that is the whole point of the
-// round-61 change: passing the PROMISE evaluates the adapter call BEFORE
+// a review change: passing the PROMISE evaluates the adapter call BEFORE
 // entering this function, so an adapter that throws SYNCHRONOUSLY (rather than
 // rejecting) escaped the guard entirely and propagated its raw fault, which is
 // exactly what the guard exists to prevent. Taking a thunk puts the invocation
@@ -953,11 +953,11 @@ const awaitRead = async (read) => {
 
 const requireAnswer = (ans, what) => {
   // the WHOLE envelope is validated as plain data AND CAPTURED before any
-  // member is read (round-41, capture round-53): the caller reads the
+  // member is read (a review, capture a review): the caller reads the
   // returned snapshot, so a self-replacing accessor or a Proxy cannot
   // serve one value to a check and another to the consumer
   if (!ans || typeof ans !== "object" || safeIsArray(ans)) {
-    // NO member interpolation here (round-52): a rejected envelope's
+    // NO member interpolation here: a rejected envelope's
     // status could be accessor-backed, and even the refusal message
     // must not read it
     refuse(`${what} returned no plain answer envelope (the answer vocabulary is closed)`);
@@ -971,7 +971,7 @@ const requireAnswer = (ans, what) => {
     refuse(`${what} answered without its authenticated height as a canonical decimal string`);
   }
   // the union is DISCRIMINATED: members outside the declared variant are
-  // contradictory shapes, not tolerated extras (round-40)
+  // contradictory shapes, not tolerated extras
   requirePlainClosed(`${what} answer`, snap,
     status === "served" ? ["status", "doc", "height"]
       : status === "proved-absence" ? ["status", "height"] : ["status"],
@@ -991,7 +991,7 @@ const requireAnswer = (ans, what) => {
  */
 const evaluateReservationPresence = (receipt, answer) => {
   // read the CAPTURED plain-data copy, so a directly-passed Proxy answer
-  // cannot pass the walk and then serve a different chain (round-53)
+  // cannot pass the walk and then serve a different chain
   answer = requireAnswer(answer, "the pinned proved reservation read");
   if (answer.status === "served"
     && (typeof answer.doc.id !== "string" || !HEX64.test(answer.doc.id))) {
@@ -1005,7 +1005,7 @@ const evaluateReservationPresence = (receipt, answer) => {
       // the receipt's hash must BE a well-formed 64-hex value before
       // equality means anything (two absent members compare equal
       // without establishing that either record carries a hash,
-      // round-33); equality then establishes the reservation's too
+      // a review); equality then establishes the reservation's too
       return { label: "REFUSED", reason: "the fetched transferReservation's chain differs from the receipt's (a soundness-review finding)" };
     }
     return { label: "PROVED" };
@@ -1049,7 +1049,7 @@ const evaluateTransferExecution = async ({ receipt, parts, entitlementRow, accru
   if (!capture) {
     return { label: "REFUSED", reason: "no served receipt-capture record exists for the receipt (the capture IS the execution evidence)" };
   }
-  // THE VERIFIER RETURNS ITS VERDICT (round-65). This reads the STATUS of a
+  // THE VERIFIER RETURNS ITS VERDICT. This reads the STATUS of a
   // value returned by a function it called directly, so there is no question of
   // where a caught object came from: a refusal is evidence because the verifier
   // SAID so in its return, and anything thrown is a fault that propagates. The
@@ -1097,7 +1097,7 @@ const evaluateTransferExecution = async ({ receipt, parts, entitlementRow, accru
  * every receipt under it earns OPERATOR-PROVIDED by construction.
  *
  * `receiptCaptureValid` and `headerCaptureValid` are TRUSTED PRECONDITIONS
- * the caller establishes, not facts this evaluator verifies (round-54): the
+ * the caller establishes, not facts this evaluator verifies: the
  * entry passes `transfer.label === "CAPTURE-VERIFIED"` and the header-capture
  * validation result. This predicate arranges the ordering comparison ON TOP
  * of validated captures; it does not itself establish capture validity, so a
@@ -1111,7 +1111,7 @@ const evaluateOrdering = ({ receipt, receiptCaptureValid, capture, headerCapture
   if (!(headerCaptureValid && headerCapture)) return { label: "OPERATOR-PROVIDED" };
   // BOTH routes must EXIST as nonempty strings before equality means
   // anything: two absent members compare equal without establishing that
-  // either record carries a route (round-30)
+  // either record carries a route
   if (typeof capture.heightRoute !== "string" || capture.heightRoute.length === 0
     || capture.heightRoute !== headerCapture.heightRoute) {
     return { label: "OPERATOR-PROVIDED" };
@@ -1140,7 +1140,7 @@ const evaluateOrdering = ({ receipt, receiptCaptureValid, capture, headerCapture
 const evaluateFormationInputs = async ({ poolId, contractId, deps }) => {
   // heights of ACCEPTED document answers, collected as the reads land,
   // so a later refusal or unavailability never drops an already-earned
-  // height (round-28)
+  // height
   const documentHeights = [];
   const unproved = (why) => ({ label: "UNPROVED", reason: why, rows: null, pool: null,
     heights: documentHeights.slice() });
@@ -1181,7 +1181,7 @@ const evaluateFormationInputs = async ({ poolId, contractId, deps }) => {
   const fr = receiptAns.doc;
   if (!sameId(fr.poolId, poolId)) {
     // a NONCONFORMING served answer contributes nothing, its height
-    // included (round-46): the height joins only after the binding
+    // included: the height joins only after the binding
     return refused("the completion receipt names a different pool than the one under audit");
   }
   documentHeights.push(receiptAns.height);
@@ -1195,7 +1195,7 @@ const evaluateFormationInputs = async ({ poolId, contractId, deps }) => {
   if (!pair.ok) return refused(`the six-duty pair check refuses (${pair.reason})`);
   // the allocation verifier runs INSIDE the six-duty pair check (its
   // allocation duty calls formationCore.verifyReceiptAllocation), so a
-  // second direct call here would be unobservable redundancy (round-37);
+  // second direct call here would be unobservable redundancy;
   // the pair refusal above carries the allocation reason when that duty
   // is the one that fails
   let rows;
@@ -1213,7 +1213,7 @@ const evaluateFormationInputs = async ({ poolId, contractId, deps }) => {
   // the fee grammar is enforced INSIDE the six-duty pair check (its
   // pool-shape duty refuses a non-integer or out-of-range
   // operatorFeeBps), so a second check here would be unobservable
-  // redundancy (round-37); the pair refusal above carries that reason
+  // redundancy; the pair refusal above carries that reason
   // EVERY row is examined before the verdict: an unserved read never
   // hides another row's proved absence, an early absence never skips a
   // later row's adapter-contract violation (which still refuses hard),
@@ -1263,11 +1263,11 @@ const evaluateContractIntegrity = async ({ contractId, expectedContractPayload, 
     || safeIsArray(expectedContractPayload)) {
     refuse("contract integrity needs the supplied registration payload (a plain object: registerV11's stored publication payload, never a value derived from the fetched result)");
   }
-  // capture the payload as plain data and compare the CAPTURE (round-53):
+  // capture the payload as plain data and compare the CAPTURE:
   // a Proxy payload could pass the walk and then serve different members
   // to canonicalString, faking equality with the fetched contract
   expectedContractPayload = requirePlainData("the supplied registration payload", expectedContractPayload);
-  // THE SUPPLIED PAYLOAD IS VALIDATED BEFORE THE ADAPTER READ (round-61):
+  // THE SUPPLIED PAYLOAD IS VALIDATED BEFORE THE ADAPTER READ:
   // this check used to sit after the read and after the unserved and
   // proved-absence returns, so a direct caller supplying a malformed payload
   // reached UNPROVED without the payload ever being examined, and an adapter
@@ -1281,7 +1281,7 @@ const evaluateContractIntegrity = async ({ contractId, expectedContractPayload, 
   // and silently dropping a supplied one would let it hide a real difference
   // (a supplied "$policy" absent from the fetched contract would otherwise
   // compare equal after stripping), so a supplied $-member is refused rather
-  // than stripped (round-55).
+  // than stripped.
   const supplied$ = Object.keys(expectedContractPayload).filter((k) => k.startsWith("$"));
   if (supplied$.length) {
     refuse(`the supplied registration payload carries system-namespace members ${show(supplied$)} (a registration payload has none; a $-member would be dropped from the comparison)`);
@@ -1299,7 +1299,7 @@ const evaluateContractIntegrity = async ({ contractId, expectedContractPayload, 
   }
   // CANONICAL equality over the CONTRACT-DEFINED members, with the fetched
   // document's envelope removed by a CLOSED LIST, never by the $ prefix
-  // (round-61). Stripping every $-prefixed fetched name discarded members
+  //. Stripping every $-prefixed fetched name discarded members
   // this module cannot account for: a fetched document carrying the right
   // envelope PLUS an unrecognized "$policy" compared equal, because the
   // extra member disappeared before the comparison. The audit cannot decide
@@ -1310,9 +1310,9 @@ const evaluateContractIntegrity = async ({ contractId, expectedContractPayload, 
   // platform actually adds an envelope member, not a silent tolerance.
   // Member order never decides, and neither side can compare equal by
   // disappearing during serialization.
-  // THE LIST IS DELIBERATELY MINIMAL AND EVIDENCE-BASED (narrowed round-62).
+  // THE LIST IS DELIBERATELY MINIMAL AND EVIDENCE-BASED (narrowed a review).
   // These are the document-envelope members this repository actually reads or
-  // orders by against the platform; nothing else is assumed. The round-61
+  // orders by against the platform; nothing else is assumed. The a review
   // version also listed `$version`, `$format_version`, `$schema` and `$defs`
   // on no evidence, and the last two are the dangerous kind of guess, because
   // a data contract can carry them as REAL CONTENT, so stripping them would
@@ -1370,7 +1370,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   const proved = (t) => enums[t] && enums[t].status === "proved";
   // recovered accruals (joined by the pre-formation settlement) and the
   // settlement outcomes, declared HERE so the structural sweeps read
-  // them on the unavailable path too (round-34)
+  // them on the unavailable path too
   const recoveredAccruals = [];
   const danglingSettled = new Map();
   const allAccruals = () => [...(proved("accrual") ? enums.accrual.documents : []), ...recoveredAccruals];
@@ -1386,7 +1386,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   // finding against them may refuse
   const ignoredEpoch = (epochIndex) => Number.isSafeInteger(epochIndex)
     && classifyRecordEpoch(epochIndex, resolution).bucket === "ignored";
-  // record GRAMMAR is structural and holds on EVERY path (round-32): a
+  // record GRAMMAR is structural and holds on EVERY path: a
   // header or accrual whose epoch index is not a safe integer, or an
   // accrual whose funder cannot form an identifier, is nonconforming on
   // its face, before any recomputation
@@ -1402,7 +1402,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     }
     for (const a of allAccruals()) {
       // an IGNORED epoch carries no obligation, its funder grammar
-      // included (round-42); a malformed epoch index cannot be
+      // included; a malformed epoch index cannot be
       // classified and stays a structural refusal above
       if (ignoredEpoch(a.epochIndex)) continue;
       if (idHex(a.funderId) === null) {
@@ -1412,7 +1412,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     return found;
   };
   // PREFIX duties that need no formation data hold on the unavailable
-  // path too (round-33): the zero-earning verification and the
+  // path too: the zero-earning verification and the
   // no-transfers rule are decidable from the epoch objects and the
   // proved enumerations alone
   const prefixSweep = () => {
@@ -1429,12 +1429,12 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         if (h) {
           if (intStr(h.grossCredits) !== "0" || intStr(h.feeCredits) !== "0") {
             // intStr yields null for any non-integer, so this establishes
-            // the field is not the JSON integer zero (round-53), never
+            // the field is not the JSON integer zero, never
             // that its represented value is numerically nonzero
             found.push(`prefix epoch ${epochIndex} header does not carry integer-zero credits`);
           }
           // calcVersion and the basic member GRAMMAR need no formation
-          // rows (round-36); only the memberCount and allocationHash
+          // rows; only the memberCount and allocationHash
           // VALUES do, and those wait for the full path
           if (h.calcVersion !== 1
             || !Number.isSafeInteger(h.memberCount) || h.memberCount < 0
@@ -1468,7 +1468,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         // normal path never refuses ignored records ON RECORD-SET grounds
         // (their envelope, plain-data and audited-pool duties already ran
         // upstream), and the sweep must reach the same classification
-        // (round-19; scope narrowed round-60)
+        // (a review; scope narrowed a review)
         if (ignoredEpoch(h.epochIndex)) continue;
         if (seenHeaderEpochs.has(h.epochIndex)) {
           found.push(`duplicate headers for epoch ${scalarShow(h.epochIndex)} (a fetched extra)`);
@@ -1477,7 +1477,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     }
     // the reference GRAMMAR is structural and needs no formation input:
     // a dependent whose accrual reference cannot form a 64-hex key is
-    // nonconforming on its face, on every path (round-21)
+    // nonconforming on its face, on every path
     for (const t of ["reservation", "receipt", "part"]) {
       if (!proved(t)) continue;
       for (const d of enums[t].documents) {
@@ -1487,7 +1487,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         }
       }
     }
-    // every dependent resolves or settles, on EVERY path (round-38): a
+    // every dependent resolves or settles, on EVERY path: a
     // resolved accrual (enumerated or recovered) classifies the
     // dependent's epoch domain, a proved absence or a nonconforming
     // answer refuses, and an undecided settlement is a possible orphan.
@@ -1501,7 +1501,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         const acc = accrualById.get(k);
         // a RESOLVED reference needs no per-dependent domain check here:
         // the accrual-level out-of-domain classification below refuses
-        // the same state (round-38)
+        // the same state
         if (acc) continue;
         const st = danglingSettled.get(k);
         if (st && st.kind === "absent") {
@@ -1521,15 +1521,15 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       for (const a of allAccruals()) epochOf.set(a.id, a.epochIndex);
       // duplicate ACCRUAL SLOTS are structural too: two proved accruals
       // for one (epoch, funder) pair are fetched extras whatever
-      // formation says, needing no formation data to compare (round-31);
+      // formation says, needing no formation data to compare;
       // ignored epochs carry no RECORD-SET or lifecycle obligation once
       // resolved (envelope, plain-data and audited-pool duties still ran
-      // upstream), here as everywhere (scope narrowed round-60)
+      // upstream), here as everywhere (scope narrowed a review)
       const slotCount = new Map();
       for (const a of allAccruals()) {
         if (ignoredEpoch(a.epochIndex)) continue;
         // a malformed epoch index is ALREADY a structural refusal from the
-        // grammar sweep (round-53): skip the slot key so an interpolation
+        // grammar sweep: skip the slot key so an interpolation
         // of a null-prototype epoch index cannot throw an untyped
         // TypeError before unavailable() returns the structural refusal
         if (!Number.isSafeInteger(a.epochIndex)) continue;
@@ -1541,14 +1541,14 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       }
       // the n>1 multiplicity rule covers reservations and receipts ONLY,
       // because those are one-per-accrual by construction. PARTS are
-      // deliberately excluded (round-54): a receipt legitimately has up to
+      // deliberately excluded: a receipt legitimately has up to
       // proofPartCount-1 part documents under one accrual, so a per-accrual
       // count above one is not a structural extra. Part surplus, a duplicate
       // part index, and a wrong part count are validated against the
       // receipt's proofPartCount by the transfer aspect (verifyReceipt),
       // which runs on the full (formation-PROVED) path only and refuses the
       // receipt and so the report. This structural sweep deliberately does
-      // NOT re-implement that proofPartCount check (round-55 correction: the
+      // NOT re-implement that proofPartCount check (a review correction: the
       // earlier note wrongly said the unavailable path has no receipt; the
       // receipt and part enumerations can be proved while formation is not).
       // So a part surplus that coincides with unavailable formation is not a
@@ -1608,7 +1608,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       }
     }
   }
-  // index the PROVED enumerations (round-35: built BEFORE the
+  // index the PROVED enumerations (a review: built BEFORE the
   // availability gates, so the settlement and the structural sweeps can
   // read them on every path)
   const headersByEpoch = new Map();
@@ -1649,14 +1649,14 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   const receiptsByAccrual = byAccrual(proved("receipt") ? enums.receipt.documents : []);
   const partsByAccrual = byAccrual(proved("part") ? enums.part.documents : []);
 
-  // PRE-SETTLEMENT (round-23; before the formation gate since round-34,
-  // and before the ENUMERATION gate since round-35, because settlement
+  // PRE-SETTLEMENT (a review; before the formation gate since a review,
+  // and before the ENUMERATION gate since a review, because settlement
   // needs only a proved accrual enumeration and the proved dependent
   // enumerations, so its outcomes hold on the unavailable paths too):
   // every dangling accrual reference is settled by the pinned
   // by-identifier read BEFORE the forward pass, and a conforming served
   // document JOINS the resolution indexes with its identifier
-  // NORMALIZED (round-35: an equivalent base58 spelling must not defeat
+  // NORMALIZED (a review: an equivalent base58 spelling must not defeat
   // the sweeps), so the forward pass runs the SAME conformance checks
   // on a recovered accrual, its dependents included, as on an
   // enumerated one. Joining never upgrades anything: each in-scope or
@@ -1686,7 +1686,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     return out;
   };
   // settlement runs whenever a PROVED dependent enumeration carries a
-  // reference the resolution does not (round-37: the accrual
+  // reference the resolution does not (a review: the accrual
   // enumeration's own availability is irrelevant, because the pinned
   // by-identifier read is its own proof)
   for (const t of ["reservation", "receipt", "part"]) {
@@ -1722,7 +1722,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   // branch-local state, not ledger evidence); the sender binding below
   // is therefore only as strong as this input, which the report's
   // transfer aspect already caps at CAPTURE-VERIFIED. incomeIdentity is the
-  // value runAudit CAPTURED once at the entry and threaded here (round-55),
+  // value runAudit CAPTURED once at the entry and threaded here,
   // so the entry validation and every use see one value, never a second
   // read of a mutable deps member.
 
@@ -1741,7 +1741,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   // 2, 3, 4 and 6; the pair clause 5 is receipt-relative)
   // capture records carry the contract as 32-byte hex while the pin is
   // base58; every identifier comparison at this boundary NORMALIZES by
-  // decoding to the raw bytes (the spec's round-33 rule)
+  // decoding to the raw bytes (the spec's a review rule)
   const contractDecoded = formationCore.decodeId32(contractId);
   const contractHex = contractDecoded === null
     ? contractId : Buffer.from(contractDecoded).toString("hex");
@@ -1760,7 +1760,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         throw new Error(`the capture-basis adapter returned a non-boolean (${show(basis)}); the adapter contract requires true or false; refusing hard`);
       }
       if (basis === true) {
-        // the verdict is RETURNED (round-65): a refusal means the capture is
+        // the verdict is RETURNED: a refusal means the capture is
         // invalid, which is evidence; a throw is a fault and propagates
         const headerVerifierDeps = deps.verifierDeps;
         const capResult = await receiptVerify.verifyCaptureRecord({ capture: cap,
@@ -1815,7 +1815,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     heightCandidates.push(ans.height);
     // an ENUMERATION OMISSION recovered by a unique-key read means the
     // enumeration was INCOMPLETE, exactly as the by-identifier settlement
-    // marks a recovered accrual (round-54, F5): a served-conforming
+    // marks a recovered accrual (a review finding): a served-conforming
     // known-key stand-in degrades record-set completeness to UNPROVED and
     // reports the omission, rather than standing in silently and leaving the
     // epoch READ-CHECKED. All three known-key call sites sit in the in-scope
@@ -1825,7 +1825,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       note: `${what}: recovered by a unique-key read but ABSENT from the enumeration (the enumeration is INCOMPLETE on this audit)` };
   };
 
-  // the FORMATION gate runs AFTER settlement (round-34): everything
+  // the FORMATION gate runs AFTER settlement: everything
   // above needs no allocation rows, so its findings hold on the
   // unavailable path; only the recomputation below needs formation
   if (!formation || formation.label !== "PROVED") {
@@ -1856,7 +1856,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     const epochObject = epochInfo.get(epochIndex);
     if (!epochObject) {
       // UNREACHABLE THROUGH `runAudit`, WHICH IS NOT THE SAME AS UNREACHABLE
-      // (scope corrected round-63, after the earlier wording claimed the
+      // (scope corrected a review, after the earlier wording claimed the
       // latter). Through the entry, discovery returns the exact gapless
       // ascending sequence from the requested start through the newest
       // finalized epoch and every resolved interval end sits at or below that
@@ -1976,7 +1976,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       if (header.memberCount !== rows.length) mismatches.push(`memberCount ${scalarShow(header.memberCount)} != ${rows.length}`);
       if (header.calcVersion !== 1) mismatches.push(`calcVersion ${scalarShow(header.calcVersion)} != 1 (the normative calculation is version 1)`);
       // a non-string allocationHash is a mismatch, never a String() throw on
-      // a null-prototype value the plain-data domain admits (round-54)
+      // a null-prototype value the plain-data domain admits
       if (formation.allocationHashHex && (typeof header.allocationHash !== "string" || header.allocationHash !== formation.allocationHashHex)) {
         mismatches.push("allocationHash differs from the formation receipt's");
       }
@@ -2044,7 +2044,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     //
     // HOW THIS ARRIVED AT ONE CHECK RATHER THAN FOUR, because the history is
     // the argument. The first version of this change kept a MUTABLE slot that
-    // each branch filled member by member. Three review rounds then found one
+    // each branch filled member by member. Three reviews then found one
     // route after another around a half-built object: net-only cardinality,
     // then a silent second assignment where an append could not overwrite,
     // then mutation after the fact, then a writable row index the ordering
@@ -2063,7 +2063,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     // directly, replace or remove an entry, reorder it, or hand a sequential
     // index that is not this row's. Each of those is a deliberate edit rather
     // than the kind of mistake a branchy body produces on its own, and every
-    // one of them was proposed as a route by a review round; guarding them one
+    // one of them was proposed as a route by a review; guarding them one
     // at a time is what grew the version this replaced. The labels themselves
     // are checked for shape and type, never for VOCABULARY or provenance: a
     // wrong but valid label passes, and only the evaluators above decide
@@ -2106,7 +2106,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       const accrual = accrualFor.get(nid(row.funderId));
       if (!accrual) {
         // a missing expected row still CONTRIBUTES to the per-receipt
-        // aspects (the round-10 gap: an unexamined row must never leave
+        // aspects (the review gap: an unexamined row must never leave
         // the aggregates affirmative): no accrual means no execution
         // evidence, no queryable reservation key, and nothing to attest
         appendReceiptRow(rowIndex, { transferExecution: "REFUSED",
@@ -2158,7 +2158,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
           heightCandidates.push(orphanResAnswer.height);
           orphanReservation = "REFUSED";
           // the proved absence refuses the record set with or WITHOUT an
-          // enumerated reservation (round-35): beside one it is a
+          // enumerated reservation: beside one it is a
           // fetched mismatch, alone it is a missing expected record
           epochLabels.push("REFUSED");
           rowOut.diagnostics.push(fetchedReservation
@@ -2179,8 +2179,8 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
             heightCandidates.push(orphanResAnswer.height);
             orphanReservation = "UNPROVED";
             // when the enumeration ALSO served a reservation, the two
-            // unique-key reads must identify the SAME document (round-59,
-            // extending the round-58 identity cross-check to the
+            // unique-key reads must identify the SAME document (a review,
+            // extending the review identity cross-check to the
             // missing-receipt path): a different identifier is a fetched
             // mismatch that refuses the record set
             if (fetchedReservation && !sameId(fetchedReservation.id, d.id)) {
@@ -2215,7 +2215,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         rowOut.diagnostics.push(`receipt for ${row.funderId.slice(0, 8)}...: ${transfer.reason}`);
         epochComplete = false;
       }
-      // ONE pinned reservation read serves BOTH consumers (the round-6
+      // ONE pinned reservation read serves BOTH consumers (the review
       // double-read gap: two reads can resolve at different heights, and
       // the first answer must never be discarded unevaluated): the
       // record-set presence reads it here, the reservation aspect reads
@@ -2252,11 +2252,11 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         if (reservation.label === "UNPROVED") epochComplete = false;
         // a conforming reservation the pinned read SERVED but the
         // enumeration OMITTED is an enumeration incompleteness, exactly as
-        // the known-key header/accrual/receipt recovery marks it (round-55,
-        // extending the round-54 F5 policy to the reservation path): the
+        // the known-key header/accrual/receipt recovery marks it (a review,
+        // extending the review F5 policy to the reservation path): the
         // reservation ASPECT stays PROVED (the record is present and
         // conforms), and record-set COMPLETENESS degrades to UNPROVED. It
-        // does NOT mark the epoch's DISTRIBUTION incomplete (round-59): a
+        // does NOT mark the epoch's DISTRIBUTION incomplete: a
         // recovery means the ENUMERATION missed a record that EXISTS and
         // conforms, not that the distribution failed, so the four recovery
         // paths share one rule (degrade record-set, never lag), matching the
@@ -2266,7 +2266,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
           rowOut.diagnostics.push(`accrual ${accrualId.slice(0, 8)}... reservation: recovered by the pinned read but ABSENT from the enumeration (the enumeration is INCOMPLETE on this audit)`);
         }
         // when BOTH the enumeration and the pinned read serve a reservation,
-        // they must be the SAME document (round-58): reservationByAccrual is a
+        // they must be the SAME document: reservationByAccrual is a
         // UNIQUE-KEY read, so a DIFFERENT served identifier means the two
         // reads disagree on which reservation exists at that key, a fetched
         // mismatch that refuses the record set, exactly as a served
@@ -2301,9 +2301,9 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       throw new Error(`e2Audit: epoch ${epochIndex} appended ${receiptRows.length} receipt rows for ${positiveRows.length} positive rows (a row appended none and no later append revealed it); refusing hard`);
     }
     // records under NON-POSITIVE accruals are fetched extras: a zero
-    // entitlement has no reservation, receipt or part (the round-1
+    // entitlement has no reservation, receipt or part (the review
     // zero-accrual gap). The sweep covers EVERY known accrual of the
-    // epoch, enumerated AND known-key fallbacks alike (the round-6 gap)
+    // epoch, enumerated AND known-key fallbacks alike (the review gap)
     const positiveAccrualIds = new Set(positiveRows
       .map((row) => nid((accrualFor.get(nid(row.funderId)) || {}).id)));
     for (const a of accrualFor.values()) {
@@ -2416,7 +2416,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   // the in-flight sweep: reservations without a matching receipt are
   // reported, never counted complete (the lifecycle already refused
   // completeness for them). An IGNORED epoch carries no obligation, its
-  // lifecycle reporting included (round-26).
+  // lifecycle reporting included.
   for (const [accrualId] of reservationsByAccrual) {
     const acc = accrualById.get(accrualId);
     if (!acc || ignoredEpoch(acc.epochIndex)) continue;
@@ -2459,7 +2459,7 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
       refuseInput("runAudit needs the pool's 64-hex identifier");
     }
     if (!deps || typeof deps !== "object") refuseInput("runAudit needs its deps object");
-    // NORMALIZE ONCE, THEN NEVER READ THE CALLER'S OBJECT AGAIN (round-65).
+    // NORMALIZE ONCE, THEN NEVER READ THE CALLER'S OBJECT AGAIN.
     // Every member below is read EXACTLY ONCE here, validated, and copied into
     // a frozen capability record that is threaded everywhere in place of the
     // caller's object. This turns the capture-once convention, which earlier
@@ -2486,7 +2486,7 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
       verifierCaps[k] = fn;
     }
     caps.verifierDeps = Object.freeze(verifierCaps);
-    // CAPTURE the expected payload ONCE at the entry (round-54): validating
+    // CAPTURE the expected payload ONCE at the entry: validating
     // it here and then re-reading deps.expectedContractPayload later would
     // read a mutable object twice, so a payload the caller mutates between
     // entry validation and the contract-integrity comparison could pass the
@@ -2503,14 +2503,14 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
     }
     // a supplied payload carrying a system-namespace ($-prefixed) member is a
     // malformed request, refused AT THE ENTRY as a structured REFUSED-INPUT
-    // (round-56): a registration payload has none, and the contract-integrity
+    //: a registration payload has none, and the contract-integrity
     // evaluator's own $-member check throws a plain refusal that runAudit's
     // catch would not convert, so the entry owns the input-refusal typing and
     // the evaluator check stays as defense in depth for direct callers.
     if (Object.keys(expectedPayloadSnap.value).some((k) => k.startsWith("$"))) {
       refuseInput("runAudit needs deps.expectedContractPayload without system-namespace ($-prefixed) members (a registration payload carries none)");
     }
-    // CAPTURE the scalar trust inputs ONCE at the entry (round-55), as the
+    // CAPTURE the scalar trust inputs ONCE at the entry, as the
     // expected payload is: an accessor on deps could otherwise return the
     // validated value during entry validation and a different value at a
     // later read, so every downstream use reads these captured locals, never
@@ -2599,7 +2599,7 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
     // aggregates over missing-row contributions or empty-set
     // inheritance), and the note says so, LETTING a consumer discount
     // them (the label itself stays as computed; nothing can force a
-    // consumer to read the note) (rounds 17, 34 and 39)
+    // consumer to read the note) (successive reviews)
     const vacuousNote = ledger.receiptEvaluations.length === 0
       ? "no receipt received the per-receipt evidence evaluations, so this label is not evidence that any receipt was inspected"
       : null;
@@ -2607,12 +2607,12 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
     // zero means no receipt received the per-receipt evaluations,
     // whether none was expected or none could be examined (a missing
     // expected receipt contributes its refusal without an evaluation).
-    // It does NOT establish that the expected set was empty (round-39).
+    // It does NOT establish that the expected set was empty.
     const aspects = {
       universe: { evaluated: true, label: resolution.discovery.proved ? "PROVED" : "UNPROVED" },
       // the PROVED labels on the two boundary aspects restate the
       // harness's declared proof claim (the seam named in the header);
-      // this module cannot verify boundary proofs and does not (round-47)
+      // this module cannot verify boundary proofs and does not
       activationBoundary: { evaluated: true,
         label: provedActivation !== null ? "PROVED" : "OPERATOR-PROVIDED",
         source: source.source },
@@ -2644,9 +2644,9 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
     // known-key and by-identifier reads, and the formation document reads
     // (a nonconforming served answer contributes nothing, and heights
     // embedded inside the receipt and capture proof pipelines do not
-    // enter; round-60 narrowed this wording to the contributing classes).
+    // enter; a review narrowed this wording to the contributing classes).
     // TWO SEPARATE STATEMENTS, kept distinct after
-    // round-53 conflated them: (a) the contract and identity heights do
+    // a review conflated them: (a) the contract and identity heights do
     // not ENTER the range, because it reports document evidence only; and
     // (b) the range is emitted only when recordsProved holds, which
     // requires PROVED formation and every enumeration served. An unserved
@@ -2689,7 +2689,7 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
       diagnostics: ledger.diagnostics, refusals: ledger.refusals });
   } catch (e) {
     // classification is by MEMBERSHIP in the module-private refusal set,
-    // never by instanceof (round-60, replacing the round-59 guarded
+    // never by instanceof (a review, replacing the review guarded
     // instanceof): the class is exported, so instanceof is reproducible by
     // an injected adapter (inherit the exported prototype, or lie through
     // a getPrototypeOf trap) and would convert an adapter fault into a
@@ -2703,10 +2703,10 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
   }
 };
 
-// THE PUBLIC SURFACE IS THE ENTRY PLUS THE REPORT'S OWN VOCABULARY (round-65;
+// THE PUBLIC SURFACE IS THE ENTRY PLUS THE REPORT'S OWN VOCABULARY (a review;
 // docs/E2_VERIFICATION_BOUNDARY.md, "The public surface").
 //
-// Why this split earns its keep: several review rounds were spent on claims that
+// Why this split earns its keep: several reviews were spent on claims that
 // were TRUE THROUGH `runAudit` and FALSE for a synthetic direct caller which
 // existed only because an internal evaluator was exported for testing. Two
 // specimens: the three per-receipt aspects carry equal examined counts, which

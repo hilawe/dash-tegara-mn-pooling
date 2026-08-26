@@ -25,7 +25,7 @@ const positive = JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, "vectors", "po
 const evidenceOf = (e) => { const c = JSON.parse(JSON.stringify(e)); delete c.rewards; delete c.claimProfile; return c; };
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest();
 
-// RE-SIGNING A CHECKPOINT MOVES ITS ADOPTED PIN WITH IT (round 12, MAJOR). Every fixture that
+// RE-SIGNING A CHECKPOINT MOVES ITS ADOPTED PIN WITH IT (a review, MAJOR). Every fixture that
 // re-signs a checkpoint derives a new checkpointId, and until the runtime checker started reading
 // adoptedEpochPins nothing noticed that the pins were left naming the OLD identifiers. That is
 // what a conforming producer would never do: the signature says who wrote a checkpoint and the
@@ -84,7 +84,7 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 const rawPub = publicKey.export({ format: "der", type: "spki" }).subarray(12);
 const signed = evidenceOf(positive);
 
-// MINE A REAL HEIGHT-ONE HEADER for the devnet duty (round 4, MUST-FIX: the old fixture
+// MINE A REAL HEIGHT-ONE HEADER for the devnet duty (a review, a required fix: the old fixture
 // passed `{coreNode: {}}` and REQUIRED success, so it demanded the wrong outcome for a
 // retrieval duty nothing performed). The header extends the vector's height-zero genesis,
 // carries the regtest-class compact target 0x207fffff, and is ground until its hash
@@ -94,11 +94,11 @@ const signed = evidenceOf(positive);
 // `mutateCoinbase` rewrites the coinbase BEFORE its txid is taken, so a case that alters bytes
 // inside the transaction still gets a header mined over the resulting merkle root. Without that
 // the altered block would refuse at the hash comparison and never reach the parser, which is the
-// vacuous-fixture pattern this cycle keeps finding (round 8, finding 3).
+// vacuous-fixture pattern this cycle keeps finding (a review finding).
 // Dash's serialized transaction ceiling [8c9f166a3:src/consensus/consensus.h:10]
 const MAX_TX_SIZE = 1000000;
 
-// `dash-header-chain-v1`: a u32 little-endian COUNT then that many 80-byte headers (round 11,
+// `dash-header-chain-v1`: a u32 little-endian COUNT then that many 80-byte headers (a review,
 // a soundness-review finding). The fixtures used to place a bare header in coreHeaderChain, which is not the shape the
 // normative proof-codec profile defines, so the positive cases were requiring the non-conforming
 // form the reader happened to accept.
@@ -110,7 +110,7 @@ const chainOf = (...headers) => {
 
 const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
                        nBits = 0x207fffff, mutateCoinbase = null) => {
-  // A FULL BLOCK, not a header (round 5, MUST-FIX). The verifier now requires the coinbase and
+  // A FULL BLOCK, not a header (a review, a required fix). The verifier now requires the coinbase and
   // requires the header's merkle root to BE the coinbase txid, which is the identity that binds
   // the devnet-name commitment to the verified hash. A fixture that supplied only a header could
   // not exercise any of that, and the previous one did not.
@@ -120,7 +120,7 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
   // OP_1 followed by a push of the devnet name, one OP_RETURN output carrying the 50 DASH reward
   // the devnet call site passes (chainparams.cpp:617), transaction version 1, and block version 4.
   //
-  // WHAT THIS CONTROL DOES AND DOES NOT ESTABLISH (round 10, MINOR). It is a LOCALLY CONSTRUCTED
+  // WHAT THIS CONTROL DOES AND DOES NOT ESTABLISH (a review, MINOR). It is a LOCALLY CONSTRUCTED
   // block that follows the constructor's shape, not output captured from a running node, and the
   // label used to overclaim that. Two fields still cannot match a real devnet: the timestamp,
   // because the stock constructor uses the height-zero block's time plus one and the envelope
@@ -181,7 +181,7 @@ const mineHeightOne = (parentDisplayHex, devnetName = "tegara-fixture-devnet",
 };
 // SERIALIZE a partial merkle tree back to its `dash-merkle-branch-v1` bytes
 // [8c9f166a3:src/merkleblock.h]. The proof fields the registry lists as evidence are now decoded
-// and checked (round 9, finding 5), so fixtures carry the real branch rather than a placeholder.
+// and checked (a review finding), so fixtures carry the real branch rather than a placeholder.
 // The parser returns hashes in DISPLAY order, so they reverse back to internal order here. Counts
 // are written as single-byte CompactSize, which is all these one-transaction trees need.
 const serializePmt = (tree) => {
@@ -333,7 +333,7 @@ alteredPayload.checkpoints[0].signedPayloadBytes = p0.toString("hex");
 alteredPayload.checkpoints[0].checkpointId = sha256(p0).toString("hex");
 ok("a mutated payload breaks the signature", verifyCheckpointRecognition(alteredPayload).ok === false);
 
-// ---- THE ADOPTED PINS (round 12, MAJOR) ----
+// ---- THE ADOPTED PINS (a review, MAJOR) ----
 // The registry assigns this checker "epoch ids distinct and strictly increasing; every checkpoint
 // matches its adoptedEpochPins entry", and lists adoptedEpochPins in its own evidence. The module
 // read that field zero times while the executable specification enforced it in sixteen places, so
@@ -434,7 +434,7 @@ ok("...and its digest differs from the other evidence set",
    runSigned.evidenceDigest !== run.evidenceDigest);
 
 // ---------------------------------------------------------------------------
-// Round 5 (2026-07-26), MUST-FIX and MAJOR. Each case below was reproduced against the tree
+// A review (2026-07-26) required a fix. Each case below was reproduced against the tree
 // before the fix. The previous version checked a HEADER only, so two of the registry's four
 // named checks were never performed, and its nBits handling accepted a target outside the
 // 256-bit range, which every hash satisfies.
@@ -448,7 +448,7 @@ ok("...and its digest differs from the other evidence set",
   const nodeOf = (hex) => ({ getBlockHexByHeight: () => hex });
 
   // an nBits whose expansion leaves the 256-bit range is INVALID, not merely weak.
-  // THE ALTERNATION IN THIS ASSERTION WAS THE PROBLEM (round 12, MINOR). It accepted either the
+  // THE ALTERNATION IN THIS ASSERTION WAS THE PROBLEM (a review, MINOR). It accepted either the
   // intended target-range refusal OR the earlier block-hash mismatch that editing the header
   // causes, so it could be satisfied without ever reaching the rule it names. The case now
   // re-derives the chain identity and re-signs, the same discipline the other height-one cases
@@ -463,7 +463,7 @@ ok("...and its digest differs from the other evidence set",
     ok("and the refusal reaches the nBits rule, not the hash comparison",
        /overflows/.test(r.reason || ""));
   }
-  // THESE THREE REFUSED FOR THE WRONG REASON UNTIL 2026-07-30 (round 8, finding 3). Each altered
+  // THESE THREE REFUSED FOR THE WRONG REASON UNTIL 2026-07-30 (a review finding). Each altered
   // the block WITHOUT updating the envelope's expected block hash, so every one of them stopped
   // at the hash comparison and none reached the check its name claimed. Each asserted only
   // `r.ok === false`, which an earlier refusal satisfies just as well, so removing any of the
@@ -521,7 +521,7 @@ ok("...and its digest differs from the other evidence set",
        /no devnet-name push/.test(r.reason || ""));
   }
 
-  // A LONG DEVNET NAME IS VALID AND WAS BEING REFUSED (round 9, MINOR, finding 6). Dash's script
+  // A LONG DEVNET NAME IS VALID AND WAS BEING REFUSED (a review, MINOR, finding 6). Dash's script
   // builder switches from a direct push to OP_PUSHDATA1 at 76 bytes, and a 76-byte name gives a
   // 79-byte coinbase scriptSig, inside the 100-byte ceiling. The parser accepted only direct
   // pushes, so it produced a named FALSE REJECTION of a block Dash accepts. This is the opposite
@@ -547,7 +547,7 @@ ok("...and its digest differs from the other evidence set",
     });
     const r = verifyCheckpointRecognition(resignFor(blk.displayHash),
                                           { coreNode: nodeOf(blk.blockHex) });
-    // ACCEPTED, and the change of direction is the finding (round 10, MINOR). This case used to
+    // ACCEPTED, and the change of direction is the finding (a review, MINOR). This case used to
     // require a REFUSAL, on the reasoning that Dash's builder would have written the shorter form.
     // That confused how Dash constructs a block with what Dash validates: at height one the only
     // rules on this scriptSig are the BIP34 byte prefix and the length bound, neither of which
@@ -621,7 +621,7 @@ ok("...and its digest differs from the other evidence set",
     const outputs = diff.cbTx.vout.map((o) => ({
       script: o.script, amountDuffs: o.valueDuffs, outputIndex: o.index,
     }));
-    // THE AUDITED NODE IS ONE OF THE REAL ENTRIES (round 9, MAJOR, a soundness-review finding). This fixture used to
+    // THE AUDITED NODE IS ONE OF THE REAL ENTRIES (a review, MAJOR, a soundness-review finding). This fixture used to
     // state `targetNodeEntry: null` and `targetNodeState: "ABSENT"` with no poolProTxHash at all,
     // which is exactly the unbound shape the finding describes: it proved the list root and never
     // asked what that list said about the member being audited. It now audits a node the capture's
@@ -666,7 +666,7 @@ ok("...and its digest differs from the other evidence set",
     ok("what it PROVED is reported, not just what it lacks", /list root/.test(r.proved || ""));
 
     // AND YET IT IS NOT ok: the endpoint ChainLock check has not run, so the component cannot be
-    // claimed. This is the property that the last three rounds' must-fixes all violated.
+    // claimed. This is the property that the last successive reviews' must-fixes all violated.
     ok("passing checks do NOT add up to a claim while a named duty is outstanding",
        r.ran === false && r.ok === false);
     ok("the outstanding duty is named", /ChainLock/.test(r.blockedOn || ""));
@@ -690,7 +690,7 @@ ok("...and its digest differs from the other evidence set",
     ok("a walk that does not continue the base block is refused",
        t3.ok === false && /breaking the chain/.test(t3.reason || ""));
 
-    // THE MATCHED-TRANSACTION CONDITION, which no input had reached (round 8, finding 5).
+    // THE MATCHED-TRANSACTION CONDITION, which no input had reached (a review finding).
     // verifyCoreWalk requires two separate things of the coinbase proof: that the tree's root
     // equals the header's, and that the coinbase txid is among the transactions the tree proves.
     // Only the first was guarded. The existing negative case flips a hash, which fails the ROOT
@@ -718,7 +718,7 @@ ok("...and its digest differs from the other evidence set",
          /not among the transactions its own\s+proof establishes/.test(r4.reason || ""));
     }
 
-    // ---- THE TWO SERIALIZED PROOF FIELDS ARE READ (round 9, MINOR, finding 5) ----
+    // ---- THE TWO SERIALIZED PROOF FIELDS ARE READ (a review, MINOR, finding 5) ----
     // The registry lists both as evidence and the verifier read neither, so either could carry
     // any schema-valid hex without changing the outcome. The proof-codec profile maps both to
     // `dash-merkle-branch-v1` and states that a verifier decodes its evidence fields with exactly
@@ -766,7 +766,7 @@ ok("...and its digest differs from the other evidence set",
               },
               /does not establish the coinbase/);
 
-    // ---- THE AUDITED NODE IS DERIVED, NOT BELIEVED (round 9, MAJOR, a soundness-review finding) ----
+    // ---- THE AUDITED NODE IS DERIVED, NOT BELIEVED (a review, MAJOR, a soundness-review finding) ----
     // Every case here authenticates the SAME list root as the positive above. Only the two fields
     // describing the audited member at that height differ, which is the finding's exact shape: no
     // malformed wire encoding is needed, and before the fold each of these passed while the
@@ -807,7 +807,7 @@ ok("...and its digest differs from the other evidence set",
                (e) => { e.poolProTxHash = "ab".repeat(32); },
                /authenticated list makes it ABSENT/);
 
-    // ---- THE CONTINUITY PAIR (round 7 MAJOR + round 8 a soundness-review finding) ----
+    // ---- THE CONTINUITY PAIR (a review MAJOR + a review a soundness-review finding) ----
     // Every case below reported diffChainContinuity as PASSED before this fold, with `proved`
     // saying the rows chained without a gap. Each asserts the reason, because a refusal from
     // some other check would not show the continuity rule doing the work.
@@ -827,7 +827,7 @@ ok("...and its digest differs from the other evidence set",
            rr.checks.diffChainContinuity.passed === true));
     };
 
-    // the round-7 major itself: the first-row comparison used to be conditional on this field,
+    // the review major itself: the first-row comparison used to be conditional on this field,
     // so deleting it skipped the check while the result still claimed a chain without a gap
     walkCase("an absent baseBlock.blockHash is refused rather than skipped",
              (e) => { delete e.basePackage.baseBlock.blockHash; },
@@ -877,13 +877,13 @@ ok("...and its digest differs from the other evidence set",
 }
 
 // ---------------------------------------------------------------------------
-// THE DELTA CASE (round 6, MAJOR). Every earlier fixture descended from one capture whose base is
+// THE DELTA CASE (a review, MAJOR). Every earlier fixture descended from one capture whose base is
 // height 1 with an empty list, so that single diff carried the WHOLE list and the ordinary case
 // never arose. This builds a real delta by splicing the captured payload: one of its three entries
 // is moved into the BASE list, and the row's diff carries only the other two. The resulting list is
 // still the same three, so the coinbase commitment is unchanged and the root must still reproduce.
 // Computing the root over the delta alone yields a different value, so this fixture fails against
-// the pre-round-6 code.
+// the pre-a review code.
 // ---------------------------------------------------------------------------
 {
   const { verifyCoreWalk } = require("./runtimeVerifiers.cjs");
@@ -918,7 +918,7 @@ ok("...and its digest differs from the other evidence set",
     script: o.script, amountDuffs: o.valueDuffs, outputIndex: o.index,
   }));
   const env = {
-    // AUDIT THE ENTRY THAT CAME FROM THE BASE, not from the delta (round 9, a soundness-review finding). The row's
+    // AUDIT THE ENTRY THAT CAME FROM THE BASE, not from the delta (a review, a soundness-review finding). The row's
     // target fields must be derived from the list AFTER the delta is applied, and `first` is only
     // in that list because the base package was seeded and read. Auditing it therefore ties the
     // target derivation to the same base-seeding this section exists to prove.
@@ -955,7 +955,7 @@ ok("...and its digest differs from the other evidence set",
   ok("the resulting list holds all three entries again",
      /3 entry\(ies\)/.test(r.checks.listRootPerHeight.detail));
 
-  // and the converse round 6 reported: a full list relabelled as a delta from a DIFFERENT base
+  // and the converse a review reported: a full list relabelled as a delta from a DIFFERENT base
   // must no longer pass, because the base list is now read
   const wrongBase = JSON.parse(JSON.stringify(env));
   wrongBase.basePackage.smlEntries = [whole.mnList[1].raw.toString("hex")];
@@ -963,7 +963,7 @@ ok("...and its digest differs from the other evidence set",
   ok("a base list holding the WRONG entry is refused rather than passing",
      w.ok === false && /list root/.test(w.reason || ""));
 
-  // MISLABELLED FOR THREE ROUNDS, corrected 2026-07-30 (round 7, MINOR). The comment here used
+  // MISLABELLED FOR successive reviews, corrected 2026-07-30 (a review, MINOR). The comment here used
   // to say this exercised "a deletion naming an entry the list does not hold". It does not: the
   // spliced payload inherits the capture's EMPTY deletedMNs, so the missing-delete branch in
   // applyDiffToList never runs and this case fails later, on the root. The real guard for that
@@ -983,7 +983,7 @@ ok("...and its digest differs from the other evidence set",
 }
 
 // ---------------------------------------------------------------------------
-// ROUND 6 MUST-FIX. Three shapes that Dash consensus rejects and this verifier accepted, each
+// A REVIEW REQUIRED A FIX. Three shapes that Dash consensus rejects and this verifier accepted, each
 // returning ran:true ok:true with detail claiming the block had been authenticated, and each
 // therefore minting a recognition attestation. Third round on this one verifier, same class every
 // time: a duty reported as discharged that was not performed.
@@ -1049,7 +1049,7 @@ ok("...and its digest differs from the other evidence set",
        r.ok === false && /trailing byte/.test(r.reason || ""));
   }
 
-  // (4) NON-CANONICAL COMPACTSIZE IS OUTSIDE THE WIRE DOMAIN (round 8, MUST-FIX, a soundness-review finding).
+  // (4) NON-CANONICAL COMPACTSIZE IS OUTSIDE THE WIRE DOMAIN (a review, a required fix, a soundness-review finding).
   // The height-one parser used to keep its own CompactSize reader, which applied neither the
   // canonical-width rule nor MAX_SIZE. A wider-than-needed encoding parsed cleanly here while
   // Dash Core refuses the same bytes in ReadCompactSize, so the verifier could complete the duty
@@ -1093,7 +1093,7 @@ ok("...and its digest differs from the other evidence set",
        /non-canonical CompactSize/.test(r.reason || ""));
   }
 
-  // ---- (5) THE DASH TRANSACTION DOMAIN (round 9, three MUST-FIX findings) ----
+  // ---- (5) THE DASH TRANSACTION DOMAIN (a review, three a required fix findings) ----
   // The parser read the genesis coinbase's bytes without applying the rules Dash applies to the
   // same transaction, so three separate inputs completed here and are refused by Dash. All three
   // could return ran:true ok:true and mint a recognition attestation, which is what separated
@@ -1102,7 +1102,7 @@ ok("...and its digest differs from the other evidence set",
   // Each case below rebuilds the block properly: the coinbase is mutated BEFORE its txid is taken,
   // the header is mined over the resulting merkle root, the chain identity is re-derived and the
   // checkpoint re-signed. Without that a case stops at the hash comparison and proves nothing,
-  // which is the trap round 8 finding 3 caught. Every case asserts the REASON.
+  // which is the trap a review finding 3 caught. Every case asserts the REASON.
   //
   // The coinbase layout, used to place each mutation:
   //   0..3 version and type, 4 input count, 5..36 prevout hash, 37..40 prevout index,
@@ -1160,7 +1160,7 @@ ok("...and its digest differs from the other evidence set",
        /declares no outputs/.test(r.reason || ""));
   }
   {
-    // a soundness-review finding, round 10: the SERIALIZED TRANSACTION-SIZE CEILING, which the round-9 fold missed.
+    // a soundness-review finding, a review: the SERIALIZED TRANSACTION-SIZE CEILING, which the review fold missed.
     // That fold read Dash's context-free check to build this boundary and implemented the
     // extra-payload bound at tx_check.cpp:34-35 while skipping the size ceiling on the two lines
     // directly above it. Nothing else bounded the total: an output script is limited only by the
@@ -1219,7 +1219,7 @@ ok("...and its digest differs from the other evidence set",
 }
 
 // ---------------------------------------------------------------------------
-// ROUND 6 MAJOR: the coinbase carrying the list-root commitment was never authenticated. Both
+// A REVIEW FOUND: the coinbase carrying the list-root commitment was never authenticated. Both
 // retained proofs went unused, so the walk read a transaction out of the diff and treated its
 // payload as a value Dash Core wrote. Flipping one byte of the tree left every check passing.
 // ---------------------------------------------------------------------------
@@ -1237,7 +1237,7 @@ ok("...and its digest differs from the other evidence set",
     script: o.script, amountDuffs: o.valueDuffs, outputIndex: o.index,
   }));
   // the audited node is one the capture's list really holds, so the row's target fields are
-  // derived from the authenticated list rather than asserted (round 9, a soundness-review finding)
+  // derived from the authenticated list rather than asserted (a review, a soundness-review finding)
   const envTarget = d.mnList[0];
   const envWith = (payloadHex) => ({
     poolProTxHash: envTarget.proRegTxHash,
@@ -1317,7 +1317,7 @@ ok("...and its digest differs from the other evidence set",
 }
 
 // ---------------------------------------------------------------------------
-// ROUND 6 MINOR: two correction claims had code but only partial fixtures. Strict hex was driven
+// A REVIEW NOTED: two correction claims had code but only partial fixtures. Strict hex was driven
 // through ONE field, and the two named type-before-order corrections had no focused case at all.
 // A claim with one witness is a claim about that witness.
 // ---------------------------------------------------------------------------

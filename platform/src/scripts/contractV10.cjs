@@ -3,12 +3,12 @@
  * source-only DRAFT that is deliberately UNPUBLISHED (there is no registerV10.cjs and
  * nothing selects LEDGER=v10; the live ledger is v8 and v9 is itself an unpublished
  * draft). v10 is the contract-schema half of the fixed-slot share specified in
- * `tegara/docs/FIXED_SLOT_SHARE_SPEC.md` (review-complete through round 12). This builder
+ * `tegara/docs/FIXED_SLOT_SHARE_SPEC.md` (review-complete through a review). This builder
  * derives from buildV9, so everything not listed below is carried by construction, and
  * contractV10Test.cjs pins the exact intended diff against a reviewed baseline hash of the
  * v9 construction.
  *
- * v10 is a RETAIL-ONLY contract version (spec section 3, a round-4 packet correction).
+ * v10 is a RETAIL-ONLY contract version (spec section 3, a review correction).
  * Direct-tier pools stay on the v9-shaped lineage and take nothing from v10. On a v10
  * instance every pool is a retail pool, so the omission of the retail fields is a schema
  * error, not a valid sibling branch. The THREE changes v10 makes to v9 (a review fold
@@ -26,7 +26,7 @@
  *      equals the amount of the proved live L1 share at `shareTable[pool.slotIndex]`, read
  *      directly from the share table, never inferred from a completion allocation-row
  *      ordinal (allocation rows sort by Platform identity, so their order carries no
- *      correspondence to the L1 share table, the round-2 blocker). That live-L1 half is a
+ *      correspondence to the L1 share table, the review blocker). That live-L1 half is a
  *      reader duty, not something this schema or `checkRetailPoolInvariants` can hold; the
  *      offline invariants here are only the L2 cross-field ones (presence, bounds, the
  *      retail equation, and `retailGroupDuffs <= targetDuffs`).
@@ -213,7 +213,7 @@ function checkRetailPoolInvariants(pool) {
   const book = pool.slotDuffs * pool.slotCount;
   if (book !== pool.retailGroupDuffs) {
     if (book === pool.targetDuffs && pool.targetDuffs !== pool.retailGroupDuffs) {
-      // the exact stale-v9 case the round-3a blocker named: the book divides the WHOLE node
+      // the exact stale-v9 case the review named: the book divides the WHOLE node
       // target instead of the group share, so a retail pool built on the v9 equation is rejected
       errs.push(
         "STALE v9 slot-book: slotDuffs * slotCount == targetDuffs (the node target), but v10 " +

@@ -116,7 +116,7 @@ const SPECIFIC = {
   },
 };
 
-// A MODULE-PRIVATE class used for CONTROL FLOW INSIDE THIS MODULE ONLY (round-65;
+// A MODULE-PRIVATE class used for CONTROL FLOW INSIDE THIS MODULE ONLY (a review;
 // see docs/E2_VERIFICATION_BOUNDARY.md). It is not exported, and no recognizer is
 // exported, so nothing outside this file is ever asked to decide whether a caught
 // value came from here.
@@ -299,7 +299,7 @@ const recoverCaptureSigner = async (record) => {
 };
 
 /**
- * The deterministic supersession selection (spec rounds 12 and 14): given the
+ * The deterministic supersession selection (specification revisions 12 and 14): given the
  * served capture and every supersession record served with it, plus an async
  * signature check for a candidate (the caller supplies key resolution),
  * returns { basis } where basis is either the winning supersession record or

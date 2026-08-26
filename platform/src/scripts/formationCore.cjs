@@ -59,7 +59,7 @@ const nodeTypeForCollateral = (collateralDuffs) => {
 
 // THE RAIL'S CREATION-TIME TYPE DECISION (EvoNodes E1-1): an observation's collateral
 // names the type and wins; without an observation the declared type is validated
-// against the table by OWN-property membership (the round-6 own-property rule: a
+// against the table by OWN-property membership (the review own-property rule: a
 // bracket lookup walks the prototype chain, so a declared "toString" passed an
 // undefined-check while naming no type at all), defaulting to regular when undeclared.
 const nodeTypeForRail = ({ collateralDuffs, declaredType }) => {
@@ -545,13 +545,13 @@ const requireTierOwnerCount = (distinctOwners, { demo = false } = {}) => {
  * The admission-side PRODUCT-MINIMUM preflight (pass 7, major 2). `requireTierOwnerCount`
  * refuses a one-owner COMPLETION, so admission must refuse the claim that FILLS a pool
  * with a single distinct owner: otherwise the book fills, nothing more can be admitted,
- * and completion refuses it under the non-demo operator profile (round 24 narrowed this
+ * and completion refuses it under the non-demo operator profile (a review narrowed this
  * sentence to match the paragraph below). The condition is deliberately narrow, and the narrowness
  * IS the guard: a single-owner claim is perfectly admissible while free capacity remains,
  * because the second owner can still arrive. Only the claim that closes the book with one
  * owner is refused.
  *
- * NO DEMO CARVE HERE, deliberately (confirm-pass round 23, major): this preflight runs
+ * NO DEMO CARVE HERE, deliberately (a confirmation pass): this preflight runs
  * in the MEMBER'S process, and the member's ambient FORMATION_ALLOW_UNVERIFIED cannot
  * speak for the operator's completion profile. The earlier demo parameter let a member
  * with the variable set close a one-owner book that a non-demo operator refuses,
@@ -581,7 +581,7 @@ const requireCompletableOwnerCount = ({ distinctOwnersAfterClaim, bookFullAfterC
   }
 };
 
-// F-G, moved here from formation.cjs (confirm-pass round 16) so admission and completion
+// F-G, moved here from formation.cjs (a confirmation pass) so admission and completion
 // read ONE capacity rule: MAX_SLOT_COUNT caps a legit book at the reference writer's pool
 // creation; MAX_PLEDGE_CLAIMS is completion's claim-scan ceiling, set above it so a full
 // legit book plus a grief-detection window fits before the truncation refusal. A book

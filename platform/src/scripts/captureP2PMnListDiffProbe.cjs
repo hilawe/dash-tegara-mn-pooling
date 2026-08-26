@@ -19,7 +19,7 @@
  * So "the CSimplifiedMNListDiff P2P serialization" does not by itself determine the bytes, and
  * this probe RECORDS the version it negotiated alongside the payload.
  *
- * THE HANDSHAKE IS AN EXPLICIT STATE MACHINE (round 8, a soundness-review finding). Frame validation alone was not
+ * THE HANDSHAKE IS AN EXPLICIT STATE MACHINE (a review, a soundness-review finding). Frame validation alone was not
  * enough. The client used to dispatch on the command name with no notion of ORDER, so a peer
  * that sent a checksum-valid `mnlistdiff` before any `version` produced a completed capture
  * while `peerVersion` was still null, and `Math.min(70240, null)` recorded the common version
@@ -60,7 +60,7 @@ const COMMAND_RE = /^[a-z0-9]{1,12}$/;      // printable, no padding after the f
 // [8c9f166a3:src/version.h:20, and the check at src/net_processing.cpp:3735].
 const MIN_PEER_PROTO_VERSION = 70221;
 
-// THE RANGE THE PAIRED DECODER CAN ACTUALLY READ, imported rather than restated (round 10, MAJOR).
+// THE RANGE THE PAIRED DECODER CAN ACTUALLY READ, imported rather than restated (a review, MAJOR).
 // Staying above Dash's peer floor is the wrong bar for a CAPTURE. This client existed to collect
 // bytes for `parseMnListDiff`, and that decoder supports only MNLISTDIFF_CHAINLOCKS through
 // CURRENT, because the mnlistdiff layout differs outside it. The client accepted anything from
@@ -114,7 +114,7 @@ function versionPayload(protocolVersion) {
 }
 
 /**
- * VALIDATE OUR OWN OFFER (round 8, a soundness-review finding). This was `Number(verArg || 70240)` with nothing after
+ * VALIDATE OUR OWN OFFER (a review, a soundness-review finding). This was `Number(verArg || 70240)` with nothing after
  * it, so a nonnumeric argument became NaN, `Math.min` propagated the NaN, and `JSON.stringify`
  * wrote it as `null` into BOTH the offered and the common-version fields of a capture that
  * otherwise looked complete. The protocol version selects the wire layout, so a capture whose
@@ -166,7 +166,7 @@ function parsePeerVersion(payload) {
  */
 function createHandshake({ protocolVersion, baseDisplay, tipDisplay, target,
                            send, capture, refuse, note }) {
-  // THE CONSTRUCTOR VALIDATES ITS OWN OFFER (round 12, MINOR). The command-line path validated
+  // THE CONSTRUCTOR VALIDATES ITS OWN OFFER (a review, MINOR). The command-line path validated
   // the argument before construction, but this is an exported entry point and took the value on
   // trust, so a caller reaching it directly with a nonnumeric offer produced NaN. Both range
   // comparisons against NaN are false, so the out-of-range guard below let it through, and the

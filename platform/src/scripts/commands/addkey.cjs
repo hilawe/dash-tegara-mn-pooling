@@ -23,12 +23,12 @@ module.exports = async (ctx) => {
       const authKey = new IdentityPublicKeyWithWitness(1);
       authKey.setId(nextKeyId);
       authKey.setData(pubData);
-      // AUTHENTICATION purpose at HIGH security: signs documents and ordinary state
+      // AUTHENTICATION purpose at the HIGH level: signs documents and ordinary state
       // transitions; it deliberately does NOT replace the master key (identity-update
       // rights stay with the original seed)
       authKey.setPurpose(0); // AUTHENTICATION
       authKey.setSecurityLevel(2); // HIGH
-      // a SECOND recovery key with TRANSFER purpose (holistic-round F9, review):
+      // a SECOND recovery key with TRANSFER purpose (holistic-round F9):
       // without one, losing the seed leaves the member permanently unable to move
       // credits back to L1, which defeats the recovery story's point. Its own private
       // key, also generated outside the seed.
@@ -67,7 +67,7 @@ module.exports = async (ctx) => {
       console.log(`  authentication key (WIF): ${recoveryPriv.toWIF()}`);
       if (transferAdded) console.log(`  transfer key (WIF): ${transferPriv.toWIF()}`);
       // the capability statement is exact, never broader than the keys' purposes and
-      // security levels actually authorize (independent-review findings, both rounds)
+      // the two levels actually authorize (independent review findings, both passes)
       console.log("  what they CAN do if the seed is lost: the authentication key signs this");
       console.log("    identity's documents and HIGH-level transitions (shares, requests, preferences)" +
         (transferAdded ? ";" : ""));

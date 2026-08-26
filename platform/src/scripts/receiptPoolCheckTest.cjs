@@ -171,13 +171,13 @@ refuses("a pool whose target is not its nodeType's target is refused",
     receiptOwnerId: OA, poolOwnerId: OA }),
   /is not the regular target/);
 refuses("an unknown nodeType is refused",
-  // the POOL SHAPE GATE now names this first (confirm-pass round 5, H1); the deeper
+  // the POOL SHAPE GATE now names this first (a confirmation pass, H1); the deeper
   // targetForNodeType refusal remains beneath it for callers of the standalone helpers
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
     pool: { ...poolFor(), nodeType: "gold" },
     receiptOwnerId: OA, poolOwnerId: OA }),
   /nodeType is not in the enum/);
-// H1's exact reproductions (confirm-pass round 5): the receipt side has had its shape
+// H1's exact reproductions (a confirmation pass): the receipt side has had its shape
 // gate since pass 13, and the POOL side never did, so each of these pools, which the
 // published v9 contract rejects, verified and classified COMPLETED.
 refuses("a v9 pool MISSING operatorFeeBps is refused at the pool shape gate",
@@ -204,7 +204,7 @@ ok("a $-prefixed system field on the pool does not trip the allowlist",
   checkReceiptAgainstPool({ contractId: GC, receipt: receiptFor(manifest()), poolId: GP,
     pool: { ...poolFor(), $createdAt: 5, $ownerId: OA },
     receiptOwnerId: OA, poolOwnerId: OA }).ok === true);
-// OWN properties only (confirm-pass round 6, H1, which REFUTED the first draft of this
+// OWN properties only (a confirmation pass, H1, which REFUTED the first draft of this
 // gate): a pool inheriting every field through the prototype chain has zero own contract
 // fields, serializes with none of its required properties, and is not a valid ledger
 // document, yet `pool[k]` reads found every field and the pair classified COMPLETED
@@ -267,12 +267,12 @@ refuses("a receipt whose slotIndex differs from the pool's is refused",
     receiptOwnerId: OA, poolOwnerId: OA }),
   /slotIndex 3 does not match pool slotIndex 1/);
 // AN AGREED value must still sit inside the published 0..31 range (closing confirm-pass
-// round 3, must-fix): an EQUAL pair at -1 or 32 satisfied the match test while naming a
+// a review, must-fix): an EQUAL pair at -1 or 32 satisfied the match test while naming a
 // slot no contract-accepted document can name. Both out-of-range boundaries are pinned,
 // and both in-range boundaries stay accepted, so the bound cannot drift in either
 // direction unnoticed.
 for (const badIdx of [-1, 32]) {
-  // since round 5's pool shape gate, the POOL side of the equal pair is refused first;
+  // since a review's pool shape gate, the POOL side of the equal pair is refused first;
   // duty 4's own bound stays beneath it as defense in depth (a pool-gate regression must
   // not silently reopen the agreed-out-of-range acceptance), so the pinned property is
   // the refusal naming the 0..31 range, whichever layer names it
@@ -338,7 +338,7 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
     withLedger("v8", () => checkReceiptAgainstPool({
       contractId: GC, receipt: unpared(manifest()), pool: v8pool, poolId: GP,
     receiptOwnerId: OA, poolOwnerId: OA })).ok === true);
-  // THE READER ACCEPTS WHAT THE LIVE LEDGER CAN HOLD (confirm-pass round 6, H2): the live
+  // THE READER ACCEPTS WHAT THE LIVE LEDGER CAN HOLD (a confirmation pass, H2): the live
   // v8 contract is immutable and retains its published slotCount maximum of 10000; the
   // 512 ceiling is a source-contract tightening the CLIENT enforces at create. A coherent
   // 1000-slot live book is a valid on-ledger document and must verify.
@@ -353,8 +353,8 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
       pool: { ...v8pool, slotDuffs: 100000000, slotCount: 10001 }, poolId: GP,
       receiptOwnerId: OA, poolOwnerId: OA })),
     /slotCount is not an integer in 1\.\.10000/);
-  // OPTIONAL fields are judged by OWN presence only (confirm-pass round 7, minor, the
-  // false-refusal mirror of round 6): a pool whose own serialized shape validly OMITS an
+  // OPTIONAL fields are judged by OWN presence only (a confirmation pass, the
+  // false-refusal mirror of a review): a pool whose own serialized shape validly OMITS an
   // optional field must not be refused over a value it merely inherits
   ok("v8: a valid pool inheriting a BAD optional fee through the prototype still verifies",
     withLedger("v8", () => checkReceiptAgainstPool({
@@ -479,7 +479,7 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   ok("resolve: missing fetchers is a programming error and throws", threw);
 
   // THE RECEIPT'S poolId FIELD IS BYTES-ONLY at this post-toObject boundary (confirm-pass
-// round 20, major, superseding the pass-7 note that pinned both representations): the
+// a review, major, superseding the pass-7 note that pinned both representations): the
 // schema types it a 32-byte array, so the base58-string form is a document the published
 // contract cannot store, and the gate refuses it like allocationHash's string form. The
 // poolId function ARGUMENT stays dual-form; both cases in this block pass it as base58
@@ -501,7 +501,7 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   ok("a Buffer poolId verifies (bytes, the form toObject() delivers)", asBuffer.ok === true);
   ok("a base58-string receipt poolId is REFUSED at the shape boundary (the schema forbids it)",
     asString.ok === false && /poolId is not a 32-byte array/.test(asString.reason || ""));
-  // THE GATE'S FULL BOUNDARY, not only the Buffer-vs-string pair (round-20 checker,
+  // THE GATE'S FULL BOUNDARY, not only the Buffer-vs-string pair (a review,
   // finding 1: a string-only refusal, or a dropped Uint8Array branch, would leave the
   // pair green): a 32-byte Uint8Array is the OTHER accepted byte form, and short, long
   // and non-byte values are refused for length or type, not for being strings
@@ -606,13 +606,13 @@ ok("toDuffs accepts an integer, a bigint and a decimal string",
   ok("a $-prefixed system field does not trip the allowlist",
     checkReceiptAgainstPool({ ...base, receipt: { ...good, $createdAt: 5 } }).ok === true);
   // an INVENTED $-field is refused: the exemption is the KNOWN system set, not any $-key
-  // (packet wave, folder-access review F2; the pass-14 receipt gate had the same $-wildcard the pass-18
+  // (packet wave, repository-access review F2; the pass-14 receipt gate had the same $-wildcard the pass-18
   // pool validator was already narrowed away from)
   refuses("an invented $-prefixed field on a receipt is refused",
     checkReceiptAgainstPool({ ...base, receipt: { ...good, $surprise: 1 } }),
     /does not define/);
   // allocationHash is a byteArray HASH32; the hex-string form the duty-1 comparison
-  // tolerates is refused at the shape boundary (packet wave, folder-access review F2)
+  // tolerates is refused at the shape boundary (packet wave, repository-access review F2)
   refuses("a hex-STRING allocationHash is refused at the shape boundary",
     checkReceiptAgainstPool({ ...base, receipt: { ...good,
       allocationHash: Buffer.from(good.allocationHash).toString("hex") } }),

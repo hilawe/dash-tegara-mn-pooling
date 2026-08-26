@@ -11,7 +11,7 @@
  * THE BUNDLE MANIFEST (new here) is the build artifact the envelope's lineage entry
  * points at. It carries `bundleContentDigest`, the sha256 of the self-contained decoder
  * ARTIFACT ITSELF, inside the digest preimage, so `artifactDigest` transitively commits
- * the executable decoder and not merely its metadata (build review, MUST-FIX: without
+ * the executable decoder and not merely its metadata (build review, a required fix: without
  * it two different decoders could present the same manifest identity).
  * `validateBundleManifest` enforces the whole schema, and `checkBundleAgainstEntry` is
  * the OFFLINE half of the runtime duty the registry names: the manifest must repeat
@@ -95,7 +95,7 @@ const ENTRY_FIELDS = ["fromHeight", "decoderId", "artifactDigest", "artifactRef"
 function validateLineage(lineage, { platformFromHeight, platformToHeight } = {}) {
   if (!Array.isArray(lineage) || lineage.length === 0) fail("lineage must be a non-empty array");
   // the audit-range arguments are part of the contract, not optional context
-  // (build review round 3)
+  // (build review a review)
   if (!Number.isSafeInteger(platformFromHeight) || platformFromHeight < 0) {
     fail("platformFromHeight must be a safe non-negative integer");
   }
@@ -176,7 +176,7 @@ const BUNDLE_MANIFEST_SCHEMA = {
     // the SELF digest is excluded from the digested bytes (see canonicalBundleBytes);
     // it is carried for human/diagnostic use and MUST equal the computed digest
     artifactDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
-    // THE DECODER BYTES THEMSELVES (build review, MUST-FIX): sha256 over the
+    // THE DECODER BYTES THEMSELVES (build review, a required fix): sha256 over the
     // self-contained bundle artifact. It is INSIDE the digest preimage, so
     // artifactDigest transitively commits the executable decoder; without it two
     // different decoders could present the same manifest identity. Hashing the

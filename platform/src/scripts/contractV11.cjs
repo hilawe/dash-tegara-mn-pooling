@@ -28,7 +28,7 @@
  *     and verifier units, never by this schema;
  *   - the u64 metadata copies (blockHeight, timeMs) are 8-byte byteArrays at
  *     full u64 domain, so no encoding refusal can arise for them after an
- *     irreversible transfer (build spec, round 5, finding 6); the schema
+ *     irreversible transfer (build spec, a review finding); the schema
  *     bounds LENGTH only, and the big-endian encoding plus the
  *     decoded-metadata match are the writer's and verifier's checks;
  *   - byte-range maxima marked EMPIRICAL in the spec (transitionBytes 100..2048)

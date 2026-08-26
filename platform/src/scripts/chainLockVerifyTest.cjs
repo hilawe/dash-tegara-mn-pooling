@@ -45,7 +45,7 @@ const quorums = fixture.quorums;
 
   // ---- THE SELECTION RULE, evaluated with no reference to the signature ----
   // The library loads first because the selector now REQUIRES it: selection parses every
-  // candidate's key as a curve point, so it cannot answer from lexical checks alone (round 5,
+  // candidate's key as a curve point, so it cannot answer from lexical checks alone (a review,
   // MAJOR: the exported selector accepted ff*48, a correctly sized non-point).
   const bls = await loadBls();
   const { selected, scored } = selectSignatoryQuorum(bls, quorums, requestId);
@@ -155,7 +155,7 @@ const quorums = fixture.quorums;
        bls, { height: cl.height, blockHash: cl.blockhash, signature: cl.signature },
        quorums).verified === true);
 
-  // round 4, MAJOR: only the SELECTED key was ever parsed as a curve point, so replacing the
+  // a review, MAJOR: only the SELECTED key was ever parsed as a curve point, so replacing the
   // unselected quorum's key with ff*48 (correctly sized, not a valid point) still returned
   // verified:true because the real signer held the lowest score.
   {

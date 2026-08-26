@@ -67,7 +67,7 @@ ok("the explicit comparator matches the platform default for the envelope's key 
   ok("an over-limit value yields NO bytes at all, rather than truncated bytes", returned === null);
 }
 
-// SPARSE ARRAYS (confirmation round 2, MUST-FIX). `map` skips holes, so a hole reached
+// SPARSE ARRAYS (confirmation a review, a required fix). `map` skips holes, so a hole reached
 // neither the undefined refusal nor a serialized value: `[Array(1)]` silently became `[]`
 // and `[, 1]` became `[,1]`, which is not valid JSON. Both are value-to-bytes divergences
 // arising before the normative gate can see them.
@@ -86,7 +86,7 @@ ok("the explicit comparator matches the platform default for the envelope's key 
   ok("no invalid-JSON bytes are produced for a sparse array", out === null);
 }
 
-// THE CONTAINER DOMAIN (repository-access round, MUST-FIX). Refusing holes was not enough:
+// THE CONTAINER DOMAIN (repository-access round, a required fix). Refusing holes was not enough:
 // the encoder read containers through Object.keys and array indices and silently ignored
 // everything else they carried, so the writer could return an envelope object holding data
 // that neither its bytes nor its evidence digest covered.
@@ -107,7 +107,7 @@ ok("the explicit comparator matches the platform default for the envelope's key 
   throws("a symbol-keyed member is refused rather than dropped",
     () => canonicalize({ [Symbol("s")]: 1, ok: 1 }), /symbol-keyed property/);
 
-  // AN ARRAY WITH A REPLACEMENT PROTOTYPE (round 8, MUST-FIX, a soundness-review finding). `Array.isArray` tests the
+  // AN ARRAY WITH A REPLACEMENT PROTOTYPE (a review, a required fix, a soundness-review finding). `Array.isArray` tests the
   // exotic-object kind, not behaviour, so it stays true for a subclass and for an array handed a
   // new prototype. The encoder used to reach members through the array's own inherited `map`, so
   // those arrays chose the function that produced the bytes. The three cases below are the three
@@ -154,7 +154,7 @@ ok("the explicit comparator matches the platform default for the envelope's key 
      canonicalString(Object.assign(Object.create(null), { a: 1 })) === '{"a":1}');
 }
 
-// THE DOMAIN IS ONLY TOTAL IF HIDDEN STATE IS REFUSED TOO (round 4, MAJOR). Object.keys sees
+// THE DOMAIN IS ONLY TOTAL IF HIDDEN STATE IS REFUSED TOO (a review, MAJOR). Object.keys sees
 // enumerable string keys only, so a non-enumerable own property serialized to nothing, and an
 // accessor could hand back a value while adding another property to the object mid-walk.
 {
@@ -175,7 +175,7 @@ ok("the explicit comparator matches the platform default for the envelope's key 
   ok("a plain array still serializes", canonicalString({ a: [1, 2, 3] }) === '{"a":[1,2,3]}');
 }
 
-// PROXIES (round 6, MINOR: the refusal existed with no fixture behind it, so removing it left
+// PROXIES (a review, MINOR: the refusal existed with no fixture behind it, so removing it left
 // these tests green). A Proxy is not a value but a hook that runs on every read, which is why it
 // defeats guards that describe values. The reproduction that motivated the refusal is driven here.
 {

@@ -514,7 +514,7 @@ def load_envelope_bytes(raw):
     # canonicalization AFTER acceptance without that check).
     return json.loads(raw.decode("utf-8"), object_pairs_hook=strict_pairs)
 
-# The component dependency graph. HOISTED TO MODULE SCOPE (round 5, MINOR) with its contents
+# The component dependency graph. HOISTED TO MODULE SCOPE (a review) with its contents
 # unchanged: it used to be a local inside check_semantics, so the cross-language drift fixture
 # could not read it, looked for a module attribute, found none, and ACCEPTED the absence. A
 # drift check that passes when it cannot find one side of the comparison is not a check. The
@@ -591,7 +591,7 @@ def check_semantics(env):
                         "share is not exactly 1/slotCount (the governing fixed-slot rule)")
         for bd in dec["bindings"]:
             # A binding's L1 slotIndex (0..255) is an independent domain from the retail
-            # slotCount; it is NOT compared against the book (round-9 fix). Only the
+            # slotCount; it is NOT compared against the book (a review). Only the
             # (contractId, poolId) pairing is checked.
             bks = [b for b in dec["books"]
                    if b["contractId"] == bd["contractId"] and b["poolId"] == bd["poolId"]]
@@ -637,7 +637,7 @@ def check_semantics(env):
     require([s["slotIndex"] for s in env["slots"]] == list(range(slot_count)),
             "slots not exactly one per index in order")
 
-    # ---- coverage-interval equation (round-6: observed >= toHeight) ----
+    # ---- coverage-interval equation (a review: observed >= toHeight) ----
     bp = env["basePackage"]
     require(bp["coreNetwork"] == env["network"]["coreNetwork"],
             "basePackage.coreNetwork != network.coreNetwork")
@@ -909,7 +909,7 @@ def check_semantics(env):
         require(keys == sorted(keys) and len(set(keys)) == len(keys),
                 "ownership chain out of order or duplicated")
         # a minted slot (non-null docId) MUST carry a creation-first chain; a never-minted
-        # slot (null docId) MUST have an empty chain (round-9 CLI: a non-null docId with an
+        # slot (null docId) MUST have an empty chain (a review CLI: a non-null docId with an
         # empty chain was silently treated as pre-creation and paid to the operator)
         require((s["docId"] is None) == (len(s["ownershipChain"]) == 0),
                 "docId presence must match ownership-chain non-emptiness")
@@ -1013,7 +1013,7 @@ def check_semantics(env):
             missing.append("coinbase")
         estate, eroot = eligibility_at(H)
         if H > cl:
-            # DEFENSIVE-UNREACHABLE (an independent review, revision 23): the ledger loop is bounded by
+            # DEFENSIVE-UNREACHABLE (a review, revision 23): the ledger loop is bounded by
             # ca.toHeight and the boundary checks force ca.toHeight <= cl, so H can never
             # exceed cl here for any envelope passing those checks. Kept as the note's
             # stated defensive residual; do NOT try to write a vector reaching it.
@@ -1080,7 +1080,7 @@ def check_semantics(env):
                 else:
                     derived, reason = "OWED", "none"
             else:
-                # Canonical arrays for every non-pool branch are EMPTY (round-8).
+                # Canonical arrays for every non-pool branch are EMPTY (a review).
                 require(ent["coinbaseEvidence"] == {"requiredOutputs": [],
                                                     "matchedOutputs": [],
                                                     "unexplainedOutputs": []},
@@ -1102,7 +1102,7 @@ def check_semantics(env):
                         else "COINBASE_MISMATCH")
                 require(all(a["code"] == code for a in ent["anomalies"]),
                         "anomaly code does not match the derived disagreement")
-                # code-specific evidence targets (round-9 review, major 5): an anomaly
+                # code-specific evidence targets (a review, major 5): an anomaly
                 # must cite BOTH sides of its disagreement, not any two resolving refs.
                 hpath = "/coverage/coreLedger/%d" % core_rows.index(row)
                 epath = "/rewards/%d/entitlement/eligibility" % env["rewards"].index(rec)
@@ -1588,7 +1588,7 @@ def negatives(pos):
                     elif d["position"] == purchase["position"]:
                         d["economics"] = dict(d["economics"], seller=BUYER)
     def first_appearance_no_addition(e):
-        # a soundness-review finding (revision 22, ISOLATED per round 8): built FROM the conforming
+        # a soundness-review finding (revision 22, ISOLATED per pass): built FROM the conforming
         # first-appearance acceptance with a VALID transaction identity, the P row
         # flipped to absent, and the journal kept coherent (the appearance moves to
         # 1001), so the P-row addition rule is exactly what rejects.
@@ -1599,11 +1599,11 @@ def negatives(pos):
         e["lifecycle"]["transitions"] = [{"height": 1001, "from": "ABSENT",
                                           "to": "PRESENT_VALID"}]
     def observed_through_height_beyond_chainlock(e):
-        # an independent review (revision 23): the obs <= chainlock guard exists; this is its
+        # An independent review (revision 23): the obs <= chainlock guard exists; this is its
         # regression-coverage vector so a future edit cannot drop it silently.
         e["lifecycle"]["observedThroughHeight"] = e["validatedChainLock"]["height"] + 1
     def terminal_during_suspension_mismatch(e):
-        # an independent review (revision 23): a removal WHILE SUSPENDED whose journal labels the close
+        # An independent review (revision 23): a removal WHILE SUSPENDED whose journal labels the close
         # RANGE_END instead of TERMINATED. The walk-derived reconstruction emits
         # TERMINATED with endHeight = terminalHeight, and the serialized journal must
         # EQUAL it, so the mislabel rejects on the equality (this vector documents the
@@ -1621,7 +1621,7 @@ def negatives(pos):
                                           {"height": 1001, "from": "PRESENT_INVALID",
                                            "to": "ABSENT"}]}
     def range_local_absent_unknown_not_terminal(e):
-        # an independent review (revision 23): under a range-local base whose initial state is an
+        # An independent review (revision 23): under a range-local base whose initial state is an
         # unknown-origin ABSENCE, any non-UNKNOWN entitlement claim must fail closed.
         # The retained OWED claim (kept from the positive) rejects on re-derivation;
         # the journal is kept coherent so the classification rule is what fires.

@@ -12,9 +12,9 @@
  *
  * The CALLER selects the outcome table's column for its own object (header,
  * reservation, transfer) and applies that column's row for the token; this
- * module carries no operation context by design (spec round 27, finding 3).
+ * module carries no operation context by design (specification revision 27, finding 3).
  *
- * THE UNIQUE-INDEX IDENTITY IS A PINNING-TIME READ (spec round 10, finding 11:
+ * THE UNIQUE-INDEX IDENTITY IS A PINNING-TIME READ (specification revision 10, finding 11:
  * the exact structured consensus-error identity is read from the pinned
  * protocol definitions and recorded beside the client pins, with fixtures for
  * header and reservation uniqueness). The installed packages carry no such

@@ -8,7 +8,7 @@
  * carried by construction; contractV9Test.cjs pins the exact intended diff against a
  * reviewed baseline hash of the v8 construction.
  *
- * The v9 shape settled across FOUR rounds of the draft's independent review, and the
+ * The v9 shape settled across successive reviews of the draft's independent review, and the
  * rounds converged on a limit worth stating first: Platform data contracts cannot
  * express cross-document invariants, so consensus-level LIVENESS is not expressible in
  * ANY shape (round one killed a mutable pool with an immutable terms companion, no

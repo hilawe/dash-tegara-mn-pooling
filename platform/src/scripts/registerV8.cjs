@@ -11,11 +11,11 @@
  * (the honesty ceiling, stated in the spec and repeated here): consensus establishes
  * only that the CONTRACT OWNER recorded exactly one immutable receipt per pool; that
  * this identity is also the pool's own operator is duty 6 of the shared reader, not a
- * consensus comparison, because pool creation is unrestricted (round 19). It does not
+ * consensus comparison, because pool creation is unrestricted. It does not
  * prove the L1 registration matched, that the shares still match, or that the claimed
  * verification level was actually performed.
  *
- * Schema decisions (all forced by the review rounds, see the spec's notes):
+ * Schema decisions (all forced by the reviews, see the spec's notes):
  *   - documentsMutable:false + canBeDeleted:false + creationRestrictionMode:1
  *     (owner-only creation, closes receipt squatting; the byPool unique index makes
  *     the receipt one-per-pool, so without owner-only ANY identity could occupy it).
@@ -53,7 +53,7 @@ const { buildV8 } = require("./contractV8.cjs");
   }];
   const client = new Dash.Client(clientOpts);
 
-  // serialize concurrent register runs (round-7 re-check P1): two starts can both load a
+  // serialize concurrent register runs (a review re-check P1): two starts can both load a
   // marker-free env and both publish; a registration-wide op lock makes the second wait.
   // registerV8 requires the shared state dir regardless (it persists owned keys through
   // updateEnvKey, which needs it), so acquire the registration-wide lock unconditionally;
@@ -66,7 +66,7 @@ const { buildV8 } = require("./contractV8.cjs");
     const identity = await client.platform.identities.get(env.IDENTITY_ID);
     if (loadEnv().CONTRACT_V8_ID) { console.log("v8 contract already published:", loadEnv().CONTRACT_V8_ID); return; }
     env.CONTRACT_V8_PENDING = loadEnv().CONTRACT_V8_PENDING; // re-read under the lock
-    // DURABLE PUBLISH INTENT (round-7 P2): publishing consumes the identity nonce, so a
+    // DURABLE PUBLISH INTENT (a review P2): publishing consumes the identity nonce, so a
     // crash AFTER publish but BEFORE the id is persisted must NOT silently republish (that
     // burns another nonce and leaves an orphaned paid contract under an ambiguous
     // namespace). A pending marker recorded before the broadcast makes that state loud:
@@ -82,7 +82,7 @@ const { buildV8 } = require("./contractV8.cjs");
     console.log("publishing the pool-ledger v8 contract ...");
     const contract = await client.platform.contracts.create(v8, identity);
     await client.platform.contracts.publish(contract, identity);
-    // persist ONLY the new id through the locked single-key writer (round-6): a full
+    // persist ONLY the new id through the locked single-key writer: a full
     // saveEnv of the snapshot loaded before the network awaits above would replace plain
     // keys from a stale copy and could erase a concurrent onboarding write (e.g. FUNDER_ID)
     env.CONTRACT_V8_ID = contract.getId().toString();

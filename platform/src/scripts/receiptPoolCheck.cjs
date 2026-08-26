@@ -73,7 +73,7 @@
  * NOT mean the pool is currently active, that the masternode still exists, or that the L1
  * shares still match. Completed, currently-active and in-flight are ORTHOGONAL
  * determinations with different sources, and collapsing them into one status axis is the
- * mistake three separate v9 review rounds each killed in a different disguise.
+ * mistake three separate v9 reviews each killed in a different disguise.
  *
  * Every result is fail-closed: any unexpected throw on malformed input returns a refusal
  * rather than propagating, matching `verifyReceiptAllocation`'s guarantee, because these
@@ -84,7 +84,7 @@ const { hasParedReceipt } = require("./envStore.cjs");
 
 // Platform's recognized document SYSTEM fields, always allowed alongside a contract's own
 // properties. A KNOWN set, NOT any $-prefixed key: an invented $-field is a document the
-// contract rejects (packet wave, folder-access review F2; the same narrowing pass 18 made for the pool
+// contract rejects (packet wave, repository-access review F2; the same narrowing pass 18 made for the pool
 // validator, now applied to the receipt shape gate that still had the wildcard).
 const SYSTEM_FIELDS = new Set(["$id", "$type", "$ownerId", "$revision", "$createdAt",
   "$updatedAt", "$transferredAt", "$createdAtBlockHeight", "$updatedAtBlockHeight",
@@ -111,7 +111,7 @@ const toDuffs = (v) => {
 /**
  * The shared check. `receipt` and `pool` are PLAIN OBJECTS (post `toObject()`), `poolId` is
  * the pool document's own id as base58 or bytes (the ARGUMENT is dual-form; the receipt's
- * own poolId FIELD must be the 32-byte array the schema types, round 20), and `contractId`
+ * own poolId FIELD must be the 32-byte array the schema types, a review), and `contractId`
  * is the contract the receipt must be bound to.
  * Returns { ok: true, embedded: {...} } or { ok: false, reason }.
  */
@@ -237,10 +237,10 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
           "does not verify under it, whatever its other fields say");
       }
     }
-    // allocationHash is a byteArray HASH32 in the schema (packet wave, folder-access review F2). Duty 1
+    // allocationHash is a byteArray HASH32 in the schema (packet wave, repository-access review F2). Duty 1
     // (verifyReceiptAllocation) recomputes and compares it but tolerates a hex STRING there,
     // correct for that comparison and wrong at the shape boundary: the schema forbids the
-    // string form. And receipt.poolId is the SAME shape (confirm-pass round 20, major):
+    // string form. And receipt.poolId is the SAME shape (a confirmation pass):
     // the schema types it a 32-byte array and toObject() decodes it to bytes, so a
     // base58 STRING here has no legitimate arrival form at this post-toObject boundary.
     // The earlier disposition kept it dual-form because hand-built and packet fixtures
@@ -326,7 +326,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
     // a 32-CHARACTER string into 32 UTF-8 bytes that passed the length test, so a receipt
     // Platform would reject verified here. A document in hand always carries the field as
     // bytes (toObject() decodes it), so a string has no legitimate arrival form at this
-    // boundary, exactly like allocationHash and receipt.poolId (round 20; only the
+    // boundary, exactly like allocationHash and receipt.poolId (a review; only the
     // poolId function ARGUMENT is legitimately dual-form).
     const rawReceiptHash = receipt.proTxHash;
     if (rawReceiptHash == null) return bad("receipt proTxHash is missing");
@@ -342,7 +342,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
     }
 
     // ---- the POOL IS A VALID INSTANCE OF ITS LEDGER'S SHAPE too (closing confirm-pass
-    // round 5, H1: the RECEIPT side has had this gate since pass 13 and the pool side
+    // a review, H1: the RECEIPT side has had this gate since pass 13 and the pool side
     // never did, so a pair whose POOL the published contract rejects, a v9 pool missing
     // operatorFeeBps, carrying the v8-only fields, or typing its integers as strings,
     // verified and classified COMPLETED). Same decisions as the receipt gate: presence
@@ -390,9 +390,9 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
           return poolShapeBad("proTxHash is not a 32-byte array");
         }
         if (!["forming", "live"].includes(pool.status)) return poolShapeBad("status is not in the enum");
-        // OPTIONAL fields by own-property too (confirm-pass round 7, minor: a pool whose
+        // OPTIONAL fields by own-property too (a confirmation pass: a pool whose
         // own serialized shape validly omits an optional field must not be refused over a
-        // value it merely inherits, the false-refusal mirror of round 6's false pass)
+        // value it merely inherits, the false-refusal mirror of a review's false pass)
         if (Object.prototype.hasOwnProperty.call(pool, "operatorIdentityId")
             && !((Buffer.isBuffer(pool.operatorIdentityId) || pool.operatorIdentityId instanceof Uint8Array)
               && Buffer.from(pool.operatorIdentityId).length === 32)) {
@@ -405,7 +405,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
       }
       // own-property presence for the optional book too, same H1 rule. THIS REFUSAL IS
       // THE READER'S OWN COHERENCE RULE, wider than the pre-v9 contracts (confirm-pass
-      // round 18, finding 2): only the v9 pool schema enforces both-or-neither
+      // a review finding): only the v9 pool schema enforces both-or-neither
       // (dependentRequired), while the published v7/v8 schemas leave the fields
       // independently optional, so a one-sided pool can legitimately sit on those
       // ledgers. This verifier still refuses it, fail-closed, because a receipt's slot
@@ -416,7 +416,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
       const hasC = Object.prototype.hasOwnProperty.call(pool, "slotCount");
       if (hasD !== hasC) return poolShapeBad("carries a one-sided slot book (this check refuses to reason over half-stated slot economics)");
       if (hasD && !isInt(pool.slotDuffs, 1)) return poolShapeBad("slotDuffs is not a positive integer");
-      // THE BOUND IS THE LEDGER THE READER READS (confirm-pass round 6, H2): the LIVE v8
+      // THE BOUND IS THE LEDGER THE READER READS (a confirmation pass, H2): the LIVE v8
       // contract is immutable and retains its published slotCount maximum of 10000
       // (contractV8.cjs header; the 512 ceiling is a SOURCE-contract tightening the
       // CLIENT enforces at create), so a reader of ON-LEDGER v8 documents must accept
@@ -443,8 +443,8 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
     const poolTarget = carriedTarget;
     // the slot book is both-or-neither at consensus ONLY on v9 (dependentRequired); on
     // v7/v8 a one-sided pool is schema-valid and this is the reader's own fail-closed
-    // coherence rule, same ground as the shape gate above (round 18, finding 2).
-    // own-property presence, same round-7 rule as the shape gate above; a null-valued own
+    // coherence rule, same ground as the shape gate above (a review finding).
+    // own-property presence, same a review rule as the shape gate above; a null-valued own
     // book entry is still refused by the integral check below
     const hasSlotDuffs = Object.prototype.hasOwnProperty.call(pool, "slotDuffs") && pool.slotDuffs != null;
     const hasSlotCount = Object.prototype.hasOwnProperty.call(pool, "slotCount") && pool.slotCount != null;
@@ -480,7 +480,7 @@ const checkReceiptAgainstPool = ({ contractId, receipt, pool, poolId,
     // satisfied the match test while naming a slot no document the contract accepts can
     // name, so the reader affirmed a pair outside the published format. Same character as
     // the manifest-range and reserve-range folds: agreement between two copies proves
-    // nothing about either copy's validity. Since round 5's POOL shape gate above, the
+    // nothing about either copy's validity. Since a review's POOL shape gate above, the
     // pool side is refused before an equal out-of-range pair can reach here, so this
     // check is redundant BY CONSTRUCTION today and is kept deliberately: a pool-gate
     // regression must not silently reopen the agreed-out-of-range acceptance (the same

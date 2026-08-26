@@ -1,4 +1,4 @@
-# On-ledger completion receipt, build spec (revised after the three-model design review)
+# On-ledger completion receipt, build spec
 
 The proper on-ledger form of the formation completion record. C3 (the six-fix round) was "the
 code called the manifest part of the durable record and then deleted it"; F-C3 fixed it by
@@ -8,14 +8,15 @@ without the operator's local files. It is a new pool-ledger contract version (v8
 needs a new document type, and per the project discipline a new contract gets PUBLISHED and
 validated live, so the live-publish part belongs in a session with the devnet up.
 
-REVISED 2026-07-14 after a three-model design review (three independent models; the round records stay in the private repo). The first draft was found squattable,
+REVISED 2026-07-14 after an independent design review, whose record is kept with the private
+project material. The first draft was found squattable,
 over-claiming, and not self-verifiable; the changes below fold the merged cross-check. Read the
 cross-check for why each choice is forced or chosen.
 
-REVISED AGAIN 2026-07-14 after the FOLLOW-UP round over the revised spec (a fresh full three-model
-pass, the last gate before build). Both packet passes returned APPROVE-WITH-FIXES and the CLI pass
-returned coherent-but-not-build-ready, unanimous on a short completion list, no blockers. Folded
-here:
+REVISED AGAIN 2026-07-14 after a follow-up review over the revised spec, the last gate before
+build. It was read independently by several reviewers, some working from the complete source and
+some with access to the working tree, and they agreed: the specification was sound with a short
+list of items to complete before building, and nothing that had to stop it. Folded here:
 
 - an exact publishable schema with an explicit `allocationRows` byte bound (FU-1);
 - a persisted frozen receipt draft plus a byte-exact verifier so a post-crash resume rebuilds the
@@ -41,7 +42,7 @@ Consensus does NOT compare the receipt's owner to the pool's. Pool creation is u
 on v8, so a pool owned by another identity can carry a contract-owner receipt that consensus
 accepts. That the receipt's owner is also the pool's own operator (its immutable `$ownerId`)
 is checked by duty 6 of the shared reader (receiptPoolCheck), a writer and reader
-requirement rather than a consensus guarantee (round 19 corrected this paragraph, which had
+requirement rather than a consensus guarantee (a review corrected this paragraph, which had
 attributed the binding to consensus).
 
 It does NOT prove that the L1 registration matched the manifest, that the member shares exist or
@@ -157,11 +158,11 @@ Rules: base-10 duff strings with no leading zeroes; bps as integers; lowercase h
 owners sorted by decoded identifier bytes (NOT locale string order); no insignificant whitespace;
 fixed key/array order. The bytes assigned to the document field are `Buffer.from(JSON.stringify(
 preimageArray), 'utf8')` explicitly, since `JSON.stringify` returns a string and the byteArray field
-rejects a raw string (review follow-up). Harness cases: same manifest twice hashes equal; reordering
+rejects a raw string (a review follow-up). Harness cases: same manifest twice hashes equal; reordering
 owners hashes equal (canonical); changing any allocation field changes the hash; a PUBLISHED
 golden known-answer vector (a fixed input and its expected sha256) pinned so an independent
 implementation can reproduce it and a tooling change that alters the bytes is caught. Implement
-via a frozenCommitment object (the reviewer's opportunity) so no volatile field can leak in.
+via a frozenCommitment object (a reviewer's opportunity) so no volatile field can leak in.
 
 Ship a thin offline verify wrapper alongside the helper (all three follow-up passes asked for it):
 `verifyReceiptAllocation(contractId, receiptDoc)` that recomputes `allocationHash` from the receipt's
@@ -235,7 +236,7 @@ field from the FROZEN RECEIPT DRAFT above:
 Retain the active manifest key until the receipt is confirmed on-ledger, so a crash between the
 flip and the receipt is a recoverable "live without receipt" state, not a permanent one.
 
-### Recovery path for already-live-without-receipt (C-G, review L3-1)
+### Recovery path for already-live-without-receipt (C-G, an independent review L3-1)
 
 Add `receipt <poolId>` (read; pre-client-safe) that prints the receipt AND re-verifies its hash
 from the embedded rows, AND make it publish when absent: if the pool is already live and no receipt
@@ -247,7 +248,7 @@ receipt (FU-2), so the field-verify against an existing receipt is exact rather 
 This removes the completion-without-receipt foot-gun (an operator that crashed or never re-ran can
 still publish, driven by the durable local record).
 
-### Tighter coupling via a mixed transition (C-G, review S1): pursue behind a probe
+### Tighter coupling via a mixed transition (C-G, review finding S1): pursue behind a probe
 
 The follow-up round split 2-1 on whether to build the mixed transition, and the split was factual,
 not a values call. Two passes hold that a mixed create+replace across two document types in one
@@ -264,7 +265,7 @@ carries v8 unchanged. Either way the build is not blocked on settling the SDK qu
 PROBE ANSWER (live, 2026-07-15): the mixed transition is NOT possible on this Platform version,
 and the limit is PLATFORM-side, not the SDK: the broadcast is rejected with "Amount of document
 transitions must be less or equal to 1" (a documents batch carries at most one transition). So the
-2-1 factual split resolved to the reviewer's outcome through neither side's stated mechanism. The
+2-1 factual split resolved to a reviewer's outcome through neither side's stated mechanism. The
 sequential flip-then-receipt path with the retained draft and manifest is the supported v8
 mechanism; the probe stays in the code (it runs per completion and falls back loudly), and
 FORMATION_NO_MIXED=1 skips it.

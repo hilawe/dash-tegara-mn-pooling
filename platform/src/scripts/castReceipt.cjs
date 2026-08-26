@@ -143,7 +143,7 @@ const { fetchL1Vote } = require("./l1gov.cjs");
       where: [["poolId", "==", poolId]],
     })).filter((d) => Buffer.from(d.toObject().proposalHash).toString("hex") === proposalHex.toLowerCase());
     // THE ONE preference-map helper, like the governor and the snapshot-first publisher
-    // (confirm-pass round 10, major: this legacy publisher still built its own map and
+    // (a confirmation pass: this legacy publisher still built its own map and
     // never read delegateTo, which is the exact divergence ledgerTally.cjs's header says
     // the F6 fold existed to end, so a targeted delegation here fell into the untargeted
     // net and this tool published a different tally and hash than the governor computed

@@ -105,7 +105,7 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     catch (e) { return e.message; } })();
   ok("reserve refuses the claim that fills the book with a single owner",
     /single owner/.test(r5) && !r5.includes(WALLET_SENTINEL));
-  // ENV-INDEPENDENT (confirm-pass round 23, major): the member setting demo in their
+  // ENV-INDEPENDENT (a confirmation pass): the member setting demo in their
   // OWN environment used to buy this admission while the operator's completion, reading
   // its own environment, refuses the one-owner manifest; this pins that the FORMER demo
   // opt-out no longer admits (the value the old code read is the value set here)
@@ -198,7 +198,7 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     hasJoinProvenance: () => true, hasMemberRewardScript: () => true,
     journal, journalContract: CONTRACT,
     // a real v5 pool always carries proTxHash (required from v1); the forming-namespace
-    // value here is what the round-18 D-1 conjunct reads
+    // value here is what the review D-1 conjunct reads
     getPool: async () => ({ toObject: () => ({ nodeType: "regular", status: "forming",
       proTxHash: Buffer.concat([Buffer.alloc(16, 0), Buffer.alloc(16, 5)]), ...poolExtra }),
       getOwnerId: () => ({ toString: () => poolOwner }),
@@ -218,7 +218,7 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
   const p1 = await runPledge([joinBy("member-1", "50000000000")], "50000000000");
   ok("pledge refuses the pledge that completes the fill with a single owner",
     /single owner/.test(p1) && !p1.includes(IDENT_SENTINEL));
-  // ENV-INDEPENDENT (confirm-pass round 23, major): same rule as reserve's demo case
+  // ENV-INDEPENDENT (a confirmation pass): same rule as reserve's demo case
   {
     const prevDemo = process.env.FORMATION_ALLOW_UNVERIFIED;
     process.env.FORMATION_ALLOW_UNVERIFIED = "demo";
@@ -234,7 +234,7 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
   const p3 = await runPledge([joinBy("member-1", "20000000000")], "30000000000");
   ok("pledge admits a partial fill by a single owner (capacity remains)",
     p3.includes(IDENT_SENTINEL));
-  // the MAXIMUM on the exact-fill path (pass-7 packet wave, review major 1): pledge had
+  // the MAXIMUM on the exact-fill path (pass 7, a review major finding 1): pledge had
   // the minimum but not the maximum, so a ninth distinct owner could pledge and strand
   // the pool at completion's 1..8 aggregate check
   const eightPledgers = Array.from({ length: 8 }, (_, i) => joinBy(`owner-${i + 1}`, "10000000000"));
@@ -246,12 +246,12 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     "20000000000");
   ok("an existing pledger adding more is admitted (eight owners, not nine)",
     p5.includes(IDENT_SENTINEL));
-  // ADMISSION MIRRORS COMPLETION'S HASH CHECK (confirm-pass round 18, D-1): complete's
+  // ADMISSION MIRRORS COMPLETION'S HASH CHECK (a confirmation pass, D-1): complete's
   // nothing-to-do check reads the hash on every mutable ledger, so a v5 pool whose
   // proTxHash flipped to a real hash while status stayed "forming" must refuse here
   // too, or the pledge is admitted into a pool completion refuses as already LIVE
   // two DIFFERENT real hashes, so a constant-specific special case cannot satisfy both
-  // (round-18 checker, finding 3), and the regex is the refusal's own words rather than
+  // (a review, finding 3), and the regex is the refusal's own words rather than
   // any message that happens to contain the word
   for (const [tag, hash] of [["07-bytes", Buffer.alloc(32, 7)],
     ["mixed-bytes", Buffer.concat([Buffer.alloc(16, 0xab), Buffer.alloc(16, 0x01)])]]) {
@@ -368,12 +368,12 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
 
   if (prevLedger === undefined) delete process.env.LEDGER; else process.env.LEDGER = prevLedger;
 
-  // A BOOK WIDER THAN COMPLETION'S SCAN never completes (confirm-pass round 16, major):
+  // A BOOK WIDER THAN COMPLETION'S SCAN never completes (a confirmation pass):
   // the capacity rule is one shared constant, and admission refuses what completion can
   // never enumerate, on both the derived (v6) and pool-data (v7) widths, while the
   // 625-slot book inside the scan window stays admitted
   {
-    // UNDER THE REAL v7 LEDGER (confirm-pass round 17, E-2): these are v7 forming pools
+    // UNDER THE REAL v7 LEDGER (a confirmation pass, E-2): these are v7 forming pools
     // and must run under the v7 capability table. The suite's top-level v9 selection
     // made the old fixtures unproducible in the selected contract (the v9 pool caps
     // slotCount at 512, requires targetDuffs and carries no status or proTxHash) while
@@ -423,7 +423,7 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     const r800 = await run(at800);
     ok("an 800-slot book, the nearest coherent width past the ceiling, is refused",
       /wider than the 640-claim scan/.test(r800) && !r800.includes(SENTINEL));
-    // MOCK-MODEL CONSISTENCY, pinned per fixture (round-17 checker, finding 2 narrowed
+    // MOCK-MODEL CONSISTENCY, pinned per fixture (a review, finding 2 narrowed
     // this claim): validatePoolProps is the mock's MODEL of the published v7 pool
     // schema, so these establish the fixtures conform to the model the rest of the
     // suite enforces, not the published contract itself; the model's own fidelity is
@@ -471,7 +471,7 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     if (prevWidth === undefined) delete process.env.LEDGER; else process.env.LEDGER = prevWidth;
   }
 
-  // the PLEDGE-side operator binding (confirm-pass round 15, D-1): completion's final
+  // the PLEDGE-side operator binding (a confirmation pass, D-1): completion's final
   // pool replacement is operator-signed on EVERY mutable ledger while the check was
   // v8-gated, so pledge admitted a foreign-owned pool the operator can never complete
   {
@@ -493,7 +493,7 @@ const ok = (name, cond) => { if (cond) { pass++; } else { fail++; console.error(
     if (prev === undefined) delete process.env.LEDGER; else process.env.LEDGER = prev;
   }
 
-  // the v6 PERMANENT-CLAIM SIZE coherence (confirm-pass round 15, D-2): v6 claims carry
+  // the v6 PERMANENT-CLAIM SIZE coherence (a confirmation pass, D-2): v6 claims carry
   // their own slotDuffs, are immutable and undeletable, and completion requires one
   // uniform size, so admission must refuse a locally configured size that mismatches the
   // existing book rather than write a wedge

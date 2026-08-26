@@ -21,7 +21,7 @@
  *   outright, so a completion, a pledge, or a join landing at any point during the
  *   sweep stops the remaining deletions rather than only the first.
  * - On an immutable-pool ledger a RECEIPT-LESS pool is NOT swept at all (packet wave,
- *   folder-access review F1). The earlier design deleted its shares and requests (withholding only the
+ *   repository-access review F1). The earlier design deleted its shares and requests (withholding only the
  *   undeletable pool document), but a receipt-less immutable pool is OPEN, IN-FLIGHT, or
  *   ABANDONED indistinguishably, so sweeping its member documents can delete a live
  *   reservation on an open pool. The plan now returns skip-indeterminate for it, the same
@@ -177,7 +177,7 @@ if (require.main === module) (async () => {
         // settlements are lifecycle HISTORY, not deletable debris: their COUNT is a plan
         // input that refuses the pool outright (same round, same rule as accruals). The
         // TYPE exists only from v3 (registerV3 introduced the matcher's on-ledger
-        // journal), so the query is capability-gated (confirm-pass round 12, major: the
+        // journal), so the query is capability-gated (a confirmation pass: the
         // first draft queried unconditionally, the exact missing-type shape the reserve
         // fold already settled, at a new call site; on v1 the SDK refuses the unknown
         // type before the plan can run, wedging the whole sweep)
@@ -188,7 +188,7 @@ if (require.main === module) (async () => {
         // the v6 reservation is IMMUTABLE AND UNDELETABLE (its schema; cancel.cjs
         // documents v6 claims as permanent), so on that ledger every enumerated claim is
         // reported to the plan as permanent and the plan refuses the pool outright
-        // (confirm-pass round 14: sweeping around them left a partially applied sweep)
+        // (a confirmation pass: sweeping around them left a partially applied sweep)
         const claimsPermanent = hasPledgeSlot() && !hasSlotBook();
         // every skip-or-sweep decision is the PLAN's, one transport-free function covered
         // offline (cleanupDebrisPlanTest.cjs); this loop only fetches and executes it

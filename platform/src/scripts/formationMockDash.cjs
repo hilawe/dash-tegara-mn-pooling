@@ -46,10 +46,10 @@ const SYSTEM_FIELDS = new Set(["$id", "$type", "$ownerId", "$revision", "$create
   "$updatedAt", "$transferredAt", "$createdAtBlockHeight", "$updatedAtBlockHeight",
   "$transferredAtBlockHeight", "$createdAtCoreBlockHeight", "$updatedAtCoreBlockHeight",
   "$transferredAtCoreBlockHeight", "$protocolVersion"]);
-// WHICH DOCUMENT TYPES THE SELECTED LEDGER PUBLISHES (confirm-pass round 12): a query or
+// WHICH DOCUMENT TYPES THE SELECTED LEDGER PUBLISHES (a confirmation pass): a query or
 // create for a poolLedger type absent from the selected contract is refused the way the
 // real SDK refuses an undefined document type, instead of returning an empty page that
-// hides a capability-blind call site (the reserve fold and the round-12 debris fold were
+// hides a capability-blind call site (the reserve fold and the review debris fold were
 // BOTH this shape, and both were hidden by the old always-empty answer). Scope: only
 // `poolLedger.*` types are modelled; a foreign app's types still resolve empty, since this
 // mock models one app. The base types are v1's; the additions mirror the capability table.
@@ -92,7 +92,7 @@ const asIdString = (v) => {
 };
 
 // the published completionReceipt schema, enforced by the mock at create time so a receipt
-// the real contract would reject cannot pass the crash matrix (round-4 harness blocker).
+// the real contract would reject cannot pass the crash matrix (a review harness blocker).
 // Kept in lockstep with registerV8.cjs and contractV9.cjs by hand (a small, rarely-changing
 // set).
 //
@@ -106,7 +106,7 @@ const asIdString = (v) => {
 // and REMOVES proTxHash, status and operatorIdentityId while REQUIRING targetDuffs, so a
 // create still emitting the v8 shape must fail here the way the real contract would fail
 // it, not pass the matrix. Since pass 18 EVERY mutable-ledger pool create is validated by
-// the branch below, version-aware since the round-13 fold (status from v5, the slot book
+// the branch below, version-aware since the review fold (status from v5, the slot book
 // from v7, per the register chain); the harness still seeds most earlier-ledger pools
 // directly rather than creating them.
 const validatePoolProps = (p) => {
@@ -118,7 +118,7 @@ const validatePoolProps = (p) => {
     // future test of it would have been a false green. The v8 pool (contractV8 over the
     // base poolLedger) requires proTxHash, slotIndex, nodeType and status, and carries a
     // 32-byte operatorIdentityId and a 0..10000 operatorFeeBps; additionalProperties is
-    // false. The slot fields are INDEPENDENTLY OPTIONAL here (confirm-pass round 18,
+    // false. The slot fields are INDEPENDENTLY OPTIONAL here (a confirmation pass,
     // finding 2): neither the v7 nor the v8 published pool schema carries
     // dependentRequired or lists them as required, so a one-sided book is schema-valid
     // on the mutable ledgers and this model must accept it; only the v9 contract
@@ -134,7 +134,7 @@ const validatePoolProps = (p) => {
     // crash matrix drives that writer through this validator end to end.
     const is32 = (v) => (Buffer.isBuffer(v) || v instanceof Uint8Array) && Buffer.from(v).length === 32;
     const S = require("./envStore.cjs");
-    // VERSION-AWARE (confirm-pass round 13): status is a v5 addition and the slot book a
+    // VERSION-AWARE (a confirmation pass): status is a v5 addition and the slot book a
     // v7 one; the base mutable pool has neither, and additionalProperties:false on the
     // earlier contracts refuses them
     const known = new Set(["proTxHash", "slotIndex", "nodeType", "operatorIdentityId",
@@ -148,7 +148,7 @@ const validatePoolProps = (p) => {
       // real Platform would reject). SYSTEM_FIELDS is the recognized set.
       if (!known.has(k) && !SYSTEM_FIELDS.has(k)) bad(`unknown property ${k} (additionalProperties:false)`);
     }
-    // OWN properties only, in every validator's required loop (confirm-pass round 6, E1:
+    // OWN properties only, in every validator's required loop (a confirmation pass, E1:
     // `p[k]` read the prototype chain, so Object.create over valid props passed all five
     // validators with zero own fields, and the create path then stored a record holding
     // only $createdAt, which real DPP refuses for missing required properties)
@@ -165,7 +165,7 @@ const validatePoolProps = (p) => {
     }
     if (Object.prototype.hasOwnProperty.call(p, "operatorFeeBps") && !isInt(p.operatorFeeBps, 0, 10000)) bad("operatorFeeBps out of 0..10000");
     if (Object.prototype.hasOwnProperty.call(p, "slotDuffs") && !(Number.isInteger(p.slotDuffs) && p.slotDuffs >= 1)) bad("slotDuffs < 1");
-    // the ceiling is LEDGER-DEPENDENT (confirm-pass round 15, minor): v7's only published
+    // the ceiling is LEDGER-DEPENDENT (a confirmation pass): v7's only published
     // contract allows 10000; the 512 ceiling is the v8 SOURCE contract's documented
     // writer-side tightening and applies there alone
     const maxBook = S.hasCompletionReceipt() ? 512 : 10000;
@@ -269,7 +269,7 @@ const validateSlotProps = (p) => {
   const S = require("./envStore.cjs");
   const isBytes = (v, lo, hi) => (Buffer.isBuffer(v) || v instanceof Uint8Array)
     && Buffer.from(v).length >= lo && Buffer.from(v).length <= hi;
-  // VERSION-AWARE (confirm-pass round 14): the v6 reservation is SIZED (slotDuffs
+  // VERSION-AWARE (a confirmation pass): the v6 reservation is SIZED (slotDuffs
   // required, the slot economics live on the claim) while v7 moved the economics onto
   // the pool and pared the claim to (poolId, slotNo, rewardScript)
   const sizedClaim = S.hasPledgeSlot() && !S.hasSlotBook();
@@ -291,7 +291,7 @@ const validateSlotProps = (p) => {
 };
 
 // the published votePreference schema, the LAST type to gain value validation (confirm-pass
-// round 8, major: rounds 2-7 pinned it as the documented key-check-only exception, and the
+// a review found successive passes had pinned it as the documented key-check-only exception, and the
 // reviewer rightly held that a documented exception is not schema parity; a governance
 // writer emitting a choice outside the enum or a short delegateTo passed the matrix while
 // the published contract refuses both). Base shape per poolLedger.ts (poolId and
@@ -351,12 +351,12 @@ const validateRequestProps = (p) => {
 };
 
 // the published rewardAccrual and settlement schemas, the two inherited types the mock
-// neither value-validated nor uniqueness-checked (confirm-pass round 10, major, which
-// refuted the previous round's every-unique-index claim). The v8 accrual requires
+// neither value-validated nor uniqueness-checked (a confirmation pass, which
+// refuted the previous review's every-unique-index claim). The v8 accrual requires
 // shareBps and kind on top of the base shape; the ledger-dependent kind requirement
 // mirrors the capability (v4+ carries kind in the unique key).
 const validateAccrualProps = (p) => {
-  // VERSION-AWARE (confirm-pass round 13, major: the validators assumed the v8 shape for
+  // VERSION-AWARE (a confirmation pass: the validators assumed the v8 shape for
   // every ledger, refusing valid base documents and accepting later-capability fields the
   // earlier contracts' additionalProperties:false refuse). shareBps arrived with v3's
   // reconstructible accruals and kind with v4's keyed accruals, each REQUIRED from its
@@ -467,7 +467,7 @@ const assertOwnerOnly = (l, rec, docType) => {
 const assertCreateAllowed = (l, rec) => {
   const S = require("./envStore.cjs");
   if (rec.type === "rewardAccrual" && require("./envStore.cjs").isV3()) {
-    // THE UNIQUE byPoolFunder INDEX, unique only FROM v3 (confirm-pass round 14: the
+    // THE UNIQUE byPoolFunder INDEX, unique only FROM v3 (a confirmation pass: the
     // base index is non-unique and a valid v1 duplicate was being refused): unique on
     // (poolId, funderId, epochHeight, kind), one accrual per funder per epoch per kind
     const asHex = (v) => (Buffer.isBuffer(v) || v instanceof Uint8Array)
@@ -480,9 +480,9 @@ const assertCreateAllowed = (l, rec) => {
     if (dup) throw new Error("duplicate unique index byPoolFunder for rewardAccrual");
   }
   if (rec.type === "settlement") {
-    // THE UNIQUE byExit AND byJoin INDEXES (confirm-pass round 10): each exit request and
+    // THE UNIQUE byExit AND byJoin INDEXES (a confirmation pass): each exit request and
     // each join request settles at most once, each index unique on its single field.
-    // byJoin only FROM v4 (confirm-pass round 17, E-1): the REGISTERED v3 contract
+    // byJoin only FROM v4 (a confirmation pass, E-1): the REGISTERED v3 contract
     // predates the byJoin index (its source gained it after publish, and republishing
     // would have orphaned the ledger; registerV4.cjs is the first publish carrying it),
     // so on v3 the published schema ACCEPTS a second settlement against the same join
@@ -498,7 +498,7 @@ const assertCreateAllowed = (l, rec) => {
     }
   }
   if (rec.type === "votePreference") {
-    // THE UNIQUE byPoolOwnerProposal INDEX at create (confirm-pass round 9, E-1): the
+    // THE UNIQUE byPoolOwnerProposal INDEX at create (a confirmation pass, E-1): the
     // published schema is unique on (poolId, $ownerId, proposalHash), so one owner holds
     // one preference per pool and proposal; the second create is refused, the same
     // duplicate-refusal surface the pool, receipt and slot branches model.
@@ -589,7 +589,7 @@ const assertMutationAllowed = (kind, rec) => {
   }
   if (rec.type === "pledgeSlot" && S.hasPledgeSlot() && !S.hasSlotBook()) {
     // the v6 reservation is immutable, which on this SDK also means UNDELETABLE (its own
-    // schema comment; cancel.cjs documents v6 claims as permanent). Confirm-pass round 14:
+    // schema comment; cancel.cjs documents v6 claims as permanent). Confirm-pass a review:
     // the mock permitted both transitions the real contract cannot build.
     if (kind === "replace") {
       throw new Error("Document replace on pledgeSlot is not allowed because " +
@@ -633,7 +633,7 @@ const REPLACE_KEYS = {
   pledgeSlot: ["slotNo", "rewardScript"],
   votePreference: ["choice", "delegateTo"],
 };
-// WHICH LISTED REPLACE KEYS EXIST ON THE SELECTED LEDGER (confirm-pass round 14): the
+// WHICH LISTED REPLACE KEYS EXIST ON THE SELECTED LEDGER (a confirmation pass): the
 // static map is the v8/v9 superset, and a field a later version introduced must not be
 // replaceable-in before its ledger defines it (additionalProperties:false refuses the
 // transition on the earlier contracts). Fields without a gate are base fields.
@@ -720,7 +720,7 @@ const assertReplaceAllowed = (rec, pending) => {
     }
     const hasD = merged.slotDuffs !== undefined, hasC = merged.slotCount !== undefined;
     // one-sided is contract-enforced ONLY where dependentRequired exists (confirm-pass
-    // round 18, finding 2): the v9 pool schema carries it, while the published v7 and
+    // a review finding): the v9 pool schema carries it, while the published v7 and
     // v8 schemas leave the two fields independently optional, so a replace whose merged
     // result is one-sided is schema-valid there and this model must accept it. On v9 a
     // pool replace is refused upstream (the immutable pool takes no replace at all), so
@@ -735,7 +735,7 @@ const assertReplaceAllowed = (rec, pending) => {
   }
   if (rec.type === "pledgeSlot") {
     // the MERGED CLAIM must satisfy the slot schema's value bounds (closing confirm-pass
-    // round 3, major: replacement listed slotNo and rewardScript but validated neither,
+    // a review, major: replacement listed slotNo and rewardScript but validated neither,
     // so a replace walking slotNo past the ledger ceiling or emptying the reward script
     // persisted while the published contract refuses both). The ceiling is the same
     // ledger-dependent read the create validator uses.
@@ -757,7 +757,7 @@ const assertReplaceAllowed = (rec, pending) => {
     }
   }
   if (rec.type === "votePreference") {
-    // merged VALUE bounds for the vote too (confirm-pass round 8): the same two-form rule,
+    // merged VALUE bounds for the vote too (a confirmation pass): the same two-form rule,
     // pending byte fields from the writer as bytes, stored ones as the mock's hex
     const merged = { ...rec.data, ...pending };
     const bad = (why) => { throw new Error(`mock DPP: votePreference replace violates the schema (${why})`); };
@@ -877,7 +877,7 @@ class Client {
           }
           // model Platform's hard 100-document page cap even when no limit is passed, so an
           // UNPAGINATED caller (a bare documents.get without fetchAll) cannot silently read a
-          // whole large book in the harness while real Platform would truncate it (round-6)
+          // whole large book in the harness while real Platform would truncate it
           const PLATFORM_PAGE_CAP = 100;
           const cap = query.limit ? Math.min(query.limit, PLATFORM_PAGE_CAP) : PLATFORM_PAGE_CAP;
           rows = rows.slice(0, cap);
@@ -885,13 +885,13 @@ class Client {
         },
         create: async (type, identity, props) => {
           // model the SDK's real create(): it awaits SDK init and the contract fetch, so
-          // it is a genuine fault boundary (round-4 harness finding: the mock's create
+          // it is a genuine fault boundary (a review harness finding: the mock's create
           // had no tick, so a crash between create and broadcast was never enumerated)
           tick();
           requireLedgerType(type);
           const short = type.replace(/^poolLedger\./, "");
           // STRICT schema validation for completionReceipt, reproducing the published v8
-          // contract (round-4 harness blocker: the mock accepted anything, so a wrong
+          // contract (a review harness blocker: the mock accepted anything, so a wrong
           // type/length/enum/range or a raw-string byteArray passed the matrix while real
           // Platform would reject it). A create that violates the schema throws here, the
           // same failure surface a real rejection presents.
@@ -936,11 +936,11 @@ class Client {
             // SCOPE, stated exactly: the pending KEYS are checked for the types LISTED
             // in REPLACE_KEYS and for no others (an unlisted type passes unchecked,
             // as before), and full merged-VALUE validation runs for EVERY listed type
-            // (votePreference was the last to gain it, confirm-pass round 8).
+            // (votePreference was the last to gain it, a confirmation pass).
             // The v8 pool flip is ALSO covered here: pool is a listed type, so its
             // merged values are validated in assertReplaceAllowed (a slotCount walked
             // to 0 is refused there), in ADDITION to the flip invariants'
-            // field-by-field comparisons (round 21 corrected this comment, which said
+            // field-by-field comparisons (a review corrected this comment, which said
             // the flip was pinned by the invariants rather than here).
             try { assertReplaceAllowed(rec, doc.__pending); } catch (e) { tick(); throw e; }
             // THE UNIQUE byProTxHash INDEX applies to a pool flip too (pass 17, F2): the
@@ -958,7 +958,7 @@ class Client {
               if (clash) { tick(); throw new Error("duplicate unique index byProTxHash for pool"); }
             }
             // THE UNIQUE bySlot INDEX applies to a claim's slotNo replace too
-            // (confirm-pass round 24, major, the pass-17 byProTxHash rule's sibling):
+            // (a confirmation pass, the pass-17 byProTxHash rule's sibling):
             // the published pledgeSlot is unique on (poolId, slotNo), so a replace
             // moving a claim onto an occupied slot of the same pool is refused by the
             // contract, and the pure replace check cannot see it (it has no ledger).

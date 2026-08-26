@@ -12,7 +12,7 @@
  * docs/schema/check_vectors.py; the test drives this writer from the shipped positive
  * vector's own evidence and requires byte-identical canonical output.
  *
- * NOT THE ENTRY POINT (build review round 3, MUST-FIX). `buildEnvelope` DERIVES and
+ * NOT THE ENTRY POINT (build review a review, a required fix). `buildEnvelope` DERIVES and
  * canonicalizes; it does NOT validate its evidence. A reviewer fed it 72
  * negative-evidence cases: it accepted 67, and 63 of the envelopes it produced were then
  * REJECTED by the normative schema and semantic checker. PRODUCTION CALLERS MUST USE
@@ -82,7 +82,7 @@ function largestRemainder(baseDuffs, shares) {
   const rem = base - floors.reduce((a, b) => a + b, 0n);
   // with a validated partition this is structurally 0 <= rem < shares.length; assert it
   // rather than trust it, so no arithmetic surprise can silently mis-allocate
-  // strictly < shares.length after a valid partition (build review round 3: the guard
+  // strictly < shares.length after a valid partition (build review a review: the guard
   // allowed rem === shares.length, contradicting its own stated invariant)
   if (rem < 0n || rem >= BigInt(shares.length)) {
     fail(`largest-remainder residue ${rem} outside [0, ${shares.length - 1}]`);
@@ -114,7 +114,7 @@ function largestRemainder(baseDuffs, shares) {
  * height rather than failing (property review, P7, reproduced). Assert the precondition so
  * the failure names itself, the same treatment firstClosing and the suspension index got.
  *
- * NO MEMO AT ALL, BECAUSE EVERY MEMO HERE WAS WRONG (repository-access review, MUST-FIX,
+ * NO MEMO AT ALL, BECAUSE EVERY MEMO HERE WAS WRONG (repository-access review, a required fix,
  * after two earlier attempts). The first version skipped the check when the caller's context
  * carried `epochOrderChecked: true`, which a caller could simply set. The second moved the
  * memo into a module-private WeakSet keyed on the checkpoints array, which a caller cannot
@@ -131,7 +131,7 @@ function largestRemainder(baseDuffs, shares) {
  * price of handing in a mutable array.
  */
 /**
- * PREPARED DATA DOES NOT TRAVEL ON THE CONTEXT AT ALL (round 8 finding 5, and the FIFTH
+ * PREPARED DATA DOES NOT TRAVEL ON THE CONTEXT AT ALL (a review finding 5, and the FIFTH
  * design for one problem). The history is the specification now, because each attempt placed
  * authority in a different kind of marker and every marker fell the same way.
  *
@@ -147,7 +147,7 @@ function largestRemainder(baseDuffs, shares) {
  *      READ on a caller-supplied object, and a JavaScript Proxy intercepts property reads by
  *      key TYPE. A `get` trap that answers every symbol key with a fabricated capture served
  *      it without ever learning the symbol, and a height outside every real epoch came back
- *      RECOGNIZED. Reproduced in round 8.
+ *      RECOGNIZED. Reproduced in a review.
  *
  * The lesson, stated as the rule this module now follows: a fast path whose authority is read
  * FROM a caller-supplied object cannot be protected by any marker placed ON that object,
@@ -240,7 +240,7 @@ function suspensionIntervals(lifecycle, baseHeight) {
 function makeSuspendedAt(intervals) {
   // an exported entry point: a raw array reaches here without passing suspensionIntervals,
   // and malformed tuples made the membership answer plausible instead of failing
-  // (round 4, MAJOR: makeSuspendedAt([["abc","xyz"]])(150) returned true)
+  // (a review, MAJOR: makeSuspendedAt([["abc","xyz"]])(150) returned true)
   if (!Array.isArray(intervals)) fail("intervals must be an array");
   for (let i = 0; i < intervals.length; i++) {
     const iv = intervals[i];
@@ -326,7 +326,7 @@ function recognizeAtWith(H, ctx, prepared) {
       if (bd.contractId !== contractId || bd.poolId !== poolId) {
         return { status: "UNRECOGNIZED", bindingRef: null };
       }
-      // TYPED BEFORE COMPARED (round 5, MAJOR). This was the last relational comparison in the
+      // TYPED BEFORE COMPARED (a review, MAJOR). This was the last relational comparison in the
       // recognition path still made against an unchecked value: a binding carrying
       // activationCoreHeight "abc" compared false both ways and returned a plausible RECOGNIZED.
       if (!Number.isSafeInteger(bd.activationCoreHeight) || bd.activationCoreHeight < 0) {
@@ -336,7 +336,7 @@ function recognizeAtWith(H, ctx, prepared) {
       if (H < bd.activationCoreHeight) return { status: "UNRECOGNIZED", bindingRef: ci };
       // suspension intervals are precomputed and ordered by the caller (see
       // makeSuspensionIndex); binary search replaces the per-reward scan (build review
-      // round 3)
+      // a review)
       if (suspendedAt(H)) return { status: "UNRECOGNIZED", bindingRef: ci };
       if (term !== null && term !== undefined && term < H) {
         return { status: "UNRECOGNIZED", bindingRef: ci };
@@ -374,7 +374,7 @@ function recognizeAt(H, ctx) {
  * lesson the epoch memo taught).
  */
 function prepareClosingIndex(platformLedger) {
-  // COUNTED so the once-per-envelope property has a check behind it (round 4, MINOR: the
+  // COUNTED so the once-per-envelope property has a check behind it (a review, MINOR: the
   // fixtures would still have passed if deriveRewardRecord went back to revalidating the raw
   // ledger for every reward, which is the quadratic cost this index exists to remove)
   prepareClosingIndex.calls += 1;
@@ -391,7 +391,7 @@ function prepareClosingIndex(platformLedger) {
       fail(`platform ledger anchors regress at row ${i}; the closing-block search needs them non-decreasing`);
     }
   }
-  // CAPTURE the row fields the search returns, never the caller's mutable rows (round 4,
+  // CAPTURE the row fields the search returns, never the caller's mutable rows (a review,
   // MAJOR: the frozen index retained live rows, so mutating a row after preparation changed
   // the returned closing block, and any object with `prepared: true` was trusted outright).
   const index = Object.freeze({
@@ -593,7 +593,7 @@ function deriveClaimProfile(ranVerifiers, rewards) {
  * ranVerifiers: the registry verifier names that ran AND passed (default none).
  */
 function buildEnvelope(evidence, { ranVerifiers = [] } = {}) {
-  // DETACH from the caller (build review round 3): the result retained nested references,
+  // DETACH from the caller (build review a review): the result retained nested references,
   // so mutating the input afterwards changed result.envelope while canonicalBytes and its
   // digest stayed stale. structuredClone also rejects functions and symbols outright.
   evidence = structuredClone(evidence);
@@ -614,7 +614,7 @@ function buildEnvelope(evidence, { ranVerifiers = [] } = {}) {
       })();
 
   // the audited pool's book per epoch (absent in an epoch that re-bound the position)
-  // the audited book per epoch, computed ONCE (build review round 3: this filtered every
+  // the audited book per epoch, computed ONCE (build review a review: this filtered every
   // epoch's book list for EVERY recognized reward), then selected by binary search over
   // the gapless ordered epochs
   // ordered, disjoint epochs are the precondition of BOTH covering-epoch searches (the one
@@ -650,7 +650,7 @@ function buildEnvelope(evidence, { ranVerifiers = [] } = {}) {
   // ownership chains per retail slot, from the retained slot documents. Each chain is
   // ordered by (platformHeight, txIndex, innerIndex) and its ANCHORS are non-decreasing,
   // so the "hops eligible at H" prefix is found by binary search instead of filtering the
-  // whole chain for every reward and slot (build review round 3).
+  // whole chain for every reward and slot (build review a review).
   const chains = {};
   const anchorsBySlot = {};
   for (const s of evidence.slots) {
@@ -729,7 +729,7 @@ module.exports = {
   buildEnvelope, deriveRewardRecord, deriveClaimProfile, recognizeAt,
   largestRemainder, firstClosing, canonicalize, assertEpochOrder,
   suspensionIntervals, makeSuspendedAt, prepareClosingIndex,
-  // exported for the CROSS-LANGUAGE DRIFT CHECK (round 4, MINOR): these rules are copied in
+  // exported for the CROSS-LANGUAGE DRIFT CHECK (a review, MINOR): these rules are copied in
   // the Python executable specification and the normative registry and cannot be
   // deduplicated, so the fixtures compare them instead
   DEPS, BARRED,

@@ -89,7 +89,7 @@ const BINDINGS_1 = [
   { ...POS_C, contractId: Buffer.alloc(32, 0xc2), poolId: Buffer.alloc(32, 0xa3), activationCoreHeight: 1200n },
 ];
 // epoch 2 legitimately RE-BINDS position C to a new pool for its own FUTURE window (the
-// round-9 correction: a forward re-binding is NOT a retroactive contradiction)
+// a review correction: a forward re-binding is NOT a retroactive contradiction)
 const BINDINGS_2 = [
   BINDINGS_1[0], BINDINGS_1[1],
   { ...POS_C, contractId: Buffer.alloc(32, 0xc2), poolId: Buffer.alloc(32, 0xa4), activationCoreHeight: 2000n },
@@ -299,7 +299,7 @@ const rec = (H, pos, extra) => m.recognize({ adopted: ADOPTED, rewardHeight: H, 
 ok("region 3: far future also DEFERS", rec(1000000n, POS_A).result === "DEFERRED");
 ok("interior: last covered height recognized", rec(2999n, POS_A).result === "RECOGNIZED");
 
-// the two-epoch advancement fixture (the round-9 case): position C re-binds at 2000
+// the two-epoch advancement fixture (the review case): position C re-binds at 2000
 ok("advancement: height before boundary uses old binding", (() => { const r = rec(1999n, POS_C); return r.result === "RECOGNIZED" && r.binding.poolId.equals(Buffer.alloc(32, 0xa3)) && r.epochId === 1n; })());
 ok("advancement: height at boundary uses new binding", (() => { const r = rec(2000n, POS_C); return r.result === "RECOGNIZED" && r.binding.poolId.equals(Buffer.alloc(32, 0xa4)) && r.epochId === 2n; })());
 ok("advancement: height after boundary uses new binding", (() => { const r = rec(2001n, POS_C); return r.result === "RECOGNIZED" && r.binding.poolId.equals(Buffer.alloc(32, 0xa4)); })());

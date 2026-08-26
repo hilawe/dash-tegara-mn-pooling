@@ -103,7 +103,7 @@ module.exports = async (ctx) => {
     core.requireCoherentSlotEconomics({ nodeType: po.nodeType, slotDuffs, slotCount });
   }
 
-  // A BOOK WIDER THAN COMPLETION'S CLAIM SCAN CAN NEVER COMPLETE (confirm-pass round 16,
+  // A BOOK WIDER THAN COMPLETION'S CLAIM SCAN CAN NEVER COMPLETE (a confirmation pass,
   // major): completion enumerates at most MAX_PLEDGE_CLAIMS claims and refuses a truncated
   // scan, so a full fill of a wider book is unobservable there, whatever the schema allows
   // (v6 derives the width from local SLOT_DUFFS, v7's published pools go to 10000).
@@ -185,7 +185,7 @@ const claimed = new Map(claims.map((d) => [Number(d.toObject().slotNo), d.getOwn
   // the very state the refusal below tells the member to resolve. Reporting shows it;
   // reserving into it refuses.
   // ON THE SIZED-CLAIM LEDGER every existing PERMANENT claim's size must equal the size
-  // this run would write (confirm-pass round 15, D-2): v6 claims carry their own
+  // this run would write (a confirmation pass, D-2): v6 claims carry their own
   // slotDuffs, completion requires one uniform size across the book, and the claims are
   // immutable and undeletable, so writing a mismatched one wedges the pool permanently.
   // The size here is local configuration, which is exactly how the drift happens.
@@ -236,7 +236,7 @@ const claimed = new Map(claims.map((d) => [Number(d.toObject().slotNo), d.getOwn
   // here instead. A single-owner claim with free slots left stays admissible, since the
   // second member can still arrive; only the book-closing one is refused. Sequential
   // preflight over a read snapshot, not atomic, exactly like the capacity check above.
-  // UNCONDITIONAL (confirm-pass round 23, major): the member's own
+  // UNCONDITIONAL (a confirmation pass): the member's own
   // FORMATION_ALLOW_UNVERIFIED must not decide admission, because completion reads the
   // OPERATOR'S environment, and the two disagreeing admitted a one-owner full book
   // completion refuses under the non-demo operator profile

@@ -1,6 +1,6 @@
 /**
  * The E2 RECEIPT VERIFIER (the refusal predicates duty D8's audit consumes;
- * ownership assigned in the spec's round 29, finding 3): the canonical part
+ * ownership assigned in the spec's a review finding): the canonical part
  * split and reassembly, the CARRIER-CONFORMANCE STAGE that runs before any
  * cryptographic check, the lifted-field equalities, the decoded-transfer
  * bindings, the mandatory two-stage proof verification, the reservation
@@ -68,13 +68,13 @@ const PROTOCOL_VERSION_PIN = 12;
 // not exported, no recognizer is exported, and nothing outside this file is ever
 // asked to decide whether a caught value is one of these.
 //
-// THE BOUNDARY RULE (round-65, replacing the whole provenance apparatus of rounds
+// THE BOUNDARY RULE (a review, replacing the whole provenance apparatus of rounds
 // 61-64; see docs/E2_VERIFICATION_BOUNDARY.md): a verification verdict is
 // RETURNED, never thrown. The public entries below catch this module's own class
 // inside their own frame and convert it into a returned result. Anything else
 // propagates as the fault it is.
 //
-// This deletes the question that four consecutive review rounds could not close.
+// This deletes the question that four consecutive reviews could not close.
 // An exception carries no trustworthy provenance, so a consumer that classifies
 // CAUGHT objects into evidence grades must prove no route exists by which a
 // foreign value arrives already classified, which is open-ended. A consumer that
@@ -92,7 +92,7 @@ const refuse = (why) => { throw new VerificationRefusal(`e2ReceiptVerify: ${why}
 // could build both results and receive a verified verdict with no decoder, no
 // proof stage and no signature check having run. That was executed, not argued.
 //
-// WHY THIS IS NOT THE MACHINERY ROUNDS 61-64 BUILT AND THIS SESSION DELETED, a
+// WHY THIS IS NOT THE MACHINERY SUCCESSIVE REVIEWS BUILT AND A LATER SESSION DELETED, a
 // distinction worth being exact about, because the shapes look alike. That
 // machinery tried to decide where a CAUGHT value came from, which is unbounded:
 // a throw can arrive by any number of routes, so every route had to be found
@@ -484,7 +484,7 @@ const verifyCapturePairInner = ({ capture, receipt, receiptResult, captureResult
   // the pair takes the two verification RESULTS, so a caller cannot hand
   // it loose values that never went through verifyReceipt and
   // verifyCaptureRecord (the checker's composition note)
-  // the results must be VERIFIED ones (round-65: the discriminator is `status`,
+  // the results must be VERIFIED ones (a review: the discriminator is `status`,
   // and a refused or unproved result reaching here would otherwise be read for
   // its members as though it had verified)
   // ORIGIN FIRST, then shape (a soundness-review finding). `isOwnResult` is what establishes that

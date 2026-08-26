@@ -53,7 +53,7 @@ ok("a foreign-owned POOL document skips the pool (the pool stays in the prefligh
 {
   const mutable = planPoolSweep({ ...base });
   ok("a mutable-ledger sweep deletes the pool document", mutable.action === "sweep" && mutable.deletePool === true);
-  // AN IMMUTABLE RECEIPT-LESS POOL IS NOT SWEPT AT ALL (packet wave, folder-access review F1). The old
+  // AN IMMUTABLE RECEIPT-LESS POOL IS NOT SWEPT AT ALL (packet wave, repository-access review F1). The old
   // answer swept its member documents (withholding only the undeletable pool doc), which
   // deletes a live reservation on an OPEN pool the immutable ledger cannot distinguish from
   // abandoned debris. This test previously ENCODED THE UNSAFE ANSWER as expected; it now
@@ -181,7 +181,7 @@ ok("regression pin: poolLive false (the default) leaves the sweep decision uncha
     planPoolSweep({ poolPresent: false }).action === "skip-vanished");
 }
 
-// a pool that ever SETTLED an exit or join is refused outright (confirm-pass round 11,
+// a pool that ever SETTLED an exit or join is refused outright (a confirmation pass,
 // must-fix), same rule as accruals, driven with otherwise-sweepable inputs
 {
   const { planPoolSweep } = require("./debrisPlan.cjs");
@@ -193,7 +193,7 @@ ok("regression pin: poolLive false (the default) leaves the sweep decision uncha
     settled.action === "skip-settlements" && /settled an exit or join/.test(settled.reason));
 }
 
-// a PERMANENT (v6) reservation refuses the whole pool (confirm-pass round 14, major: the
+// a PERMANENT (v6) reservation refuses the whole pool (a confirmation pass: the
 // plan approved a sweep that would fail midway on the undeletable claim, leaving the
 // bookkeeping set partially applied), driven with otherwise-sweepable inputs
 {

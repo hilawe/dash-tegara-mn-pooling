@@ -114,7 +114,7 @@ throws("a dependency without a digest is refused",
 ok("a genuinely dependency-free bundle may assert an empty closure",
    validateBundleManifest(mkManifest({ dependencyClosure: [] })));
 
-// THE DECODER BYTES ARE COMMITTED (build review, MUST-FIX): two bundles differing ONLY
+// THE DECODER BYTES ARE COMMITTED (build review, a required fix): two bundles differing ONLY
 // in their decoder artifact must have DIFFERENT identities, or the lineage would not
 // commit the executable decoder at all
 const mA = mkManifest({ bundleContentDigest: BUNDLE1 });

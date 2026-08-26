@@ -1,7 +1,7 @@
 /**
  * The PROVED-ENUMERATION WRAPPER (the frozen audit section's literal
- * contract, round 20 finding 5, cursor rules round 21 finding 6, the
- * no-progress refusal round 24 finding 9). The pinned proved document
+ * contract, a review finding 5, cursor rules a review finding 6, the
+ * no-progress refusal a review finding 9). The pinned proved document
  * query DISCARDS its metadata heights, so ENUMERATED document evidence
  * for the audit flows through THIS wrapper, whose page result carries the
  * authenticated height the range reduction needs (known-key reads reach
@@ -34,8 +34,8 @@
  *     `cursor` member, which must be null or a 64-hex document identifier
  *     (the transport's own page shape) and which this wrapper IGNORES
  *     entirely: pagination advances only on the wrapper's own cursor,
- *     computed from the last returned document (rounds 44 and 45, declared
- *     here round 60, its grammar enforced round 63 so that an accepted
+ *     computed from the last returned document (successive reviews, declared
+ *     here a review, its grammar enforced a review so that an accepted
  *     envelope means every member it carries conforms);
  *   { status: "unserved" } | { status: "unverified" }  the two failure
  *     strengths, both making the enumeration UNPROVED.
@@ -44,7 +44,7 @@ const DEC_RE = /^(0|[1-9][0-9]*)$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 
 const refuse = (why) => { throw new Error(`e2ProvedQuery: ${why}; refusing`); };
-// a TOTAL formatter for a CAUGHT value (round-59): the caught value can be an
+// a TOTAL formatter for a CAUGHT value: the caught value can be an
 // ordinary rejection (whose message is the real cause and should be kept) OR a
 // value resistant to inspection (a null-prototype object, a throwing `message`
 // getter, a revoked proxy), so every access is guarded. This keeps the true
@@ -62,7 +62,7 @@ const errText = (e) => {
 // it can serve a different value.
 //
 // WHAT THIS ESTABLISHES IS A PROPERTY OF THE CAPTURE, NOT OF THE INPUT
-// (round-62, generalizing the round-61 binary-leaf note to the whole
+// (a review, generalizing the review binary-leaf note to the whole
 // walk). A Proxy over an extensible target can report Object.prototype
 // from its getPrototypeOf trap while wrapping a class instance, so the
 // walk cannot decide what the input REALLY is, and does not try. It
@@ -72,7 +72,7 @@ const errText = (e) => {
 // exactly the validated members. The refusals below therefore say what
 // the walk could not CAPTURE, not what the input was.
 //
-// VALIDATE-AND-CAPTURE, not validate-then-reread (round-53): the walk
+// VALIDATE-AND-CAPTURE, not validate-then-reread: the walk
 // reconstructs a fresh plain-data deep copy from the SINGLE descriptor
 // read it validates, and the consumer reads the copy, never the original.
 // A getter-backed member is refused, but a data DESCRIPTOR is not enough
@@ -93,14 +93,14 @@ const plainDataSnapshot = (root) => {
   let defect = null;
   // walk returns { h, copy }, or null with `defect` set. Heights are
   // memoized so a SHARED subtree revisited from a deeper position still
-  // counts its full expansion against the depth bound (round-47:
+  // counts its full expansion against the depth bound (a review:
   // serialization expands sharing, so the bound must too), and the copy
   // is memoized so the reconstructed graph preserves the sharing. "The
   // JSON value domain" in the messages means this module's plain-data
-  // domain: JSON values EXTENDED with bare binary leaves (round-51).
+  // domain: JSON values EXTENDED with bare binary leaves.
   const walk = (v, label) => {
     if (typeof v === "function") { defect = `${label} is a function, not plain data`; return null; }
-    // the JSON VALUE DOMAIN, enforced throughout the graph (round-43):
+    // the JSON VALUE DOMAIN, enforced throughout the graph:
     // null, booleans, strings, finite numbers, dense index-only arrays,
     // plain objects, and bare binary leaves; nothing else
     if (typeof v === "symbol") { defect = `${label} is a symbol, outside the JSON value domain`; return null; }
@@ -114,7 +114,7 @@ const plainDataSnapshot = (root) => {
       if (path.size + memo.h - 1 > 512) { defect = `${label} nests past the JSON domain depth bound`; return null; }
       return memo;
     }
-    // a CYCLE is not a JSON value (round-44): a node already on the
+    // a CYCLE is not a JSON value: a node already on the
     // traversal path closes one. Depth is bounded so excessive nesting
     // fails closed instead of exhausting the call stack.
     if (path.has(v)) { defect = `${label} closes a cycle, outside the JSON value domain`; return null; }
@@ -123,7 +123,7 @@ const plainDataSnapshot = (root) => {
     if (v instanceof Uint8Array) {
       // a binary leaf is plain data ONLY as a bare byte container: the
       // base prototype, index keys alone, and no riders. What these checks
-      // establish is a property of the CAPTURE, not of the input (round-61):
+      // establish is a property of the CAPTURE, not of the input:
       // a Proxy over an extensible plain object whose getPrototypeOf trap
       // names Uint8Array.prototype passes both this test and `instanceof`,
       // so the input is not proved to be a real byte container. It does not
@@ -141,7 +141,7 @@ const plainDataSnapshot = (root) => {
         if (!INDEX_RE.test(k)) { defect = `member ${label}.${k} rides on a binary leaf`; return null; }
       }
       // capture the bytes by reading each index through its OWN DESCRIPTOR,
-      // never through the value (round-54): Uint8Array.from would read via
+      // never through the value: Uint8Array.from would read via
       // the iterator or index getters, which a Uint8Array-shaped Proxy can
       // trap to serve bytes the descriptor walk never validated. The index
       // names must be exactly 0..n-1 and every byte an own data value in
@@ -172,7 +172,7 @@ const plainDataSnapshot = (root) => {
         if (proto !== Array.prototype) { defect = `${label} carries a foreign prototype`; return null; }
         copy = [];
         // the length is read from the array's OWN DATA DESCRIPTOR, never
-        // through `v.length` (round-55): a Proxy get trap could otherwise
+        // through `v.length`: a Proxy get trap could otherwise
         // report a short length to hide a sparse hole, or throw an untyped
         // exception. The descriptor read is the same channel every member is
         // validated through.
@@ -189,14 +189,14 @@ const plainDataSnapshot = (root) => {
           // a NAMED array member would vanish from canonical
           // serialization, and a sparse array would serialize holes it
           // does not carry: both are outside the JSON value domain. A
-          // REAL index is an integer below length (round-44).
+          // REAL index is an integer below length.
           if (!INDEX_RE.test(k) || Number(k) >= len) {
             defect = `${label} carries a named array member (${String(k)}), outside the JSON value domain`; return null;
           }
           indexCount += 1;
           const dsc = Object.getOwnPropertyDescriptor(v, k);
           // a Proxy may report a key through ownKeys yet return no
-          // descriptor for it: that is not a stable data member (round-53)
+          // descriptor for it: that is not a stable data member
           if (!dsc) { defect = `member ${label}.${String(k)} has no own descriptor`; return null; }
           if (!Object.prototype.hasOwnProperty.call(dsc, "value")) {
             defect = `member ${label}.${String(k)} is accessor-backed`; return null;
@@ -237,7 +237,7 @@ const plainDataSnapshot = (root) => {
     done.set(v, result);
     return result;
   };
-  // the walk is TOTAL over adapter Proxies (round-56): a reflective trap
+  // the walk is TOTAL over adapter Proxies: a reflective trap
   // (ownKeys, getPrototypeOf, getOwnPropertyDescriptor and the rest the walk
   // uses as its capture channel) can THROW, which would otherwise escape as
   // the adapter's raw error rather than this module's plain-data refusal. Any
@@ -247,8 +247,8 @@ const plainDataSnapshot = (root) => {
   try {
     top = walk(root, "the value");
   } catch (_e) {
-    // a FIXED message, never a read of the thrown value (round-56 catch,
-    // hardened round-57): the thrown value can itself be a null-prototype
+    // a FIXED message, never a read of the thrown value (a review catch,
+    // hardened a review): the thrown value can itself be a null-prototype
     // object or carry a throwing `message` getter, so reading or
     // interpolating it would throw a second untyped fault out of the catch.
     // The identity of the thrown value is not needed to refuse.
@@ -276,12 +276,12 @@ const provedQueryPage = async ({ contractId, type, where, orderBy,
     refuse(`limit ${limit} is outside the contract's 1..100`);
   }
   if (startAfter !== null && (typeof startAfter !== "string" || !HEX64.test(startAfter))) {
-    // the STRING requirement comes first (round-50): regular-expression
+    // the STRING requirement comes first: regular-expression
     // coercion would let a one-element array pass, and a null-prototype
     // value would throw instead of refusing
     refuse("startAfter must be null (the first call) or the previous page's last 64-hex document identifier");
   }
-  // await TOTALLY (round-57): a page value resistant to property access, for
+  // await TOTALLY: a page value resistant to property access, for
   // example a revoked Proxy the adapter's promise resolves, throws at the
   // language-level await before the envelope check runs; the guard converts
   // that into a plain refusal rather than an escaping raw fault
@@ -289,7 +289,7 @@ const provedQueryPage = async ({ contractId, type, where, orderBy,
   try { rawPage = await fetchVerifiedPage({ contractId, type, where, orderBy, limit, startAfter }); }
   catch (e) { refuse(`the injected page fetch failed (${errText(e)}); an adapter fault is not evidence`); }
   // the WHOLE page envelope is validated as plain data AND CAPTURED before
-  // any member is read (round-41, capture added round-53): the walk
+  // any member is read (a review, capture added a review): the walk
   // reconstructs a plain-data copy from the descriptors it validates and
   // every read below is against that copy (`page`), never the injected
   // object, so a Proxy that reports a plain descriptor to the walk and
@@ -306,11 +306,11 @@ const provedQueryPage = async ({ contractId, type, where, orderBy,
     refuse("the injected page result must declare status verified, unserved or unverified");
   }
   // the page envelope is a DISCRIMINATED union with exactly ONE declared
-  // optional member (round-40, the declaration amended round-60 to match):
+  // optional member (a review, the declaration amended a review to match):
   // members outside the declared variant are contradictory shapes, and
   // "cursor" is the declared exception, permitted on a verified page and
   // IGNORED, because this checker computes its own cursor from the
-  // documents (rounds 44 and 45 gate that the adapter's member cannot
+  // documents (successive reviews gate that the adapter's member cannot
   // steer the walk).
   const allowedPage = page.status === "verified" ? ["status", "documents", "height", "cursor"] : ["status"];
   for (const k of Reflect.ownKeys(page)) {
@@ -319,7 +319,7 @@ const provedQueryPage = async ({ contractId, type, where, orderBy,
     }
   }
   // the optional cursor is IGNORED for steering but still has to CONFORM
-  // (round-63): admitting it as "any plain data" kept the no-steering
+  //: admitting it as "any plain data" kept the no-steering
   // guarantee (this wrapper computes its own cursor) while giving up the
   // envelope-exactness one, so an adapter could return an object or array
   // where the transport's page shape has a document identifier and the
@@ -342,12 +342,12 @@ const provedQueryPage = async ({ contractId, type, where, orderBy,
   let prev = startAfter;
   for (const d of page.documents) {
     // the envelope walk above already established every document as
-    // plain data before any member read (round-41 hoisted the check)
+    // plain data before any member read (a review hoisted the check)
     if (!d || typeof d.id !== "string" || !HEX64.test(d.id)) {
       refuse("every returned document carries its 64-hex identifier");
     }
     // the page itself honors the ordered exclusive-cursor contract:
-    // strictly ascending, every identifier ABOVE the cursor (round-30)
+    // strictly ascending, every identifier ABOVE the cursor
     if (prev !== null && d.id <= prev) {
       refuse(`the page's identifiers are not strictly ascending above the cursor at ${d.id} (a repeated document or a cursor regression breaks the no-progress rule)`);
     }
@@ -381,9 +381,9 @@ const enumerateProved = async ({ contractId, type, where, orderBy, limit = 100,
     if (heightMax === null || h > BigInt(heightMax)) heightMax = page.height;
     for (const d of page.documents) {
       // the page checker's envelope walk already established every
-      // document as plain data before any member read (round-41), and
+      // document as plain data before any member read, and
       // strict ascent across the WHOLE enumeration is the page checker's
-      // guarantee too (round-30): each page proves its identifiers
+      // guarantee too: each page proves its identifiers
       // strictly ascending above its exclusive cursor, and the cursor is
       // COMPUTED from the page's own last identifier (never
       // adapter-supplied), so page-local ascent composes into

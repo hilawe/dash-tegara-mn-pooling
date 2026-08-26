@@ -69,7 +69,7 @@ const planPoolSweep = ({ shareBpsSum, shareCount, accrualCount, receiptCount, ow
     return { action: "skip-accruals", reason: "incomplete shares but HAS accruals" };
   }
   // ...and anything that ever SETTLED an exit or join is refused the same way
-  // (confirm-pass round 11, must-fix: settlements are poolId-referencing lifecycle
+  // (a confirmation pass, must-fix: settlements are poolId-referencing lifecycle
   // history the sweep never enumerated, so a pool with one could be deleted around it,
   // orphaning the record of a member exit that actually happened)
   if (settlementCount > 0) {
@@ -84,7 +84,7 @@ const planPoolSweep = ({ shareBpsSum, shareCount, accrualCount, receiptCount, ow
   if (receiptLedger && receiptCount > 0) {
     return { action: "skip-receipt", reason: "a completion receipt exists; a pool with a completion record is not debris" };
   }
-  // AN IMMUTABLE RECEIPT-LESS POOL IS INDETERMINATE, NOT DEBRIS (packet wave, folder-access review F1).
+  // AN IMMUTABLE RECEIPT-LESS POOL IS INDETERMINATE, NOT DEBRIS (packet wave, repository-access review F1).
   // Reaching here on the immutable ledger means no verifying receipt exists, and this
   // module's own doctrine (poolLifecycle header) is that a receipt-less immutable pool is
   // OPEN, IN-FLIGHT, or ABANDONED and those are the same document: a member may have a live
@@ -100,7 +100,7 @@ const planPoolSweep = ({ shareBpsSum, shareCount, accrualCount, receiptCount, ow
         "sweeping its member documents could delete a live reservation, so it is left intact " +
         "(the same fail-closed rule admission uses)" };
   }
-  // a PERMANENT claim makes a whole-pool sweep unexecutable (confirm-pass round 14,
+  // a PERMANENT claim makes a whole-pool sweep unexecutable (a confirmation pass,
   // major: the v6 reservation is immutable and undeletable by its own schema, so a plan
   // that returned sweep for a pool carrying one approved a sweep that would fail midway,
   // after deleting the shares and requests, leaving the bookkeeping set partially
