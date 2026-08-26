@@ -881,8 +881,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       a.activationBoundary = { evaluated: true, label: "OPERATOR-PROVIDED", source: "journal" };
       return a;
     })(),
-    epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [] },
-      { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [] }],
+    epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [], undistributedCredits: "0" },
+      { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [], undistributedCredits: "0" }],
     lag: { lagCount: 1, undistributedCredits: "540000" },
     heightRanges: { records: { min: "880", max: "912" }, universe: null, balance: null },
     diagnostics: { extras: [], orphans: [], poolGlobal: [] },
@@ -953,14 +953,14 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       diagnostics: { extras: Array(1), orphans: [], poolGlobal: [] } }), /own enumerable data element/);
   throwsSync("a sparse per-epoch diagnostics array refuses",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: Array(1) }] }), /own enumerable data element/);
+      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: Array(1), undistributedCredits: "0" }] }), /own enumerable data element/);
   throwsSync("an annotation endEpoch disagreeing with the interval refuses",
     () => buildReport({ ...reportInput(),
       annotation: buildOpenEndedAnnotation({ endEpoch: 29, recordsHeightMax: "900" }) }),
     /disagrees with the interval/);
   throwsSync("a numeric per-epoch r is refused (canonical decimal STRINGS only)",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: null, r: 1, diagnostics: [] }] }), /per-epoch row/);
+      epochs: [{ epochIndex: 5, condition: null, r: 1, diagnostics: [], undistributedCredits: "0" }] }), /per-epoch row/);
   throwsSync("a numeric undistributedCredits is refused",
     () => buildReport({ ...reportInput(), lag: { lagCount: 1, undistributedCredits: 540000 } }), /lag member/);
   throwsSync("a numeric annotation recordsHeightMax is refused",
@@ -970,11 +970,11 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     /not a u32/);
   throwsSync("an over-u32 per-epoch index refuses",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 4294967296, condition: null, r: null, diagnostics: [] }] }), /not a u32/);
+      epochs: [{ epochIndex: 4294967296, condition: null, r: null, diagnostics: [], undistributedCredits: "0" }] }), /not a u32/);
   // the sub-shapes are closed too: an undeclared member anywhere refuses
   throwsSync("a per-epoch row with an undeclared member refuses",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: [], undeclared: true }] }),
+      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: [], undeclared: true, undistributedCredits: "0" }] }),
     /shape is closed/);
   throwsSync("a lag object with an undeclared member refuses",
     () => buildReport({ ...reportInput(),
@@ -1072,7 +1072,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     }, /plain enumerable data property/);
   throwsSync("an empty-string per-epoch condition refuses (a token is nonempty)",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: "", r: null, diagnostics: [] }] }), /per-epoch row/);
+      epochs: [{ epochIndex: 5, condition: "", r: null, diagnostics: [], undistributedCredits: "0" }] }), /per-epoch row/);
   {
     const inp = reportInput();
     inp.heightRanges = { records: { min: "880", max: "912" },
@@ -1101,7 +1101,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   throwsSync("a missing contract pin refuses the report",
     () => buildReport({ ...reportInput(), contractId: "" }), /CONTRACT_V11_ID/);
   throwsSync("a malformed per-epoch row refuses",
-    () => buildReport({ ...reportInput(), epochs: [{ epochIndex: 5, condition: null, r: "07", diagnostics: [] }] }),
+    () => buildReport({ ...reportInput(), epochs: [{ epochIndex: 5, condition: null, r: "07", diagnostics: [], undistributedCredits: "0" }] }),
     /per-epoch row/);
   throwsSync("a malformed lag member refuses",
     () => buildReport({ ...reportInput(), lag: { lagCount: -1, undistributedCredits: "0" } }), /lag member/);
@@ -1156,8 +1156,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         balance: { evaluated: true, label: "UNVERIFIABLE" },
         contractIntegrity: { evaluated: true, label: "PROVED" },
       },
-      epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [] },
-        { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [] }],
+      epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [], undistributedCredits: "0" },
+        { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [], undistributedCredits: "0" }],
       lag: { lagCount: 1, undistributedCredits: "540000" },
       heightRanges: { records: { min: "880", max: "912" }, universe: null, balance: null,
         overlap: "not-applicable" },
@@ -1179,7 +1179,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       branch: "deactivation-bounded", interval: { startEpoch: 2, endEpoch: 4 }, annotation: null,
       coverage: { lateConfiguredStart: false, containsUniverse: true, narrowedRange: false },
       aspects: a,
-      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"] }],
+      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"], undistributedCredits: "0" }],
       lag: { lagCount: 0, undistributedCredits: "0" },
       heightRanges: { records: { min: "10", max: "20" }, universe: { min: "15", max: "25" },
         balance: { min: "18", max: "19" } },
@@ -1208,7 +1208,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         balance: { evaluated: true, label: "PROVED-NET" },
         contractIntegrity: { evaluated: true, label: "PROVED" },
       },
-      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"] }],
+      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"], undistributedCredits: "0" }],
       lag: { lagCount: 0, undistributedCredits: "0" },
       heightRanges: { records: { min: "10", max: "20" }, universe: { min: "15", max: "25" },
         balance: { min: "18", max: "19" }, overlap: { overlaps: true } },
@@ -1363,13 +1363,13 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   throwsSync("an ACCESSOR-backed per-epoch row refuses (a getter is not an own data element)",
     () => { const epochs = [];
       Object.defineProperty(epochs, 0, { enumerable: true, configurable: true,
-        get() { return { epochIndex: 5, condition: null, r: null, diagnostics: [] }; } });
+        get() { return { epochIndex: 5, condition: null, r: null, diagnostics: [], undistributedCredits: "0" }; } });
       return buildReport({ ...reportInput(), epochs }); },
     /own enumerable data element/);
   throwsSync("a NON-ENUMERABLE per-epoch row refuses (it would vanish from serialization)",
     () => { const epochs = [];
       Object.defineProperty(epochs, 0, { enumerable: false, configurable: true, writable: true,
-        value: { epochIndex: 5, condition: null, r: null, diagnostics: [] } });
+        value: { epochIndex: 5, condition: null, r: null, diagnostics: [], undistributedCredits: "0" } });
       return buildReport({ ...reportInput(), epochs }); },
     /own enumerable data element/);
   {
@@ -2147,6 +2147,18 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       expectedContractPayload: { ...w.deps.expectedContractPayload, version: "v12" }, deps: w.deps });
     ok("a VERSION-only divergence refuses too (every contract-defined member counts)",
       c2v.label === "REFUSED");
+    // A PROVED ABSENCE OF THE CONTRACT IS NONCONFORMANCE, not an open question.
+    // Found by an observability sweep: every other branch of this evaluator was
+    // bound by a test, and this one could be turned from REFUSED into PROVED
+    // with all four suites still green, so the strongest possible claim could be
+    // made about a contract whose absence is proved.
+    const cAbsent = await evaluateContractIntegrity({ contractId: GC,
+      expectedContractPayload: w.deps.expectedContractPayload,
+      deps: { ...w.deps, provedByKey: async (type, key) => (type === "contract"
+        ? { status: "proved-absence", height: "889" }
+        : w.deps.provedByKey(type, key)) } });
+    ok("a PROVED-ABSENT contract refuses (an absent contract cannot be conformant)",
+      cAbsent.label === "REFUSED" && /absence/.test(cAbsent.reason));
     const nested = JSON.parse(JSON.stringify(w.deps.expectedContractPayload));
     nested.documents.pool.required = ["nodeType"];
     const c2n = await evaluateContractIntegrity({ contractId: GC,
@@ -2341,6 +2353,20 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       capture: null, supersessions: [], deps: w.deps });
     ok("a receipt without its served capture refuses (the capture IS the execution evidence)",
       noCap.label === "REFUSED" && /capture/.test(noCap.reason));
+    // THE RELATIONAL GUARD ON A MISSING ACCRUAL. `runAudit` never reaches this
+    // branch, because it skips a row whose accrual is absent before it calls
+    // here, so nothing observed it and the refusal could be turned into
+    // CAPTURE-VERIFIED with every suite green. It is reachable for a DIRECT
+    // caller of this exported evaluator, which is where its stated contract has
+    // to hold, so the contract is bound here rather than assumed.
+    for (const [what, absent] of [["missing", null], ["a non-object", "not-an-accrual"]]) {
+      const noAcc = await evaluateTransferExecution({ receipt, parts: [],
+        entitlementRow: { recipientId: FA, amountCredits: "400000" },
+        accrual: absent, headerFor: w.docs.header[0], incomeIdentity: INCOME,
+        chainIdPin: CHAIN, capture: w.captures[0], supersessions: [], deps: w.deps });
+      ok(`an accrual that is ${what} refuses the transfer aspect (the RELATIONAL subset)`,
+        noAcc.label === "REFUSED" && /accrual is not available/.test(noAcc.reason));
+    }
     const noBasis = await evaluateTransferExecution({ receipt, parts: [],
       entitlementRow: { recipientId: FA, amountCredits: "400000" },
       accrual: w.accruals[0], headerFor: w.docs.header[0], incomeIdentity: INCOME, chainIdPin: CHAIN,
@@ -2578,6 +2604,44 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const ledTwo = await runLedger(wTwo);
     ok("the undistributed sum is the exact per-row bookkeeping (two named failures, 560000)",
       ledTwo.lag.undistributedCredits === "560000");
+    // AND IT IS REPORTED PER EPOCH, not only as a run-wide total (a soundness-review finding). The
+    // specification requires the per-epoch figure and the reader kept only the
+    // sum, which cannot be decomposed afterwards: a total says how much went
+    // undistributed and never in which epoch. These assert the SPLIT, not the
+    // sum, so copying the total onto every row would fail them.
+    {
+      const rowsTwo = [...ledTwo.perEpoch.values()];
+      const perEpochSum = rowsTwo.reduce((a, r) => a + BigInt(r.undistributedCredits), 0n);
+      ok("the per-epoch amounts sum to the run-wide total",
+        String(perEpochSum) === ledTwo.lag.undistributedCredits);
+      ok("the epoch that lost its receipts carries the amount, and it is not the total on every row",
+        BigInt(ledTwo.perEpoch.get(5).undistributedCredits) === 560000n
+        && rowsTwo.filter((r) => r.undistributedCredits !== "0").length === 1);
+      // THE MISSING-ACCRUAL PATH ATTRIBUTES ITS AMOUNT TOO. A row whose accrual
+      // is absent never reaches the receipt walk and exits early, so it accrues
+      // at its own site; dropping that one accrual survived until this fixture
+      // existed, because every other case here loses a RECEIPT rather than an
+      // accrual. Both known-key lookups are made to fail so the row stays
+      // unrecovered and the amount is genuinely undistributed.
+      const wAcc = mkWorld({
+        mutateDocs: (docs) => {
+          const goneA = docs.accrual.find((a) => a.epochIndex === 5 && a.funderId === FB);
+          docs.accrual = docs.accrual.filter((a) => a !== goneA);
+          docs.reservation = docs.reservation.filter((r) => r.accrualId !== goneA.id);
+          docs.receipt = docs.receipt.filter((r) => r.accrualId !== goneA.id);
+        },
+        provedByKey: (base) => async (type, key) =>
+          (type === "accrualByKey" ? { status: "proved-absence", height: "918" } : base(type, key)),
+      });
+      const ledAcc = await runLedger(wAcc);
+      ok("an epoch whose row lost its ACCRUAL still attributes the amount to that epoch",
+        BigInt(ledAcc.perEpoch.get(5).undistributedCredits) > 0n
+        && ledAcc.perEpoch.get(5).undistributedCredits === ledAcc.lag.undistributedCredits);
+      const clean = [...led.perEpoch.values()];
+      ok("an epoch with nothing undistributed reports zero, never absent",
+        clean.every((r) => typeof r.undistributedCredits === "string")
+        && clean.some((r) => r.undistributedCredits === "0"));
+    }
     ok("the missing row CONTRIBUTES to the aggregates (never an unexamined affirmative; the zero epoch inherits the refused record-set label, so ordering lands at REFUSED through the empty-set identity)",
       led.aggregates.transferExecution === "REFUSED"
       && led.aggregates.ordering === "REFUSED");
@@ -5084,6 +5148,79 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       deps: { ...w.deps, incomeIdentity: undefined } });
     ok("a missing income identity is a structured REFUSED-INPUT",
       r.verdict === "REFUSED-INPUT" && /incomeIdentity/.test(r.reason));
+  }
+  {
+    // THE PER-EPOCH AMOUNT REACHES THE REPORT (a soundness-review finding). The evaluator-level tests
+    // read its own map, so `buildReport` could validate the member and then drop
+    // it while rebuilding each row, and nothing would notice: a mutation writing
+    // a constant zero there survived until this was added. The report is what a
+    // reader holds, so the value is asserted where the reader sees it.
+    const w = mkWorld({ mutateDocs: (docs) => {
+      docs.receipt = docs.receipt.filter((rr) => rr.accrualId === docs.accrual[1].id);
+    } });
+    const rep = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"), deps: w.deps });
+    const rows = rep.epochs || [];
+    ok("every reported epoch row carries its own undistributed amount",
+      rows.length > 0 && rows.every((rr) => typeof rr.undistributedCredits === "string"));
+    ok("the reported per-epoch amounts sum to the reported total",
+      String(rows.reduce((a, rr) => a + BigInt(rr.undistributedCredits), 0n))
+        === rep.lag.undistributedCredits);
+    ok("and the amount is attributed to ONE epoch, not spread or zeroed",
+      rep.lag.undistributedCredits !== "0"
+      && rows.filter((rr) => rr.undistributedCredits !== "0").length === 1);
+  }
+  {
+    // CALLER INPUT IS VALIDATED BEFORE ANY ADAPTER IS READ, and until now only
+    // the resulting verdict was asserted, never the ORDERING. A review's
+    // mutation invoked fetchRange first and then validated, and every suite
+    // stayed green, so the rule that no adapter answer can sidestep entry
+    // validation rested on nothing. Counting the reads is what measures it.
+    const w = mkWorld();
+    let adapterCalls = 0;
+    const counted = { ...w.deps,
+      fetchRange: async (...a) => { adapterCalls += 1; return w.deps.fetchRange(...a); },
+      fetchVerifiedPage: async (...a) => { adapterCalls += 1; return w.deps.fetchVerifiedPage(...a); },
+      provedByKey: async (...a) => { adapterCalls += 1; return w.deps.provedByKey(...a); } };
+    for (const [what, over] of [["a malformed expected payload", { expectedContractPayload: [] }],
+      ["a missing income identity", { incomeIdentity: undefined }],
+      ["a malformed pool identifier", null]]) {
+      adapterCalls = 0;
+      const rr = await runAudit({ poolId: over === null ? "not-a-pool-id" : POOL_HEX,
+        dir: path.join(TMP, "jr-nodep"), deps: { ...counted, ...(over || {}) } });
+      ok(`${what} is REFUSED-INPUT with ZERO adapter reads (validation precedes every read)`,
+        rr.verdict === "REFUSED-INPUT" && adapterCalls === 0);
+    }
+    // THE BOUNDARY-PROOF INPUTS TOO. The cases above cover the payload, the
+    // identity and the pool identifier; a review's mutation read the discovery
+    // range before rejecting a malformed provedActivation and every audit test
+    // stayed green, because no case here supplied one.
+    for (const [what, over] of [["a non-integer provedActivation", { provedActivation: 1.5 }],
+      ["a negative provedActivation", { provedActivation: -1 }],
+      ["a non-integer provedDeactivation", { provedDeactivation: 2.5 }]]) {
+      adapterCalls = 0;
+      const rr = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"),
+        deps: { ...counted, ...over } });
+      ok(`${what} is REFUSED-INPUT with ZERO adapter reads`,
+        rr.verdict === "REFUSED-INPUT" && adapterCalls === 0);
+    }
+  }
+  {
+    // A DISCOVERY DEPENDENCY FAILURE IS A FAULT AND PROPAGATES. The suite proved
+    // that a malformed RANGE refuses before discovery, and never made discovery
+    // itself throw, so a mutation catching the failure and turning it into a
+    // returned REFUSED-INPUT went unnoticed. That would convert a dependency
+    // fault into evidence, which is the one thing the boundary forbids.
+    const w = mkWorld();
+    // the journal directory must be the VALID one, or the entry refuses on the
+    // journal before discovery is ever reached and the test proves nothing
+    let threw = null, returned = null;
+    try {
+      returned = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"),
+        deps: { ...w.deps, fetchRange: async () => { throw new Error("the discovery source is unavailable"); } } });
+    } catch (e) { threw = e; }
+    ok("a THROWING discovery read propagates as a fault, never a returned REFUSED-INPUT",
+      threw !== null && /the discovery source is unavailable/.test(threw.message)
+      && returned === null);
   }
   {
     const w = mkWorld();

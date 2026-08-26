@@ -86,8 +86,8 @@ reward output is controlled by the rail's own non-wallet key between the coinbas
 and the asset-lock transaction that fans it out (section 4.2 and section 8). The one construction
 this project established as unsound and never uses is multisig custody with pre-signed
 refunds, which fails on Dash because first-party transaction malleability lets a participant
-invalidate the refund chain (the malleability finding, reproduced live on regtest and reviewed by three
-model families).
+invalidate the refund chain (the malleability finding, reproduced live on regtest and independently
+reviewed).
 
 ## 3. How the design was chosen
 
@@ -258,9 +258,9 @@ demonstrations are:
 
 ## 6. How the work was reviewed, and what that process caught
 
-Non-trivial implementation changes went through independent review by a different model
-family, and architecture-bearing work went to three (one command-line channel, two packet
-reviewers working from complete inline source with no repository access). Verdicts were
+Non-trivial implementation changes went through independent review, and
+architecture-bearing work went to several reviewers at once: one reading the working tree
+directly, and others reading the complete source cold with no access to the repository. Verdicts were
 resolved by verification against the code, never by vote. This consolidation document itself
 went through that review, which is what added the qualifications in sections 0, 1, 4.1, 4.2,
 4.5, 5, and 8. Three episodes define the discipline:

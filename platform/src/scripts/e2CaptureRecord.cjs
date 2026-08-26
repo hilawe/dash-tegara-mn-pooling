@@ -81,8 +81,11 @@ const validateExpectedContents = (ec) => {
   return null;
 };
 
-// the closed member lists, keyed by kind; each validator returns a refusal
-// string or null (the common members are checked once, below)
+// the closed member lists, keyed by kind. TWO DIFFERENT PROTOCOLS live here and
+// this sentence used to describe only one of them: the per-kind content
+// validators return a refusal STRING or null, while `validateRecordShape`
+// returns the record and THROWS on a nonconforming one. A caller has to know
+// which it is holding, and the journal already treats the two differently.
 const HEADER_KIND = "tegara.e2.headerCapture.v1";
 const RECEIPT_KIND = "tegara.e2.receiptCapture.v1";
 const SUPERSESSION_KIND = "tegara.e2.journal.captureSupersession.v1";
@@ -256,17 +259,37 @@ const verifySupersessionSignature = async (originalCapture, supersession, public
   validateRecordShape(supersession);
   const digest = crypto.createHash("sha256").update(capturePreimage(originalCapture)).digest();
   const s = await secp();
+  // THE KEY IS THE CALLER'S OBLIGATION AND THE SIGNATURE IS THE RECORD'S. That
+  // split decides what a failure means. A malformed key is a fault and must
+  // propagate; malformed signature bytes come from an untrusted record and are
+  // evidence about it. The catch below used to cover BOTH, so a null key or a
+  // broken curve library reported "this signature does not verify", which is a
+  // dependency failure converted into a statement about a member's record, and
+  // the specification permits that conversion only for the three decoders.
+  if (!(publicKey instanceof Uint8Array) || publicKey.length !== 33) {
+    throw new Error(`e2CaptureRecord: the resolved public key is not a 33-byte compressed point; a malformed key is a caller fault, never evidence about the record; refusing hard`);
+  }
   try {
     return s.verify(Buffer.from(supersession.sig, "hex").subarray(1), digest, publicKey, { prehash: false });
-  } catch { return false; }
+  } catch { return false; } // the RECORD's signature bytes are untrusted: malformed is evidence
 };
 const verifyCaptureSignature = async (record, publicKey) => {
   validateRecordShape(record);
   const digest = crypto.createHash("sha256").update(capturePreimage(record)).digest();
   const s = await secp();
+  // THE KEY IS THE CALLER'S OBLIGATION AND THE SIGNATURE IS THE RECORD'S. That
+  // split decides what a failure means. A malformed key is a fault and must
+  // propagate; malformed signature bytes come from an untrusted record and are
+  // evidence about it. The catch below used to cover BOTH, so a null key or a
+  // broken curve library reported "this signature does not verify", which is a
+  // dependency failure converted into a statement about a member's record, and
+  // the specification permits that conversion only for the three decoders.
+  if (!(publicKey instanceof Uint8Array) || publicKey.length !== 33) {
+    throw new Error(`e2CaptureRecord: the resolved public key is not a 33-byte compressed point; a malformed key is a caller fault, never evidence about the record; refusing hard`);
+  }
   try {
     return s.verify(Buffer.from(record.sig, "hex").subarray(1), digest, publicKey, { prehash: false });
-  } catch { return false; }
+  } catch { return false; } // the RECORD's signature bytes are untrusted: malformed is evidence
 };
 const recoverCaptureSigner = async (record) => {
   validateRecordShape(record);
@@ -313,10 +336,23 @@ const selectSupersessionBasis = async (capture, supersessions, verifiesFn) => {
   }
   candidates.sort((a, b) => b.seq - a.seq); // downward from the maximum
   for (const c of candidates) {
-    // a throw from the injected callback is a FAULT and propagates (round-65):
-    // the caller supplies local reviewed code here, and a broken signature
-    // checker says nothing about whether a capture conforms
-    if (await verifiesFn(c)) return { basis: c };
+    // a throw from the injected callback is a FAULT and propagates: the caller
+    // supplies local reviewed code here, and a broken signature checker says
+    // nothing about whether a capture conforms.
+    //
+    // THE CALLBACK ANSWERS WITH A BOOLEAN, AND THAT IS ENFORCED. It used to be
+    // read for TRUTHINESS, which a review found meant a verdict object saying
+    // `{ status: "refused" }` selected the candidate, because an object is
+    // truthy. An explicitly negative verification result chose the basis. The
+    // contract was written down nowhere, which is how the two readings drifted:
+    // this module wants a boolean, the verification boundary elsewhere in this
+    // repository returns a verdict, and a caller following that boundary got a
+    // silent affirmative here. Anything that is not a boolean is now a fault.
+    const verified = await verifiesFn(c);
+    if (typeof verified !== "boolean") {
+      throw new Error(`e2CaptureRecord: the signature callback answered with ${verified === null ? "null" : typeof verified} rather than a boolean; a verdict object is NOT a yes; refusing hard`);
+    }
+    if (verified) return { basis: c };
   }
   return { basis: "original" };
 };

@@ -1,6 +1,6 @@
 /**
  * The offline table-driven harness over the cast-verification decision core
- * (castVerify.cjs), the batch-4 lens-3 idea both packet reviewers endorsed. Runs the
+ * (castVerify.cjs), an idea two independent reviewers endorsed. Runs the
  * full decision surface from castReceiptV2.cjs's header (every snapshot/vote/receipt
  * combination, the malformed-rows cases, the hash and timestamp legs, the anomaly
  * notes, and the freshness classes) with plain node, no devnet, no fork node, same

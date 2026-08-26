@@ -400,4 +400,6 @@ const enumerateProved = async ({ contractId, type, where, orderBy, limit = 100,
   }
 };
 
-module.exports = { provedQueryPage, enumerateProved, plainDataDefect, plainDataSnapshot };
+// plainDataDefect is used internally and consumed by nothing; plainDataSnapshot,
+// which carries the same answer plus the path, is what callers actually read
+module.exports = { provedQueryPage, enumerateProved, plainDataSnapshot };

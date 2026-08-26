@@ -252,9 +252,9 @@ Each verification level is recorded on the receipt itself:
 
 ## What a long review round changed, and what it says about the method
 
-Between late July and early August 2026 the assembled design went through ten independent
-review passes and two rounds of packet review by three different model families, on top of
-the earlier per-component rounds. That is worth describing plainly, because the shape of
+Between late July and early August 2026 the assembled design was reviewed repeatedly and
+independently, by reviewers working from the complete source and by reviewers reading it
+cold with no access to the repository, on top of the earlier per-component checks. That is worth describing plainly, because the shape of
 what it found matters more than the count.
 
 Roughly forty defects were found and fixed. Almost none were in the cryptographic or

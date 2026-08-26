@@ -201,7 +201,7 @@ module.exports = async (ctx) => {
         `(request ${doc.getId().toString()}, cancellable until completion)`);
       console.log(`fill now: ${DASHfmt(after)} / ${DASHfmt(target)} DASH` +
         (after === target ? "  <- FULL, the operator can complete" : ""));
-      // a soundness-review finding advisory (packet review, argued down from a refusal to a note): a
+      // a soundness-review finding advisory (argued down from a refusal to a note by an independent review): a
       // remainder below the covenant floor is a REPAIRABLE state, not a stranded one
       // (no funds move at pledge time and every pledge is cancellable), so admission
       // does not refuse it, but the fill can then only complete through an existing
