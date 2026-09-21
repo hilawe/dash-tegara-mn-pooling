@@ -55,9 +55,10 @@ Mass retail is out of v1, because a retail tier that is genuinely non-custodial 
 refund-payout-array amendment described under the retail split boundary, and that amendment is documented and deliberately
 unpushed.
 
-The boundary has two costs and neither is softened anywhere in this corpus. A participant needs roughly
-125 DASH at the eight-participant limit, which is far above the retail entry CrowdNode offered, and
-there is no on-demand exit, because leaving means a dissolution that ends the masternode.
+The boundary has two costs and neither is softened anywhere in this corpus. A participant needs 100 DASH
+at minimum (the proposal's per-share rule, which the head build's registration interface applied in
+every case sampled) and roughly 125 DASH in an equal split at the eight-participant limit, either of which is far above the retail entry CrowdNode
+offered, and there is no on-demand exit, because leaving means a dissolution that ends the masternode.
 
 Everything below about the retail tier is therefore ARCHITECTURE AND PARTIAL BUILD, not a v1
 deliverable. Build status per component is in `docs/IMPLEMENTATION_STATUS.md`.

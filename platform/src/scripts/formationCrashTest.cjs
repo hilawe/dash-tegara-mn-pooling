@@ -46,7 +46,14 @@ const SCRIPT_B = "76a914" + "22".repeat(20) + "88ac";
 const OP = newId();
 const F1 = newId(), F2 = newId();
 const POOL = newId();
-const CONTRACT = newId(); // allocationPreimage requires a real base58 32-byte contract id
+const CONTRACT = newId(); // the ACTIVE ledger's id; allocationPreimage requires a real base58 32-byte contract id
+// the NON-ACTIVE version keys get DISTINCT identifiers, so a child that reads
+// the wrong key (the generic CONTRACT_ID, or another version's) builds its
+// allocations against a mismatched contract and the oracles refuse, instead
+// of every key aliasing one value and hiding wrong-key routing (the D5
+// check constructed exactly that silent continuation)
+const DECOY_IDS = { v1: newId(), v8: newId(), v9: newId(), v11: newId() };
+const keyValue = (ledger) => (ledger === HARNESS_LEDGER ? CONTRACT : DECOY_IDS[ledger]);
 
 // THE LEDGER UNDER TEST. Parameterised rather than hardcoded so this harness runs against
 // both receipt ledgers: v8 (the live default, pool flips) and v9 (immutable pool, receipt
@@ -54,8 +61,39 @@ const CONTRACT = newId(); // allocationPreimage requires a real base58 32-byte c
 // below branches on PARED, and the PARENT's own LEDGER is pinned to the same value so the
 // shared receipt-to-pool check used by the v9 oracle answers for the ledger under test.
 const HARNESS_LEDGER = process.env.TEGARA_HARNESS_LEDGER || "v8";
-const PARED = HARNESS_LEDGER === "v9";
+// the suite models exactly the receipt ledgers below; an unknown NONEMPTY
+// selector refuses rather than silently running the v8 fixtures against it
+// (the D5 fold: ledgerCap on an unknown version answers false, which WOULD
+// have done that). An EMPTY value is the unset default, v8, by the same rule
+// as omitting the variable; only a named wrong selector is a typo to refuse.
+// v10 is deliberately not modelled: it is the source-only retail builder with
+// no registered contract, so no harness pool can form on it.
+if (!["v8", "v9", "v11"].includes(HARNESS_LEDGER)) {
+  throw new Error(`formationCrashTest models v8, v9 and v11; TEGARA_HARNESS_LEDGER=${HARNESS_LEDGER} is not a modelled ledger`);
+}
 process.env.LEDGER = HARNESS_LEDGER;
+// THE EXPECTED CAPABILITIES PER SELECTOR, bound here EXPLICITLY and not read
+// back from the capability table (the check: a test that derives its
+// expected branch from the same function that controls the mock can never
+// see that function drift). The table is then ASSERTED against these.
+const LEDGER_EXPECT = { v8: { pared: false, e2: false }, v9: { pared: true, e2: false },
+  v11: { pared: true, e2: true } }[HARNESS_LEDGER];
+{
+  const S = require("./envStore.cjs");
+  // envStore's selectors read process.env.LEDGER per call (ledgerVersion() is
+  // a live read), so the pin above governs these answers
+  if (S.hasImmutablePool() !== LEDGER_EXPECT.pared || S.hasE2Records() !== LEDGER_EXPECT.e2) {
+    throw new Error(`the capability table answers (pared=${S.hasImmutablePool()}, e2=${S.hasE2Records()}) ` +
+      `for ${HARNESS_LEDGER}, but this suite expects (pared=${LEDGER_EXPECT.pared}, e2=${LEDGER_EXPECT.e2}); ` +
+      "the table drifted, and the pared fixtures and oracles below would follow the wrong shapes");
+  }
+}
+// CAPABILITY-CONSISTENT, not version-exact (the v11 adoption row's
+// generalization): the pared decision follows the suite's own expected table,
+// which the startup assertion above holds equal to the capability table, so
+// v9 and v11 both take the pared shapes and a table drift is loud instead of
+// silently re-routing the fixtures
+const PARED = LEDGER_EXPECT.pared;
 const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
 
 const seedLedger = () => ({
@@ -83,8 +121,8 @@ const writeSeed = () => {
   fs.rmSync(ENV_PATH, { force: true });
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(ENV_PATH,
-    `MNEMONIC=m\nIDENTITY_ID=${OP}\nCONTRACT_ID=${CONTRACT}\nCONTRACT_V8_ID=${CONTRACT}\n` +
-    `CONTRACT_V9_ID=${CONTRACT}\nFUNDER_ID=${F1}\nFUNDER2_ID=${F2}\n`);
+    `MNEMONIC=m\nIDENTITY_ID=${OP}\nCONTRACT_ID=${keyValue("v1")}\nCONTRACT_V8_ID=${keyValue("v8")}\n` +
+    `CONTRACT_V9_ID=${keyValue("v9")}\nCONTRACT_V11_ID=${keyValue("v11")}\nFUNDER_ID=${F1}\nFUNDER2_ID=${F2}\n`);
   fs.writeFileSync(LEDGER_PATH, JSON.stringify(seedLedger(), null, 1));
 };
 
@@ -241,6 +279,79 @@ const hasInFlightEvidence = () => fs.readdirSync(STATE_DIR).some((f) =>
   let threw = false;
   try { mock.validateReceiptProps({ ...good, allocationRows: "not-bytes" }); } catch { threw = true; }
   ok("mock schema rejects a raw-string allocationRows (the false-green case)", threw);
+
+  // THE TYPE SET follows the capability table (the v11 adoption row's mock
+  // awareness). THE EXPECTED BRANCH COMES FROM THIS SUITE'S OWN EXPECTED
+  // TABLE, never from the capability function that also controls the mock
+  // (the D5 check: a shared oracle lets both sides drift together);
+  // and the exercise goes through the mock's REAL query path, not only the
+  // exported helper, so a gate the query route stopped consulting fails here. What
+  // this establishes is the mock's TYPE-GATE membership on the selected
+  // ledger, as OBSERVED OUTCOMES of the query and create routes (a hardcoded
+  // per-type branch answering the same way would pass; the mutation evidence
+  // is the gate-not-consulted run, not this comment); schema equivalence with
+  // the real contract is contractV11Test's exact-diff pin, and each selector
+  // exercises its own EXPECTED row (v8 and v9 share the negative branch).
+  {
+    writeSeed();
+    const E2T = ["epochHeader", "platformAccrual", "transferReceipt", "receiptProofPart", "transferReservation"];
+    // the parent is synchronous, so the REAL query path runs in a child (the
+    // suite's own pattern for async mock exercises): one process queries every
+    // type through client.platform.documents.get and prints the per-type
+    // outcome as JSON
+    const probeScript = `
+      const mock = require(${JSON.stringify(path.join(__dirname, "formationMockDash.cjs"))});
+      const c = new mock.Client({});
+      const id = { getId: () => ({ toString: () => ${JSON.stringify(OP)} }) };
+      (async () => {
+        const out = {};
+        for (const t of ${JSON.stringify([...E2T, "pool"])}) {
+          try { await c.platform.documents.get("poolLedger." + t, {}); out[t] = null; }
+          catch (e) { out[t] = e.message; }
+        }
+        // the CREATE route consults the same gate: a refused name refuses
+        // here too, and a permitted E2 create proceeds past the type gate
+        // (no schema validator exists for E2 shapes in this mock, stated in
+        // the mock's own comment)
+        try { await c.platform.documents.create("poolLedger.epochHeader", id, { poolId: Buffer.alloc(32, 9), epochIndex: 0 }); out.createEpochHeader = null; }
+        catch (e) { out.createEpochHeader = e.message; }
+        console.log(JSON.stringify(out));
+      })().catch((e) => { console.error(e.message); process.exit(3); });`;
+    const probeEnv = { ...process.env, TEGARA_ENV_PATH: ENV_PATH, TEGARA_MOCK_LEDGER: LEDGER_PATH,
+      LEDGER: HARNESS_LEDGER, NETWORK: "regtest" };
+    const gateOut = JSON.parse(execFileSync("node", ["-e", probeScript], { env: probeEnv, encoding: "utf8" }).trim());
+    if (LEDGER_EXPECT.e2) {
+      ok("the mock's REAL query path serves all five E2 types on the e2 ledger this suite expects",
+        E2T.every((t) => gateOut[t] === null));
+    } else {
+      ok("the mock's REAL query path refuses every E2 type on a ledger this suite expects to lack them",
+        E2T.every((t) => /is not defined by the selected ledger's contract/.test(gateOut[t] || "")));
+    }
+    ok("the base pool type resolves on the selected ledger through the same query path",
+      gateOut.pool === null);
+    if (LEDGER_EXPECT.e2) {
+      ok("the CREATE route passes the type gate for an E2 type on the e2 ledger",
+        gateOut.createEpochHeader === null);
+    } else {
+      ok("the CREATE route refuses an E2 type as undefined on a non-e2 ledger",
+        /is not defined by the selected ledger's contract/.test(gateOut.createEpochHeader || ""));
+    }
+
+    // THE SEED'S KEY ROUTING: the active ledger's contract key carries the
+    // real id and every other version key carries a decoy, read back from
+    // the seed FILE itself, so wrong-key routing in a child mismatches the
+    // ledger and the oracles refuse instead of aliasing through
+    const seedText = fs.readFileSync(ENV_PATH, "utf8");
+    const keyOf = (k) => (seedText.match(new RegExp(`^${k}=(.*)$`, "m")) || [])[1];
+    const ACTIVE_KEY = { v8: "CONTRACT_V8_ID", v9: "CONTRACT_V9_ID", v11: "CONTRACT_V11_ID" }[HARNESS_LEDGER];
+    ok("the active ledger's key carries the ledger's contract id", keyOf(ACTIVE_KEY) === CONTRACT);
+    const allKeys = ["CONTRACT_ID", "CONTRACT_V8_ID", "CONTRACT_V9_ID", "CONTRACT_V11_ID"];
+    ok("every non-active version key carries a decoy that is not the active id",
+      allKeys.filter((k) => k !== ACTIVE_KEY)
+        .every((k) => keyOf(k) !== undefined && keyOf(k) !== CONTRACT));
+    ok("the four contract keys are PAIRWISE distinct (aliasing any two hides wrong-key routing)",
+      new Set(allKeys.map(keyOf)).size === allKeys.length);
+  }
   let okPass = true;
   try { mock.validateReceiptProps(good); } catch { okPass = false; }
   ok("mock schema accepts a well-formed receipt", okPass);

@@ -291,9 +291,12 @@ review actually did and where it kept pointing.
   proposal, demonstrated on a private test build, with no activation date. The standing
   rule is no real member principal until the rule activates publicly.
 - The first product scope is the direct tier only, two to eight members per pool. The
-  entry amount is therefore high, around 125 DASH per person at the smallest split of a
-  regular node, and leaving a pool is not something a member can do on demand. Neither
-  limit is softened by anything in this document.
+  entry amount is therefore high. The proposal's minimum for one share is 100 DASH and it
+  admits at most eight shares, and the head build's registration interface applied
+  both rules in every case sampled, so the smallest single contribution admitted to a regular
+  1000 DASH node is 100 DASH, with the other members carrying the rest; an equal split
+  across eight members is about 125 DASH each. Leaving a pool is not something a member
+  can do on demand. Neither limit is softened by anything in this document.
 - The member join and exit handover after a pool is live moves the accounting record
   only. It does not move value between the two members, and it cannot yet be completed
   across members holding unrelated keys. A member-signed value settlement is designed

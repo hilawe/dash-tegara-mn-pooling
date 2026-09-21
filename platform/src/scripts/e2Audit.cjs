@@ -68,7 +68,12 @@ const U32_MAX = 4294967295;
 const U64_MAX = 18446744073709551615n;
 // the schema amount ceiling: vector 4c pins 9007199254740992 as the first
 // REFUSED grossCredits value, so the ceiling is exactly MAX_SAFE_INTEGER
-const ENCODING_CEILING = 9007199254740991n;
+// the schema's credit ceiling, from the shared module rather than a literal here. This
+// consumer and the harness driver now take it from one place; clientContext still
+// declares its own copy of the same number for the credit rail's converter, which this
+// change does not touch, so "one home" describes these two consumers and not yet the
+// repository.
+const ENCODING_CEILING = require("./entitlementCalc.cjs").SCHEMA_CREDIT_CEILING;
 
 const refuse = (why) => { throw new Error(`e2Audit: ${why}; refusing`); };
 
@@ -267,25 +272,10 @@ const computeNormativeEpoch = ({ totalProcessingFees, totalDistributedStorageFee
   if (!Number.isSafeInteger(operatorFeeBps) || operatorFeeBps < 0 || operatorFeeBps > 10000) {
     refuse("operatorFeeBps must be an integer 0..10000");
   }
-  if (!Array.isArray(rows) || rows.length < 1 || rows.length > 8) {
-    refuse("the allocation rows must number 1..8 (the direct co-owner tier's bound)");
-  }
-  let bpsSum = 0;
-  const rowBps = [];
-  for (let i = 0; i < rows.length; i++) {
-    const rd = Object.getOwnPropertyDescriptor(rows, i);
-    if (!rd || !("value" in rd) || !rd.enumerable) {
-      refuse(`allocation row ${i} must be an own enumerable data element`);
-    }
-    const row = rd.value;
-    const bd = row && typeof row === "object" ? Object.getOwnPropertyDescriptor(row, "bps") : null;
-    if (!bd || !("value" in bd) || !Number.isSafeInteger(bd.value) || bd.value < 1 || bd.value > 10000) {
-      refuse("every allocation row needs an OWN integer bps 1..10000 (inherited or accessor members do not count)");
-    }
-    rowBps.push(bd.value);
-    bpsSum += bd.value;
-  }
-  if (bpsSum !== 10000) refuse(`the allocation bps sum ${bpsSum} is not exactly 10000`);
+  // BEFORE gross and fee, deliberately: a malformed allocation REFUSES rather than
+  // returning whichever encoding refusal the computation happened to reach first. The
+  // shape rule itself is shared with the writer's row source.
+  const rowBps = readAllocationBps(rows);
 
   const totalPayout = fees + storage + core; // exact and unbounded
   const G = (totalPayout * proposed) / blocks;
@@ -304,16 +294,14 @@ const computeNormativeEpoch = ({ totalProcessingFees, totalDistributedStorageFee
       G: String(G), fee: String(fee), D: null, owed: null, r: null };
   }
   const D = G - fee;
-  const owed = rowBps.map((bps) => (D * BigInt(bps)) / 10000n);
-  const over = owed.find((o) => o > ENCODING_CEILING);
-  if (over !== undefined) {
-    return { encodingRefused: { field: "amountCredits", value: String(over) },
+  const split = splitOwed({ distributableCredits: D, rowBps, encodingCeiling: ENCODING_CEILING });
+  if (split.encodingRefused !== null) {
+    return { encodingRefused: split.encodingRefused,
       G: String(G), fee: String(fee), D: String(D), owed: null, r: null };
   }
-  const r = D - owed.reduce((a, b) => a + b, 0n);
   return { encodingRefused: null, G: String(G), fee: String(fee), D: String(D),
-    owed: rowBps.map((bps, i) => ({ bps, amountCredits: String(owed[i]) })),
-    r: String(r) };
+    owed: rowBps.map((bps, i) => ({ bps, amountCredits: String(split.owed[i]) })),
+    r: String(split.remainder) };
 };
 
 // ---- the start-source resolution, ONE RESOLVED RESULT (a soundness-review finding) ----
@@ -865,12 +853,27 @@ const buildReport = ({ poolId, contractId, expectedChainId, startSource,
 // ============================================================================
 const envStore = require("./envStore.cjs");
 const { canonicalString } = require("./canonicalJson.cjs");
+// MIN_TRANSFER_AMOUNT_CREDITS is deliberately NOT imported here any more: the only
+// comparison against the pinned minimum moved into epochCarry.cjs with the rule that
+// makes it, and re-importing it would suggest this module still decides payability.
 const { openValidatedJournal, K } = require("./e2Journal.cjs");
 const receiptVerify = require("./e2ReceiptVerify.cjs");
 const { HEADER_KIND, RECEIPT_KIND, SUPERSESSION_KIND } = require("./e2CaptureRecord.cjs");
 const { checkReceiptAgainstPool } = require("./receiptPoolCheck.cjs");
 const formationCore = require("./formationCore.cjs");
 const { enumerateProved, plainDataSnapshot } = require("./e2ProvedQuery.cjs");
+// THE CARRY LAYER IS NOT IMPLEMENTED HERE. It lives in epochCarry.cjs. Before that
+// module the recursion executed only inside this loop, so the carry-capable writer the
+// multi-epoch driver needs would have been a SECOND implementation of it. TODAY THIS
+// MODULE IS THE ONLY CONSUMER: the writer still supplies pre-carry rows and is not
+// changed by the commit that made this extraction. The shared consumption is the
+// reason the module exists, not a state it has reached.
+const { emptyCarryState, advanceEpoch } = require("./epochCarry.cjs");
+// THE ALLOCATION SPLIT IS NOT IMPLEMENTED HERE EITHER. `splitOwed` is the same rule the
+// writer's carry-capable row source consumes, so the two cannot drift; it was living in
+// three places before that module, one of them under a comment saying its arithmetic
+// "mirrors" this one.
+const { readAllocationBps, splitOwed } = require("./entitlementCalc.cjs");
 
 const startKeyOf = (poolId) => `E2_START_EPOCH_${poolId.toUpperCase()}`;
 
@@ -1049,41 +1052,17 @@ const evaluateTransferExecution = async ({ receipt, parts, entitlementRow, accru
   if (!capture) {
     return { label: "REFUSED", reason: "no served receipt-capture record exists for the receipt (the capture IS the execution evidence)" };
   }
-  // THE VERIFIER RETURNS ITS VERDICT. This reads the STATUS of a
-  // value returned by a function it called directly, so there is no question of
-  // where a caught object came from: a refusal is evidence because the verifier
-  // SAID so in its return, and anything thrown is a fault that propagates. The
-  // pipeline is still read once into a local, which is the capture-once rule
-  // rather than a provenance defence.
-  const verifierDeps = deps.verifierDeps;
-  const receiptResult = await receiptVerify.verifyReceipt({ receipt, parts,
-    reservation: { status: "unserved" }, entitlementRow, incomeIdentity, chainIdPin,
-    deps: verifierDeps });
-  if (receiptResult.status === "refused") {
-    return { label: "REFUSED", reason: receiptResult.reason };
-  }
-  let basisOk;
-  try { basisOk = await deps.verifyCaptureBasis(capture, supersessions); }
-  catch (e) {
-    throw new Error(`the capture-basis adapter failed (${errText(e)}); an adapter fault is not evidence; refusing hard`);
-  }
-  if (typeof basisOk !== "boolean") {
-    throw new Error(`the capture-basis adapter returned a non-boolean (${show(basisOk)}); the adapter contract requires true or false; refusing hard`);
-  }
-  if (basisOk !== true) {
-    return { label: "REFUSED", reason: "no capture signature basis verifies (validity clause 1)" };
-  }
-  const captureResult = await receiptVerify.verifyCaptureRecord({ capture,
-    servedFor: { poolId: receipt.poolId, accrualId: receipt.accrualId },
-    chainIdPin, deps: verifierDeps });
-  if (captureResult.status === "refused") {
-    return { label: "REFUSED", reason: captureResult.reason };
-  }
-  const pairResult = receiptVerify.verifyCapturePair({ capture, receipt, receiptResult, captureResult });
-  if (pairResult.status === "refused") {
-    return { label: "REFUSED", reason: pairResult.reason };
-  }
-  return { label: "CAPTURE-VERIFIED", captureValid: true };
+  // THE COMPOSITION IS THE VERIFIER'S OWN (the per-epoch context design, section 6):
+  // `verifyTransferExecution` is the one path in the repository that produces
+  // CAPTURE-VERIFIED, shared with the forward orchestrator so the two consumers cannot
+  // drift in capture, reservation or identity semantics. The reservation is passed
+  // UNSERVED here on purpose, keeping the reservation aspect separate. It reads the
+  // STATUS of a value returned by a function it called directly: a refusal is evidence
+  // because the verifier SAID so in its return, and anything thrown is a fault that
+  // propagates.
+  return receiptVerify.verifyTransferExecution({ receipt, parts, reservation: { status: "unserved" },
+    capture, supersessions, entitlementRow, incomeIdentity, chainIdPin,
+    deps: { verifierDeps: deps.verifierDeps, verifyCaptureBasis: deps.verifyCaptureBasis } });
 };
 
 /**
@@ -1831,6 +1810,40 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
   if (!formation || formation.label !== "PROVED") {
     return unavailable("the expected sets cannot be recomputed without proved formation inputs");
   }
+  // THE CARRY RECURSION'S SEED REFERENCE IS THE UNIVERSE START (the D8
+  // carry unit, amended by its closing wave's convergent part B
+  // finding). An interval starting past the universe start cannot
+  // seed the per-member carry-in state, so each of its UNIVERSE epochs'
+  // ENTIRE forward evaluation goes UNPROVED with the reason named, fail
+  // closed. That skip includes the per-epoch non-expected-accrual sweep,
+  // NECESSARILY: which accruals are excluded is itself a payability
+  // question, and payability needs the effective amounts the seed gap
+  // withholds. What keeps running is the machinery OUTSIDE the forward
+  // loop: prefix validation, the pool-global reverse record
+  // classification, extras, orphans, and the structural sweeps (the
+  // confirmation narrowed this claim to that exact width). The
+  // lag of such a run is correspondingly partial, which the coverage
+  // flags already grade PARTIAL BY SCOPE.
+  // seeded purely by the START comparison (the carry screen's F1: an
+  // endEpoch clause would read differently for open-ended intervals,
+  // and the start is the only thing seeding depends on). THE SEED
+  // REFERENCE IS THE UNIVERSE START, normative since the closing wave's
+  // convergent part B finding (both outside families). The universe
+  // start (proved activation when one exists, the configured start
+  // until then) is the recursion's base epoch for the record, where
+  // carry-in is zero by construction whatever the record holds, and in
+  // the lateConfiguredStart corner (configured start past activation)
+  // this comparison fails closed, refusing to choose a base for epochs
+  // outside the writer's claims
+  const carrySeeded = !(resolution.universe
+    && resolution.interval.startEpoch > resolution.universe.start);
+  // per-member carry-in state, threaded ascending through the universe
+  // epochs (the interval iterates ascending and, when seeded, begins at
+  // or before the universe's first epoch). REASSIGNED rather than mutated:
+  // advanceEpoch returns the next state as a fresh Map on every path, so the
+  // pass-through is a value this loop carries forward and not a branch it has
+  // to remember not to touch
+  let carryInState = emptyCarryState();
   const rows = formation.rows;
   const feeBps = formation.pool.operatorFeeBps;
 
@@ -1931,34 +1944,91 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
       continue;
     }
 
-    // a universe epoch: recompute, then compare the fetched sets
+    // a universe epoch: recompute, then compare the fetched sets. An
+    // UNSEEDED interval cannot recompute effective entitlements for ANY
+    // universe epoch (the carry gate above), so the forward evaluation
+    // is UNPROVED with the reason named rather than computed over an
+    // unknown carry-in
+    if (!carrySeeded) {
+      epochLabels.push("UNPROVED");
+      rowOut.diagnostics.push("the carry seeding compares the interval start to the universe start (proved activation when one exists, the configured start until then). An interval starting past it cannot recompute this epoch's effective entitlements");
+      rowOut.r = null;
+      perEpoch.set(epochIndex, rowOut);
+      recordSetLabels.push(...epochLabels);
+      continue;
+    }
     const normative = computeNormativeEpoch({
       totalProcessingFees: epochObject.totalProcessingFees,
       totalDistributedStorageFees: epochObject.totalDistributedStorageFees,
       coreBlockRewards: epochObject.coreBlockRewards,
       totalBlocks: epochObject.totalBlocks, proposedCount: epochObject.proposedCount,
       operatorFeeBps: feeBps, rows });
-    if (normative.encodingRefused !== null) {
+    // THE CARRY LAYER, one call for both refusal shapes and the encoding step.
+    // IDENTITY NORMALIZATION STAYS HERE, because it is this module's adapter
+    // concern: the carry module takes an already-normalized key and an explicit
+    // self-share answer, so it never depends on a decoding layer it cannot check.
+    // An owedRefused epoch has no owed values to read, so the members carry none.
+    const owedRefused = normative.encodingRefused !== null;
+    // THE OWED VECTOR AND THE ROWS ARE ONE LENGTH, asserted rather than assumed. It
+    // holds by construction, since computeNormativeEpoch derives its bps vector from
+    // THIS rows array, but the old inline code coupled its iteration to `owed` while
+    // this one couples it to `rows`, so an owed vector longer than the rows used to
+    // stop with an exception and would now be silently ignored. One line keeps that
+    // an error rather than a quiet difference in what got evaluated.
+    //
+    // IT CHECKS LENGTH, NOT IDENTITY. The correspondence between owed entry i and row i
+    // is POSITIONAL and stays an assumption about computeNormativeEpoch's output order,
+    // exactly as it was for the inline code: an owed vector holding the right amounts in
+    // the wrong order passes this and misassigns every one of them. Nothing in the owed
+    // vector names a member, so there is nothing here to compare identities against.
+    if (!owedRefused && (!Array.isArray(normative.owed) || normative.owed.length !== rows.length)) {
+      refuse(`the normative owed vector is ${Array.isArray(normative.owed) ? `${normative.owed.length} entries for ${rows.length} allocation rows` : "absent while the calculation reports no refusal"}; the recomputation and the row set are read positionally and must be the same length`);
+    }
+    const carryStep = advanceEpoch({
+      carryIn: carryInState,
+      encodingCeiling: ENCODING_CEILING,
+      owedRefused,
+      members: rows.map((row, i) => ({
+        key: nid(row.funderId),
+        isSelfShare: sameId(row.funderId, incomeIdentity),
+        ...(owedRefused ? {} : { owedCredits: BigInt(normative.owed[i].amountCredits) }),
+      })),
+    });
+    // the next epoch begins from this state on EVERY path. On both refusing
+    // paths it equals the state this epoch began from, which is the carry
+    // layer's pass-through rule: an encoding-refused epoch drops its own owed
+    // values and its custody ends at the header, but a deferral arriving from
+    // an earlier epoch survives it rather than vanishing
+    carryInState = carryStep.carryOut;
+    if (carryStep.kind === "encoding-refused") {
       rowOut.condition = "encoding-refused";
       rowOut.r = null;
-
       // the writer refuses BEFORE the header, so the epoch expects NO
       // records; any fetched record under it is a mismatch
       if (headersByEpoch.has(epochIndex) || (accrualsByEpoch.get(epochIndex) || []).length) {
         epochLabels.push("REFUSED");
-        rowOut.diagnostics.push("records exist under an encoding-refused epoch");
+        rowOut.diagnostics.push(carryStep.refusedBy === "effective"
+          ? "records exist under an encoding-refused epoch (the effective amount exceeds the ceiling)"
+          : "records exist under an encoding-refused epoch");
       }
       perEpoch.set(epochIndex, rowOut);
       recordSetLabels.push(...(epochLabels.length ? epochLabels : ["READ-CHECKED"]));
       continue; // the named condition is conformant, never counted lagging
     }
+    const effective = carryStep.effective;
     rowOut.r = normative.r;
-    const positiveRows = [];
-    normative.owed.forEach((o, i) => {
-      if (BigInt(o.amountCredits) > 0n) positiveRows.push({ ...rows[i], amountCredits: o.amountCredits });
-    });
+    // the PAYABILITY partition (step 5's exclusions): the walk below
+    // examines exactly the PAYABLE positive effective entitlements; a
+    // self-share settles where it sits and a below-minimum entitlement
+    // carries, both excluded from the expected receipt set, their
+    // conformance being that NO transfer records exist under them (the
+    // non-expected sweep after the walk). The partition is the carry
+    // module's `payable`, not a second derivation of the same three-way rule
+    const positiveRows = rows
+      .map((row, i) => ({ ...row, amountCredits: String(effective[i]) }))
+      .filter((_row, i) => carryStep.payable[i]);
     if (BigInt(normative.G) === 0n) rowOut.condition = "zero-earning-epoch";
-    else if (positiveRows.length === 0) rowOut.condition = "zero-entitlement";
+    else if (effective.every((v) => v <= 0n)) rowOut.condition = "zero-entitlement";
 
     // FORWARD: the header, present with every compared field equal
     let header = headersByEpoch.get(epochIndex);
@@ -1989,7 +2059,8 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
 
     // FORWARD: the accrual set, exactly the recomputation's
     const fetchedAccruals = accrualsByEpoch.get(epochIndex) || [];
-    const expectedByFunder = new Map(normative.owed.map((o, i) => [nid(rows[i].funderId), o.amountCredits]));
+    // the accrual set carries EFFECTIVE amounts (the carry layer's rule)
+    const expectedByFunder = new Map(effective.map((v, i) => [nid(rows[i].funderId), String(v)]));
     const seenFunders = new Set();
     const accrualFor = new Map();
     for (const a of fetchedAccruals) {
@@ -2300,10 +2371,14 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
     if (receiptRows.length !== positiveRows.length) {
       throw new Error(`e2Audit: epoch ${epochIndex} appended ${receiptRows.length} receipt rows for ${positiveRows.length} positive rows (a row appended none and no later append revealed it); refusing hard`);
     }
-    // records under NON-POSITIVE accruals are fetched extras: a zero
-    // entitlement has no reservation, receipt or part (the review
-    // zero-accrual gap). The sweep covers EVERY known accrual of the
-    // epoch, enumerated AND known-key fallbacks alike (the review gap)
+    // records under accruals OUTSIDE the expected receipt set are fetched
+    // extras: a zero entitlement, a SELF-SHARE (settled without a
+    // transfer) and a BELOW-MINIMUM entitlement (carried) all have no
+    // reservation, receipt or part, and machinery under one keeps the
+    // epoch incomplete (the stuck-machinery accounting's audit half; the
+    // D8 carry unit widened the pre-carry zero-only sweep). The sweep
+    // covers EVERY known accrual of the epoch, enumerated AND known-key
+    // fallbacks alike (the review gap)
     const positiveAccrualIds = new Set(positiveRows
       .map((row) => nid((accrualFor.get(nid(row.funderId)) || {}).id)));
     for (const a of accrualFor.values()) {
@@ -2313,7 +2388,7 @@ const evaluateLedgerRecords = async ({ poolId, contractId, resolution, epochInfo
         || (receiptsByAccrual.get(aid) || []).length
         || (partsByAccrual.get(aid) || []).length) {
         epochLabels.push("REFUSED");
-        rowOut.diagnostics.push(`transfer records exist under zero-entitlement accrual ${String(a.id).slice(0, 8)}... (a fetched extra)`);
+        rowOut.diagnostics.push(`transfer records exist under accrual ${String(a.id).slice(0, 8)}..., which is outside the expected receipt set (zero, self-share or below-minimum; a fetched extra)`);
         epochComplete = false;
       }
     }
@@ -2618,14 +2693,20 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
         source: source.source },
       deactivationBoundary: branch === "deactivation-bounded"
         ? { evaluated: true, label: "PROVED" } : { evaluated: false },
-      binding: { evaluated: true, label: "UNVERIFIABLE" },
+      // the four pinned aspects NAME their open dependency in the report
+      // itself (the D8-completion unit; the 27j plan's "says so"), so a
+      // reader of the report never has to consult the specification to
+      // learn why an aspect cannot evaluate
+      binding: { evaluated: true, label: "UNVERIFIABLE",
+        note: "pending gate G4, the verified evolution-pool-to-node binding" },
       transferExecution: { evaluated: true, label: ledger.aggregates.transferExecution,
         examinedCount: ledger.receiptEvaluations.length,
         ...(vacuousNote ? { note: vacuousNote } : {}) },
       reservationPresence: { evaluated: true, label: ledger.aggregates.reservationPresence,
         examinedCount: ledger.receiptEvaluations.length,
         ...(vacuousNote ? { note: vacuousNote } : {}) },
-      temporalOrder: { evaluated: true, label: "UNVERIFIABLE" },
+      temporalOrder: { evaluated: true, label: "UNVERIFIABLE",
+        note: "pending authenticated execution evidence for reservations (C3's machinery generalized)" },
       ordering: { evaluated: true, label: ledger.aggregates.ordering,
         examinedCount: ledger.receiptEvaluations.length,
         ...(vacuousNote ? { note: vacuousNote } : {}) },
@@ -2633,8 +2714,10 @@ const runAudit = async ({ poolId, dir, startEpoch = null, endEpoch = null, deps 
         ...(formation.reason ? { note: formation.reason } : {}) },
       recordSet: { evaluated: true, label: ledger.recordSet.label,
         ...(ledger.recordSet.reason ? { note: ledger.recordSet.reason } : {}) },
-      shareConformance: { evaluated: true, label: "UNVERIFIABLE" },
-      balance: { evaluated: true, label: "UNVERIFIABLE" },
+      shareConformance: { evaluated: true, label: "UNVERIFIABLE",
+        note: "pending the historical reward-share query and its effective-selection rule" },
+      balance: { evaluated: true, label: "UNVERIFIABLE",
+        note: "pending a pinned proved balance-checkpoint interface (query, verifier, endpoints, acceptance predicate)" },
       contractIntegrity: { evaluated: true, label: contractIntegrity.label,
         ...(contractIntegrity.reason ? { note: contractIntegrity.reason } : {}) },
     };

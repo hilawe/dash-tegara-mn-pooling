@@ -58,6 +58,29 @@ const journalPath = (poolId, dir) => {
   if (!POOL_RE.test(poolId)) refuse(`poolId ${JSON.stringify(poolId)} is not 64 lowercase hex`);
   return path.join(dir || STATE_DIR, `e2-journal-${poolId}.jsonl`);
 };
+
+/**
+ * THE PROBE STORE, which is where a battery or rehearsal run puts journals it mints for
+ * synthetic pools (a soundness-review finding).
+ *
+ * WHY THIS IS A FUNCTION AND NOT A STRING IN THE CALLER. The capture battery mints a
+ * FRESH RANDOM pool per run and used to journal it into the live admission store, so
+ * every run left one more journal there that nothing could resolve. Nine accumulated,
+ * and the live driver quantified their obligations as zero by assuming they were debris.
+ * Moving them out was cleanup. The separation is that probe output has a home that is
+ * NOT the live store, and that this is checkable rather than remembered.
+ *
+ * IT REFUSES TO EQUAL THE LIVE STORE. That guard is not decoration: `STATE_DIR` follows
+ * `TEGARA_ENV_PATH`, so a future change to how the store path is derived could collapse
+ * the two, and the failure would be silent probe journals in the live inventory again.
+ */
+const probeStoreDir = () => {
+  const d = `${STATE_DIR}.battery-probes`;
+  if (path.resolve(d) === path.resolve(STATE_DIR)) {
+    refuse("the probe store resolves to the live store, so probe journals would land in the live admission inventory");
+  }
+  return d;
+};
 const boundaryPath = (poolId, dir) => `${journalPath(poolId, dir)}`.replace(/\.jsonl$/, ".boundary");
 const boundaryTmpPath = (poolId, dir) => `${boundaryPath(poolId, dir)}.tmp`;
 
@@ -225,5 +248,5 @@ const appendRecord = (poolId, committedOffset, payloadObj, dir) => {
 
 module.exports = {
   journalPath, boundaryPath, encodeFrame, walkFrames, encodeBoundary, parseBoundary,
-  openJournal, appendRecord, BOUNDARY_KIND,
+  openJournal, appendRecord, BOUNDARY_KIND, probeStoreDir,
 };

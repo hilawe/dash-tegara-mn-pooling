@@ -4,8 +4,12 @@
 # and the regenerated gateway cert (with IP SANs) validates via the mounted dashmate CA.
 FROM node:20-bookworm-slim
 WORKDIR /app
-COPY package.json tsconfig.json ./
-RUN npm install --no-audit --no-fund
+# the LOCK FILE rides along and npm ci installs exactly it: npm install
+# over package.json alone let the image resolve transitive versions the
+# host never saw, which is how dapi-grpc drifted 4.0.0 to 4.1.1 between
+# rebuilds
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci --no-audit --no-fund
 COPY src ./src
 RUN npx tsc
 CMD ["node", "src/scripts/ping.cjs"]

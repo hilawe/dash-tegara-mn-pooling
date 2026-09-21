@@ -1,0 +1,37 @@
+{
+  "kind": "tegara.e2.forwardTransportProfile.v2",
+  "subject": "AN EXAMPLE, NOT A RUN TARGET: the shape of the separate early-stop profile of design section 7, for a run whose target epoch 0 is REFUSED by the kernel in generation 0 (a served header disagreeing with the plan) and which therefore stops by name after generation 0; only such a profile, naming the generation, the code and the epoch, may accept the generation prefix [0]",
+  "required": {
+    "allReadsVerified": true,
+    "headerServedOne": true,
+    "enumerationMatchesMemberCount": true,
+    "oldClauseRefusedWithIndexError": true,
+    "plannedEqualsServed": true,
+    "compositionState": "refused",
+    "compositionReasons": [
+      "REFUSED_HEADER_MISMATCH"
+    ],
+    "heightSpanMax": 5,
+    "sweepAgainstAbsentEmpty": true,
+    "planBuiltBeforeAnyRead": true,
+    "planFiguresSource": "journaled-header",
+    "planHeaderEqualsFormation": true,
+    "selfShareDerived": true,
+    "identifiersCanonical": true,
+    "verdictOwner": "shared-verifier",
+    "universe": [
+      0,
+      1
+    ],
+    "refreshCountMax": 3,
+    "generationSequence": [
+      0
+    ],
+    "earlyStop": {
+      "afterGeneration": 0,
+      "code": "REFUSED_EPOCH_IN_SNAPSHOT",
+      "epochIndex": 0
+    }
+  },
+  "optional": {}
+}

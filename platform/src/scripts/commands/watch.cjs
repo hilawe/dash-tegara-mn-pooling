@@ -2,7 +2,8 @@ module.exports = async (ctx) => {
   const { client, env, args, cmd, who, whoIdKey, DASHfmt, short, Identifier, Dash, fetchAll,
     loadEnv, updateEnvKey, activeContractId, activeCastId, isV3, isV5, journal, journalContract,
     getPool, myShares, myRequests, isMyAccrual, myAccruals, requestExists, earnedRewardsBig,
-    autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep } = ctx;
+    autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep,
+    hasE2Records, myPlatformAccruals, creditsBig } = ctx;
   const myId = ctx.myId;
       // G8: the member-side notifier, self-custody version of CrowdNode's emails. One
       // cycle diffs the member's own view of the ledger against a local watermark and
@@ -20,11 +21,17 @@ module.exports = async (ctx) => {
       // records the ids AT the newest timestamp so documents sharing a creation time are
       // never re-reported or missed (independent-review finding); snapshot cursors are
       // per pool so one pool's failed query cannot eat another's events.
+      const isCursor = (c) => c && typeof c === "object" && !Array.isArray(c)
+        && Number.isFinite(c.at) && Array.isArray(c.ids) && c.ids.every((x) => typeof x === "string");
       const validWatermark = (w) => {
-        const isCursor = (c) => c && typeof c === "object" && !Array.isArray(c)
-          && Number.isFinite(c.at) && Array.isArray(c.ids) && c.ids.every((x) => typeof x === "string");
         const isStrMap = (m, valOk) => m && typeof m === "object" && !Array.isArray(m)
           && Object.values(m).every(valOk);
+        // w.platform, the CREDIT RAIL's own cursor, is deliberately NOT part
+        // of overall validity: the old validator ignored unknown members, so
+        // a pre-existing foreign `platform` value must not invalidate the
+        // WHOLE watermark and silently re-baseline the legacy rails (the rail
+        // round's checker named that regression). The platform rail itself
+        // treats anything that is not a cursor as its own fresh baseline.
         return w && typeof w === "object" && !Array.isArray(w) && w.v === 2
           && isCursor(w.accruals)
           && isStrMap(w.requests, (v) => typeof v === "string")
@@ -71,6 +78,39 @@ module.exports = async (ctx) => {
           }
           alerts.push(`${acc.fresh.length} new accrual(s): +${DASHfmt(newRewards)} DASH rewards` +
             (newPrincipal > 0n ? ` and +${DASHfmt(newPrincipal)} DASH returned principal` : ""));
+        }
+
+        // 1b. new platform-credit accruals (mine), the CREDIT RAIL: its own
+        // cursor, its own alert, amounts in CREDITS through creditsBig, never
+        // in the DASH alert above. Anything at w.platform that is not a
+        // cursor (older watermark, foreign value) makes this the rail's own
+        // baseline cycle, and a rail-only baseline SAYS what it skipped
+        // rather than skipping silently. A failed platform read is contained:
+        // it reports, keeps the stored cursor untouched, and never eats the
+        // legacy alerts above (the snaps sections' own containment rule).
+        let platNext = base.platform;
+        if (hasE2Records()) {
+          try {
+            const platMine = await myPlatformAccruals();
+            const platCursor = isCursor(base.platform) ? base.platform : undefined;
+            const plat = beyondCursor(platMine, platCursor || { at: 0, ids: [] });
+            platNext = plat.next;
+            if (platCursor === undefined) {
+              if (!first && platMine.length > 0) {
+                alerts.push(`platform rail baselined: ${platMine.length} existing platform accrual(s) ` +
+                  "recorded without notification (changes report from the next cycle)");
+              }
+            } else if (plat.fresh.length > 0) {
+              let newCredits = 0n;
+              for (const d of plat.fresh) newCredits += creditsBig(d.toObject().amountCredits);
+              alerts.push(`${plat.fresh.length} new platform accrual(s): +${newCredits} credits ` +
+                "(the credit rail, separate from DASH rewards)");
+            }
+          } catch (e) {
+            alerts.push(`platform watch unavailable (${(e && e.message) || e}); ` +
+              "the platform cursor does not advance");
+            platNext = base.platform; // a failed read must NOT advance this rail's cursor
+          }
         }
 
         // 2. request status changes. An unseen PENDING request is my own fresh
@@ -200,6 +240,7 @@ module.exports = async (ctx) => {
         else for (const a of alerts) console.log(`[${stamp}] ${a}`);
         updateEnvKey(watchKeyOf(), JSON.stringify({
           v: 2, accruals: acc.next, requests: curReqs, shares: curShares, snaps: nextSnaps,
+          ...(platNext !== undefined ? { platform: platNext } : {}),
         }));
       };
 

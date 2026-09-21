@@ -2,7 +2,8 @@ module.exports = async (ctx) => {
   const { client, env, args, cmd, who, whoIdKey, DASHfmt, short, Identifier, Dash, fetchAll,
     updateEnvKey, activeContractId, activeCastId, isV3, isV5, journal, journalContract,
     getPool, myShares, myRequests, isMyAccrual, myAccruals, requestExists, earnedRewardsBig,
-    autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep } = ctx;
+    autopayKeyOf, watchKeyOf, depositOwnFunds, runAutopaySweep,
+    hasE2Records, myPlatformAccruals, creditsBig } = ctx;
   const myId = ctx.myId;
       const identity = await client.platform.identities.get(myId);
       console.log(`${who} ${myId}`);
@@ -57,5 +58,24 @@ module.exports = async (ctx) => {
         .reduce((s, d) => s + Number(d.toObject().amountDuffs), 0);
       console.log(`\nearnings: ${accruals.length} accruals, ${DASHfmt(earned)} DASH earned` +
         (returned > 0 ? ` plus ${DASHfmt(returned)} DASH returned principal` : "") + ` (see "earnings")`);
+
+      // the credit rail's one summary line, separate and in CREDITS (the v11
+      // rail decision); no DASH conversion, because a converted figure invites
+      // exactly the cross-rail summation the decision forbids
+      if (hasE2Records()) try {
+        const plats = await myPlatformAccruals();
+        if (plats.length > 0) {
+          let credits = 0n;
+          for (const d of plats) credits += creditsBig(d.toObject().amountCredits);
+          console.log(`platform income: ${credits} credits across ${plats.length} accrual(s) ` +
+            `(the credit rail, separate from the DASH figures above; see "earnings")`);
+        }
+      } catch (e) {
+        // contained and loud, the earnings command's rule: the DASH sections
+        // above already printed, so the failure marks the output partial
+        console.error(`platform income UNAVAILABLE (${(e && e.message) || e}); ` +
+          "the DASH figures above stand, this output is PARTIAL");
+        process.exitCode = 1;
+      }
       return;
 };

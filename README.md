@@ -8,17 +8,6 @@ Tegara is a research prototype. It runs against a local Dash Platform developmen
 touches no real funds. It is published so the non-custodial pooling design space stays open and
 reproducible for the Dash ecosystem.
 
-## Notes for other implementers
-
-Two standalone notes for teams building the same kind of service, written so that independent
-implementations converge on the same properties rather than each rediscovering the same limits.
-
-- [Requirements](docs/POOLED_MASTERNODE_REQUIREMENTS.md). What a finished non-custodial pooled
-  masternode service must do: the hard constraints, the trust invariant, and six testable
-  properties.
-- [Lessons](docs/POOLED_MASTERNODE_LESSONS.md). What we found along the way: chain and platform
-  facts that shape the design space, constructions that do not hold, and what is still unsolved.
-
 ## The design in one paragraph
 
 Layer 1 (the Dash payment chain) holds principal custody. The fully trustless form depends on the

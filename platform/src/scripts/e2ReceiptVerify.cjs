@@ -572,6 +572,87 @@ const verifyCaptureRecord = settleAsync(verifyCaptureRecordInner);
 const verifyReceiptWithCapture = settleAsync(verifyReceiptWithCaptureInner);
 const verifyCapturePair = settleSync(verifyCapturePairInner);
 
+/**
+ * THE ONE TRANSFER-EXECUTION COMPOSITION, owned here (the per-epoch context design,
+ * section 6; a soundness-review finding, a soundness-review finding): the audit's per-receipt transfer aspect delegates to it,
+ * and the forward orchestrator's closure (step 4 of that design) is to inject it. The
+ * width of "the one path" is exactly what the verifier test's PRODUCER SWEEP checks at
+ * each commit, and no wider: among the .cjs and .mjs modules in src/scripts that are
+ * not tests, the LITERAL spelling of the label is written only in this file and in
+ * the transport runner's labeled constant verdict. A label assembled from pieces, or
+ * emitted from a file outside that filter, would not be seen by the sweep; the
+ * repository-access review is the instrument for that. Two consumers of one function
+ * cannot drift in the capture, reservation or identity semantics the function applies;
+ * what each passes in is each caller's own obligation.
+ *
+ *   verifyTransferExecution({ receipt, parts, reservation, capture, supersessions,
+ *                             entitlementRow, incomeIdentity, chainIdPin, deps })
+ *     -> { label: "CAPTURE-VERIFIED", verifiedAmountCredits, captureValid: true }
+ *      | { label: "REFUSED", reason }
+ *
+ * `receipt` and `parts` are the served documents; `reservation` is the three-way answer
+ * verifyReceipt already specifies (the audit passes an unserved one, keeping the
+ * reservation aspect separate; the forward path passes the pinned answer normalized);
+ * `capture` is the journaled capture record or null (the capture IS the execution
+ * evidence, so null refuses); `supersessions` the capture's supersession list for the
+ * basis check; `deps` is { verifierDeps, verifyCaptureBasis }, exactly the audit's two.
+ * verifiedAmountCredits is the entitlement row's amount, which verifyReceipt has
+ * established equals the decoded transfer's. FAULTS PROPAGATE: a missing dependency, an
+ * adapter throw or a non-boolean basis is a caller fault and never a verdict, in the
+ * audit's own words. The RELATIONAL checks (the receipt naming its accrual, the accrual
+ * its header) are NOT here: the audit makes them before calling, the kernel makes them
+ * itself on the forward path.
+ */
+const verifyTransferExecution = async ({ receipt, parts, reservation, capture, supersessions = [],
+  entitlementRow, incomeIdentity, chainIdPin, deps }) => {
+  if (!deps || typeof deps !== "object") {
+    throw new Error("e2ReceiptVerify: verifyTransferExecution needs deps { verifierDeps, verifyCaptureBasis }; a missing dependency is a caller fault, never evidence about the record; refusing hard");
+  }
+  if (!deps.verifierDeps || typeof deps.verifierDeps !== "object") {
+    throw new Error("e2ReceiptVerify: deps.verifierDeps is absent; a missing dependency is a caller fault, never evidence about the record; refusing hard");
+  }
+  if (typeof deps.verifyCaptureBasis !== "function") {
+    throw new Error("e2ReceiptVerify: deps.verifyCaptureBasis is absent or not a function; a missing dependency is a caller fault, never evidence about the record; refusing hard");
+  }
+  if (!capture) {
+    return { label: "REFUSED", reason: "no served receipt-capture record exists for the receipt (the capture IS the execution evidence)" };
+  }
+  const receiptResult = await verifyReceipt({ receipt, parts, reservation, entitlementRow,
+    incomeIdentity, chainIdPin, deps: deps.verifierDeps });
+  if (receiptResult.status === "refused") {
+    return { label: "REFUSED", reason: receiptResult.reason };
+  }
+  // a thrown value may carry no prototype or an unreadable message, so its text
+  // is read defensively (the audit's own rule): the fault is reported as a clean
+  // Error and never as an escaping raw TypeError
+  const textOf = (v) => {
+    try { const m = v && v.message; if (typeof m === "string") return m; } catch { /* fall through */ }
+    try { return String(v); } catch { return "(an unreadable value)"; }
+  };
+  let basisOk;
+  try { basisOk = await deps.verifyCaptureBasis(capture, supersessions); }
+  catch (e) {
+    throw new Error(`the capture-basis adapter failed (${textOf(e)}); an adapter fault is not evidence; refusing hard`);
+  }
+  if (typeof basisOk !== "boolean") {
+    throw new Error(`the capture-basis adapter returned a non-boolean (${textOf(basisOk)}); the adapter contract requires true or false; refusing hard`);
+  }
+  if (basisOk !== true) {
+    return { label: "REFUSED", reason: "no capture signature basis verifies (validity clause 1)" };
+  }
+  const captureResult = await verifyCaptureRecord({ capture,
+    servedFor: { poolId: receipt.poolId, accrualId: receipt.accrualId },
+    chainIdPin, deps: deps.verifierDeps });
+  if (captureResult.status === "refused") {
+    return { label: "REFUSED", reason: captureResult.reason };
+  }
+  const pairResult = verifyCapturePair({ capture, receipt, receiptResult, captureResult });
+  if (pairResult.status === "refused") {
+    return { label: "REFUSED", reason: pairResult.reason };
+  }
+  return { label: "CAPTURE-VERIFIED", verifiedAmountCredits: String(entitlementRow.amountCredits), captureValid: true };
+};
+
 // THE PUBLIC SURFACE IS THE FOUR ENTRIES THAT RETURN VERDICTS, plus the pinned
 // constants a caller needs to interpret one.
 //
@@ -586,6 +667,7 @@ const verifyCapturePair = settleSync(verifyCapturePairInner);
 module.exports = {
   PART_BOUND_B, ROUTE_REGISTRY, PROTOCOL_VERSION_PIN,
   verifyReceipt, verifyCaptureRecord, verifyCapturePair, verifyReceiptWithCapture,
+  verifyTransferExecution,
   // assertCanonicalSplit is NOT here: it is used internally and no suite drives
   // it directly, so exporting it defended a contract for nobody
   __testing: { reassembleProof, verifyCarrierConformance },

@@ -50,6 +50,16 @@ const {
 } = require("./e2CaptureRecord.cjs");
 const { openJournal } = require("./e2JournalStore.cjs");
 
+// THE PINNED MINIMUM TRANSFER AMOUNT (a soundness-review finding): consensus refuses any
+// identity credit transfer below this at basic structure validation, read
+// at the pinned Platform commit 37ea011c87, rs-drive-abci's
+// identity_credit_transfer structure/v0 (`MIN_TRANSFER_AMOUNT`); the same
+// file refuses sender-equals-recipient FIRST (a soundness-review finding). It lives in this
+// module because the record-format validator enforces the
+// transfer-below-minimum declaration's payload against it; the writer
+// imports it from here. A pin, never configurable.
+const MIN_TRANSFER_AMOUNT_CREDITS = 100000n;
+
 const K = {
   WRITE_AHEAD: "tegara.e2.journal.writeAhead.v1",
   SENT_MARKER: "tegara.e2.journal.sentMarker.v1",
@@ -99,7 +109,8 @@ const ACTIONS = {
   "record-write-unresolved": ["keep-waiting", "stop"],
 };
 const DECISION_CONDITIONS = Object.keys(ACTIONS);
-const DECLARATION_CONDITIONS = ["receipt-unencodable", "transfer-unencodable", "encoding-refused",
+const DECLARATION_CONDITIONS = ["receipt-unencodable", "transfer-unencodable",
+  "self-share-settled", "transfer-below-minimum", "encoding-refused",
   "zero-entitlement", "zero-earning-epoch", "lag-measurement"];
 const CONDITION_OBJECT = {
   "header-refused": "header", "header-unresolved": "header", "header-foreign": "header",
@@ -110,6 +121,7 @@ const CONDITION_OBJECT = {
   "observation-unresolved": "transfer",
   "record-write-refused": null, "record-write-unresolved": null,
   "receipt-unencodable": "accrual", "transfer-unencodable": "accrual",
+  "self-share-settled": "accrual", "transfer-below-minimum": "accrual",
   "encoding-refused": "epoch", "zero-entitlement": "epoch", "zero-earning-epoch": "epoch",
   "lag-measurement": "pool",
 };
@@ -266,10 +278,19 @@ const validateJournalRecord = (r, i, poolId, isFirstRecord, seenFirstHeaderWA) =
       if (DECLARATION_CONDITIONS.includes(cond)) {
         if (cond === "lag-measurement") {
           extra = ["reasoning", "lagCount", "undistributedCredits"];
+          // carriedCredits reports the below-minimum value the payable sum
+          // excludes (a soundness-review finding). OPTIONAL because pre-correction
+          // journals hold measurements without it; the corrected writer
+          // always writes it, and the MONOTONIC rule below makes it
+          // required on every measurement after the journal's first one
+          // that carries it.
+          if ("carriedCredits" in r) extra.push("carriedCredits");
           if (isFirstRecord) extra.push("configuredStartEpoch");
         } else if (cond === "encoding-refused") extra = ["reasoning", "field", "value"];
         else if (cond === "receipt-unencodable") extra = ["reasoning", "proofLength"];
         else if (cond === "transfer-unencodable") extra = ["reasoning", "field", "observedLength", "bound"];
+        else if (cond === "self-share-settled") extra = ["reasoning", "amountCredits"];
+        else if (cond === "transfer-below-minimum") extra = ["reasoning", "amountCredits", "minimumCredits"];
         const wantObj = CONDITION_OBJECT[cond];
         if (r.object !== wantObj) refuse(`declaration condition ${cond} binds object ${wantObj}`, i);
       } else if (DECISION_CONDITIONS.includes(cond)) {
@@ -287,6 +308,9 @@ const validateJournalRecord = (r, i, poolId, isFirstRecord, seenFirstHeaderWA) =
         if (typeof r.undistributedCredits !== "string" || !decRe.test(r.undistributedCredits)) {
           refuse("undistributedCredits must be a canonical decimal string", i);
         }
+        if ("carriedCredits" in r && (typeof r.carriedCredits !== "string" || !decRe.test(r.carriedCredits))) {
+          refuse("carriedCredits must be a canonical decimal string", i);
+        }
         if ("configuredStartEpoch" in r) {
           if (!isFirstRecord) refuse("configuredStartEpoch appears on a non-first record", i);
           if (!u32(r.configuredStartEpoch)) refuse("configuredStartEpoch must be u32", i);
@@ -303,6 +327,30 @@ const validateJournalRecord = (r, i, poolId, isFirstRecord, seenFirstHeaderWA) =
         if (r.field !== "transitionBytes") refuse('transfer-unencodable field must be "transitionBytes"', i);
         if (!Number.isSafeInteger(r.observedLength) || !Number.isSafeInteger(r.bound)) {
           refuse("transfer-unencodable lengths must be integers", i);
+        }
+      }
+      // step 3's classification declarations (a soundness-review finding): amounts are
+      // canonical decimal strings, the same grammar every amount uses, and
+      // the payload is checked against what the classification could
+      // actually have produced (a positive amount; for below-minimum, the
+      // pinned minimum literally and the amount strictly under it)
+      if (cond === "self-share-settled" || cond === "transfer-below-minimum") {
+        if (typeof r.amountCredits !== "string" || !decRe.test(r.amountCredits)) {
+          refuse(`${cond} amountCredits must be a canonical decimal string`, i);
+        }
+        if (BigInt(r.amountCredits) <= 0n) {
+          refuse(`${cond} amountCredits must be positive (a zero entitlement is never classified)`, i);
+        }
+      }
+      if (cond === "transfer-below-minimum") {
+        if (typeof r.minimumCredits !== "string" || !decRe.test(r.minimumCredits)) {
+          refuse("transfer-below-minimum minimumCredits must be a canonical decimal string", i);
+        }
+        if (r.minimumCredits !== String(MIN_TRANSFER_AMOUNT_CREDITS)) {
+          refuse("transfer-below-minimum minimumCredits must equal the pinned minimum", i);
+        }
+        if (BigInt(r.amountCredits) >= MIN_TRANSFER_AMOUNT_CREDITS) {
+          refuse("transfer-below-minimum amountCredits must be below the pinned minimum", i);
         }
       }
       break;
@@ -331,6 +379,22 @@ const validateJournal = (poolId, records) => {
   let firstHeaderBinding = null;
   let latestLag = null;
 
+  // CLASSIFICATION EXCLUSIVITY (a soundness-review finding):
+  // per accrual, a classification declaration and any transfer or
+  // reservation record are mutually exclusive IN BOTH ORDERS, and at most
+  // one classification declaration exists. This makes the carve-out's
+  // store shape ("journaled transfer state is never reclassified") a
+  // grammar rule rather than a writer promise: a journal carrying both is
+  // refused outright.
+  const CLASSIFICATION_CONDITIONS = ["self-share-settled", "transfer-below-minimum"];
+  const accrualClassKey = (r) => [r.poolId, r.epochIndex, r.accrualId].join("|");
+  const classifiedAccruals = new Map(); // key -> condition
+  const machineryAccruals = new Set(); // keys with transfer/reservation records
+  // once a journal's measurement carries carriedCredits, every later one
+  // must (a post-correction producer cannot quietly drop the reporting
+  // duty inside a corrected journal; the checker's fold)
+  let seenCarriedMeasurement = false;
+
   const subjState = (key) => {
     if (!subjects.has(key)) {
       subjects.set(key, { gens: new Map(), stopped: false, decisions: [],
@@ -357,6 +421,42 @@ const validateJournal = (poolId, records) => {
     }
     const noteRecord = () => { s.lastRecordIndex = i; s.lastRecord = r; };
 
+    if (r.kind === K.DECLARATION && CLASSIFICATION_CONDITIONS.includes(r.condition)) {
+      const ak = accrualClassKey(r);
+      if (classifiedAccruals.has(ak)) {
+        refuse(`a second classification declaration for one accrual (${classifiedAccruals.get(ak)}, then ${r.condition})`, i);
+      }
+      if (machineryAccruals.has(ak)) {
+        refuse(`a classification declaration over existing transfer or reservation records for its accrual`, i);
+      }
+      // a classification is a corrected-era record, so the journal's
+      // LATEST measurement must already report carriedCredits (the
+      // closing wave's second outside family, part B: the earlier rule
+      // was prefix-order and let a stale latest measurement stand
+      // beside classifications; a conforming corrected writer always
+      // measures before classifying, so this refuses only
+      // non-conforming histories)
+      if (latestLag && !("carriedCredits" in latestLag)) {
+        refuse("a classification declaration while the journal's latest lag-measurement lacks carriedCredits (the corrected measurement runs first)", i);
+      }
+      classifiedAccruals.set(ak, r.condition);
+    }
+    // STATE-BEARING transfer or reservation records mark machinery. The
+    // exclusion is nevertheless TOTAL for those objects: every
+    // non-state-bearing kind there (a decision, a surfacing declaration)
+    // requires state-bearing establishing evidence in the same
+    // generation, which this rule already refuses, so none can exist on a
+    // classified accrual (the checker's width point, answered by
+    // matching the claim to this predicate rather than adding an
+    // unreachable guard)
+    if ((r.object === "transfer" || r.object === "reservation") && STATE_BEARING.has(r.kind)) {
+      const ak = accrualClassKey(r);
+      if (classifiedAccruals.has(ak)) {
+        refuse(`a ${r.object} record for a classified accrual (${classifiedAccruals.get(ak)})`, i);
+      }
+      machineryAccruals.add(ak);
+    }
+
     if (r.kind === K.DECISION) {
       const cg = currentGen(s) || 1;
       if (BROADCAST_OBJECTS.includes(r.object) && r.gen !== cg) {
@@ -380,7 +480,21 @@ const validateJournal = (poolId, records) => {
       return;
     }
     if (r.kind === K.DECLARATION) {
-      if (r.condition === "lag-measurement") latestLag = r;
+      if (r.condition === "lag-measurement") {
+        if (seenCarriedMeasurement && !("carriedCredits" in r)) {
+          refuse("a lag-measurement without carriedCredits after this journal has carried one (the member is monotonic once present)", i);
+        }
+        // no separate corrected-era rule is needed here: a
+        // classification refuses unless the latest measurement already
+        // carries the member (the append-time rule below), so any
+        // journal holding a classification has a carried measurement
+        // and this monotonic rule covers every later one; a journal
+        // with neither classifications nor carried measurements stays
+        // readable, because no member can date a record, a stated
+        // limitation
+        if ("carriedCredits" in r) seenCarriedMeasurement = true;
+        latestLag = r;
+      }
       const g = genState(s, r.gen); // a declaration OPENS generation state (finding 5)
       if (DECLARATION_CONDITIONS.includes(r.condition)) {
         g.established.add(r.condition);
@@ -644,10 +758,20 @@ const validateJournal = (poolId, records) => {
     const entry = { gen: cg, state, stopped: s.stopped };
     const e = epochOf(epochIndex);
     if (object === "header") {
+      // THE PROJECTION CARRIES EVERY EXPECTED-CONTENTS FIELD ITS CONSUMERS READ, not the
+      // three it used to. The write-ahead record holds allocationHash and calcVersion
+      // beside the other three, and `runFromJournal` reads allocationHash out of this
+      // object and hands it to the epoch-context builder, which requires 64 lowercase hex.
+      // Dropping them here made that builder refuse every live run with "allocationHash
+      // must be a primitive string of 64 lowercase hex (got undefined)", a defect the
+      // offline batteries could not see because they build perEpoch by hand rather than
+      // through this reader (a soundness-review finding).
       e.header = { ...entry,
         memberCount: g.W ? g.W.expectedContents.memberCount : null,
         grossCredits: g.W ? g.W.expectedContents.grossCredits : null,
         feeCredits: g.W ? g.W.expectedContents.feeCredits : null,
+        allocationHash: g.W ? g.W.expectedContents.allocationHash : null,
+        calcVersion: g.W ? g.W.expectedContents.calcVersion : null,
         captureIncomplete: [...s.gens.values()].some((x) => x.established && x.established.has("header-capture-incomplete")) };
     } else if (object === "reservation" || object === "transfer") {
       if (!e.accruals[accrualId]) e.accruals[accrualId] = {};
@@ -673,7 +797,11 @@ const validateJournal = (poolId, records) => {
     highestEpochIndex: records.reduce((m, r) =>
       (Number.isSafeInteger(r.epochIndex) && (m === null || r.epochIndex > m)) ? r.epochIndex : m, null),
     latestLagMeasurement: latestLag ? { lagCount: latestLag.lagCount,
-      undistributedCredits: latestLag.undistributedCredits } : null,
+      undistributedCredits: latestLag.undistributedCredits,
+      // present exactly when the record carries it (pre-correction
+      // measurements have none); a reader that drops the member would
+      // hide the reported deferral (the wider-scope pass's finding 3)
+      ...("carriedCredits" in latestLag ? { carriedCredits: latestLag.carriedCredits } : {}) } : null,
     perEpoch,
   };
 };
@@ -689,4 +817,5 @@ const openValidatedJournal = (poolId, dir) => {
 };
 
 module.exports = { validateJournal, openValidatedJournal, K, ACTIONS,
-  DECISION_CONDITIONS, DECLARATION_CONDITIONS, PROVED_HEADER_ROUTE };
+  DECISION_CONDITIONS, DECLARATION_CONDITIONS, PROVED_HEADER_ROUTE,
+  MIN_TRANSFER_AMOUNT_CREDITS };

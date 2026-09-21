@@ -1,0 +1,16 @@
+{
+  "kind": "tegara.e2.forwardTransportProfile.v1",
+  "subject": "the persisted bootstrap pool at epoch 0 on the local dashmate devnet, the income identity named as a self-share through E2_FORWARD_SELF_SHARE (tegara/docs/LIVE_TRANSPORT_EXPECTATIONS.md, predictions 1 to 14)",
+  "required": {
+    "allReadsVerified": true,
+    "headerServedOne": true,
+    "enumerationMatchesMemberCount": true,
+    "oldClauseRefusedWithIndexError": true,
+    "plannedEqualsServed": true,
+    "compositionState": "complete",
+    "compositionReasons": [],
+    "heightSpanMax": 5,
+    "sweepAgainstAbsentEmpty": true
+  },
+  "optional": {}
+}

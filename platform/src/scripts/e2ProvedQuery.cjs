@@ -44,6 +44,15 @@ const DEC_RE = /^(0|[1-9][0-9]*)$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 
 const refuse = (why) => { throw new Error(`e2ProvedQuery: ${why}; refusing`); };
+// An absolute ceiling on pages in one enumeration (a soundness-review finding). The strict cursor
+// advance beside it already guarantees progress, so this is the second bound
+// rather than the only one: identifiers are 64-hex, so "advancing" alone still
+// permits an astronomically long walk. At the default limit of 100 documents a
+// page this admits a million documents, which is far beyond any pool audit this
+// module is for, so a legitimate enumeration cannot reach it. Exceeding it
+// REFUSES rather than truncating, because this module's contract is no partial
+// documents and no partial height range.
+const MAX_ENUMERATION_PAGES = 10000;
 // a TOTAL formatter for a CAUGHT value: the caught value can be an
 // ordinary rejection (whose message is the real cause and should be kept) OR a
 // value resistant to inspection (a null-prototype object, a throwing `message`
@@ -362,19 +371,35 @@ const provedQueryPage = async ({ contractId, type, where, orderBy,
  * The full enumeration. Returns
  *   { status: "proved", documents, heightMin, heightMax, pages }
  * with the min-to-max reduction over EVERY verified page's height, or
- *   { status: "unproved" }
+ *   { status: "unproved", strength: "unserved" | "unverified" }
  * with NO partial documents and NO partial range when any page is
  * unserved or unverified.
+ *
+ * THE STRENGTH IS CARRIED RATHER THAN COLLAPSED. Both failure strengths make
+ * the enumeration equally unproved, and that is deliberate, so `strength` must
+ * never be read as a degree of trust. It exists because a CONSUMER reporting
+ * why the enumeration failed would otherwise have to guess, and a consumer that
+ * guesses states something it did not observe. The forward evidence interface
+ * distinguishes UNPROVED_QUERY_UNSERVED from UNPROVED_PROOF_UNVERIFIED by
+ * exactly this, and the two answer different questions about a live run: the
+ * query never landed, or it landed and its proof did not verify. The value is
+ * the failing page's own declared status, which `provedQueryPage` has already
+ * held to the closed set verified/unserved/unverified, so it is one of the two
+ * named here and never a third thing.
  */
 const enumerateProved = async ({ contractId, type, where, orderBy, limit = 100,
-  fetchVerifiedPage }) => {
+  maxPages = MAX_ENUMERATION_PAGES, fetchVerifiedPage }) => {
   const documents = [];
   let heightMin = null, heightMax = null, pages = 0;
   let startAfter = null;
   for (;;) {
     const page = await provedQueryPage({ contractId, type, where, orderBy, limit,
       startAfter, fetchVerifiedPage });
-    if (page.status !== "verified") return { status: "unproved" };
+    // the failing page's OWN declared status becomes the strength. It is not
+    // inferred and not defaulted: provedQueryPage refuses any status outside
+    // verified/unserved/unverified before this line can run, so the value here
+    // is the transport's own answer about which way the read failed.
+    if (page.status !== "verified") return { status: "unproved", strength: page.status };
     pages += 1;
     const h = BigInt(page.height);
     if (heightMin === null || h < BigInt(heightMin)) heightMin = page.height;
@@ -393,9 +418,24 @@ const enumerateProved = async ({ contractId, type, where, orderBy, limit = 100,
     if (page.cursor === null) {
       return { status: "proved", documents, heightMin, heightMax, pages };
     }
-    // a cursor equal to startAfter is unreachable here: the cursor is the
-    // last returned document's identifier and a document equal to the
-    // exclusive start-after already refused above (one guard, not two)
+    // THIS LOOP BOUNDS ITSELF (a soundness-review finding). It used to defer entirely to the page
+    // checker's strictly-ascending rule and said so, "one guard, not two". That
+    // reasoning is sound as far as it goes: while the ascending rule holds, a
+    // page's last identifier necessarily exceeds the cursor, so the cursor
+    // always advances. What it costs is that TERMINATION lives in another
+    // function, over data from the adapter boundary. The mutation battery
+    // showed the price: dropping the ascending check does not fail this module,
+    // it HANGS it, because the cursor is computed from the page's own last
+    // identifier, so an adapter returning the same full page forever produces
+    // the same cursor forever.
+    //
+    // A cursor-advance check here would be DEAD CODE for exactly the reason the
+    // old comment gave, so the bound is a page ceiling instead: it holds
+    // whatever the page checker does or stops doing. The ascending rule stays
+    // where it is as the correctness rule.
+    if (pages >= maxPages) {
+      refuse(`the enumeration exceeded ${maxPages} pages (refusing rather than returning a partial answer)`);
+    }
     startAfter = page.cursor;
   }
 };

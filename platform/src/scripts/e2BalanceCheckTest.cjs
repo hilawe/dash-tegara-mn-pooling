@@ -132,8 +132,22 @@ const mkFetch = (balances, over = {}) => {
   return fn;
 };
 const resolverFor = (map) => (poolId) => map[poolId];
-const poolAB = (income = I) => ({ writerIdentity: W, incomeIdentity: income,
+const poolAB = (income = I) => ({ resolved: true, writerIdentity: W, incomeIdentity: income,
   entitlementsForEpoch: (epoch) => ({ 5: [{ accrualId: B1, amountCredits: "700" }] }[epoch] || []) });
+
+// ---- a soundness-review finding: AN UNRESOLVED JOURNAL REFUSES, IT DOES NOT CONTRIBUTE ZERO ROWS ----
+// The live driver resolved two pools and handed every other store journal a fallback
+// answering no entitlements, so the store-wide funding threshold was computed with those
+// journals contributing nothing while their headers evidenced obligations needing
+// quantification. A comment and a printed line disclose that; disclosure is not
+// fail-closed, and a declaration of unavailability any caller may supply for free is the
+// escape hatch the ordinary path takes. The admission now requires the resolver to ATTEST
+// that the pool resolved, and refuses otherwise.
+const unresolvedCases = [
+  ["no attestation at all", { writerIdentity: W, incomeIdentity: I, entitlementsForEpoch: () => [] }],
+  ["an explicit denial", { resolved: false, writerIdentity: W, incomeIdentity: I, entitlementsForEpoch: () => [] }],
+  ["a truthy non-true attestation", { resolved: "yes", writerIdentity: W, incomeIdentity: I, entitlementsForEpoch: () => [] }],
+];
 
 const admit = (over = {}) => {
   const locks = over.locks || acquireIdentityLocks([W, I]);
@@ -141,7 +155,8 @@ const admit = (over = {}) => {
     candidate: over.candidate || candidate,
     identities: over.identities || { writer: W, income: I },
     resolvePool: over.resolvePool || resolverFor({}),
-    fetchBalanceWithMetadata: over.fetch, feeCeilingCredits: "ceiling" in over ? over.ceiling : "100",
+    fetchBalanceWithMetadata: over.fetch, feeCeilings: "feeCeilings" in over ? over.feeCeilings : { header: "100", accrual: "100", reservation: "100",
+      receipt: "100", part: "100", creditTransfer: "100" },
     chainIdPin: "chainIdPin" in over ? over.chainIdPin : CHAIN, locks });
   const done = p.finally(() => { if (!over.locks) locks.release(); });
   return done;
@@ -161,6 +176,22 @@ const admit = (over = {}) => {
     r.admitted === true && r.thresholds[W] === String(CAND_W) && r.thresholds[I] === String(CAND_I));
 }
 
+// ---- a soundness-review finding: an unresolved store journal REFUSES the admission ----
+{
+  for (const [label, resolverResult] of unresolvedCases) {
+    const dir = caseDir();
+    // a SECOND journal in the store, carrying obligation evidence, whose pool the
+    // resolver cannot resolve. Before this rule it contributed zero rows and the
+    // threshold was computed as though it owed nothing.
+    writeJournal(POOL_B, [lag(POOL_B, 5), headerW(POOL_B, 5, 2, true),
+      marker(POOL_B, "header", 5, null, hBytes(5))], dir);
+    await rejects(`a store journal the resolver cannot resolve refuses the admission (${label})`,
+      admit({ dir, resolvePool: resolverFor({ [POOL_B]: resolverResult }),
+        fetch: mkFetch({ [W]: "999999", [I]: "999999" }) }),
+      /did not resolve/);
+  }
+}
+
 // ---- the concurrent-pool refusal: another pool's incomplete epoch shares
 // both identities, each alone sufficient, combined insufficient ----
 {
@@ -175,6 +206,18 @@ const admit = (over = {}) => {
   const r = await admit({ dir, resolvePool, fetch: mkFetch({ [W]: "7200", [I]: "2800" }) });
   ok("the combined store-wide thresholds admit at their exact values",
     r.thresholds[W] === "7200" && r.thresholds[I] === "2800");
+  // the SAME store under DISTINCT PRIME ceilings: pool B's epoch here
+  // has NONZERO header and reservation counts (1 and 1), the complement
+  // of the held-reservation case below, so between the two every typed
+  // inventory term is prime-priced and individually load-bearing
+  // pool B typed writer = 2*(1*3 + 2*5 + 1*7 + 8*11 + 1*13) = 242
+  // candidate 458; total writer 700; income 1568 + (700 + 1*34) = 2302
+  const primes = { header: "3", accrual: "5", reservation: "7",
+    receipt: "13", part: "11", creditTransfer: "17" };
+  const rp = await admit({ dir, resolvePool, feeCeilings: primes,
+    fetch: mkFetch({ [W]: "700", [I]: "2302" }) });
+  ok("the typed inventory prices the header and reservation terms too",
+    rp.admitted === true && rp.thresholds[W] === "700" && rp.thresholds[I] === "2302");
 }
 
 // ---- journal-evidenced discharge: the income side per captured receipt;
@@ -230,7 +273,7 @@ const admit = (over = {}) => {
   const dir = caseDir();
   writeJournal(POOL_A, [lag(POOL_A, 8), headerW(POOL_A, 8, 2, true),
     marker(POOL_A, "header", 8, null, hBytes(8))], dir);
-  const resolvePool = resolverFor({ [POOL_A]: { writerIdentity: W, incomeIdentity: I,
+  const resolvePool = resolverFor({ [POOL_A]: { resolved: true, writerIdentity: W, incomeIdentity: I,
     entitlementsForEpoch: () => [] } });
   await rejects("a candidate epoch below its pool's journal-visible epoch refuses",
     admit({ dir, resolvePool, fetch: mkFetch({ [W]: "99999", [I]: "99999" }) }),
@@ -244,7 +287,7 @@ const admit = (over = {}) => {
     { v: 1, kind: "tegara.e2.journal.declaration.v1", object: "epoch", gen: 1,
       poolId: POOL_A, epochIndex: 8, condition: "zero-earning-epoch",
       reasoning: "absent proposer" }], dir);
-  const resolvePool = resolverFor({ [POOL_A]: { writerIdentity: W, incomeIdentity: I,
+  const resolvePool = resolverFor({ [POOL_A]: { resolved: true, writerIdentity: W, incomeIdentity: I,
     entitlementsForEpoch: () => [] } });
   await rejects("an epoch-scoped declaration alone bounds the ascending check",
     admit({ dir, resolvePool, fetch: mkFetch({ [W]: "99999", [I]: "99999" }) }),
@@ -254,7 +297,7 @@ const admit = (over = {}) => {
   // a journal with only pool-scoped records sets no boundary
   const dir = caseDir();
   writeJournal(POOL_A, [lag(POOL_A, 9)], dir);
-  const resolvePool = resolverFor({ [POOL_A]: { writerIdentity: W, incomeIdentity: I,
+  const resolvePool = resolverFor({ [POOL_A]: { resolved: true, writerIdentity: W, incomeIdentity: I,
     entitlementsForEpoch: () => [] } });
   const r = await admit({ dir, resolvePool, fetch: mkFetch({ [W]: "9999", [I]: "9999" }) });
   ok("pool-scoped records alone set no epoch boundary", r.admitted === true);
@@ -263,7 +306,7 @@ const admit = (over = {}) => {
   const dir = caseDir();
   writeJournal(POOL_A, [lag(POOL_A, 7), headerW(POOL_A, 7, 2, true),
     marker(POOL_A, "header", 7, null, hBytes(7))], dir);
-  const resolvePool = resolverFor({ [POOL_A]: { writerIdentity: W, incomeIdentity: I,
+  const resolvePool = resolverFor({ [POOL_A]: { resolved: true, writerIdentity: W, incomeIdentity: I,
     entitlementsForEpoch: () => [] } });
   const r = await admit({ dir, resolvePool, fetch: mkFetch({ [W]: "5200", [I]: "1900" }) });
   ok("an equal candidate epoch (the rebuild path) admits with its journal terms double-counted",
@@ -342,11 +385,12 @@ const admit = (over = {}) => {
     marker(POOL_C, "header", 5, null, hBytes(5))], dir);
   const inventory = enumerateStoreInventory({ dir, resolvePool: resolverFor({
     [POOL_B]: poolAB(ID_MID),
-    [POOL_C]: { writerIdentity: W, incomeIdentity: ID_HIGH,
+    [POOL_C]: { resolved: true, writerIdentity: W, incomeIdentity: ID_HIGH,
       entitlementsForEpoch: () => [{ accrualId: B2, amountCredits: "300" }] },
   }) });
-  const t = computeThresholds({ candidate, identities: { writer: W, income: I },
-    inventory, feeCeilingCredits: "100" });
+  const { thresholds: t } = computeThresholds({ candidate, identities: { writer: W, income: I },
+    inventory, feeCeilings: { header: "100", accrual: "100", reservation: "100",
+      receipt: "100", part: "100", creditTransfer: "100" } });
   ok("the writer's threshold sums every pool's writer obligations",
     t.get(W) === CAND_W + 2600n + 2600n);
   ok("each income identity's threshold sums exactly its own pool's group",
@@ -509,9 +553,216 @@ const admit = (over = {}) => {
       fetch: mkFetch({ [W]: "9999", [I]: "9999" }) }), /cannot be quantified/);
 }
 {
-  await rejects("a missing fee ceiling refuses rather than defaulting",
-    admit({ dir: caseDir(), ceiling: null, fetch: mkFetch({ [W]: "9", [I]: "9" }) }),
-    /e2FeeCeilingCredits is not set/);
+  await rejects("missing typed ceilings refuse rather than defaulting",
+    admit({ dir: caseDir(), feeCeilings: null, fetch: mkFetch({ [W]: "9", [I]: "9" }) }),
+    /typed fee ceilings are not set/);
+  await rejects("one missing ceiling member refuses and names its type",
+    admit({ dir: caseDir(), feeCeilings: { header: "100", accrual: "100", reservation: "100",
+      receipt: "100", part: "100" }, fetch: mkFetch({ [W]: "9", [I]: "9" }) }),
+    /creditTransfer fee ceiling is missing/);
+}
+// ---- DUTY D2'S TYPED MATH: distinct prime ceilings AND ASYMMETRIC
+// COEFFICIENTS (memberCount 2, ONE positive entitlement), so every term
+// of the writer formula is visible in the sum, any dropped or misprized
+// term changes it, and a SWAP of two type prices changes it too (a
+// symmetric 2-and-2 candidate hid exactly that swap, the mutation
+// check's lesson).
+// The ONE-POSITIVE candidate uses memberCount 3 (not the default 2),
+// so the accrual coefficient is independently observable, a hardcoded
+// 2n there changes this sum while leaving every default-candidate case
+// green (the second confirmation round).
+// writer = 2*(header 3 + 3*accrual 5 + 1*(reservation 7 + 8*part 11 + receipt 13))
+//        = 2*(3 + 15 + 108) = 252
+// income = 1000 + 1 transfer * 2*creditTransfer 17 = 1034
+{
+  const dir = caseDir();
+  const primes = { header: "3", accrual: "5", reservation: "7",
+    receipt: "13", part: "11", creditTransfer: "17" };
+  const oneCand = { epochIndex: 7, memberCount: 3,
+    positiveEntitlements: [{ accrualId: A1, amountCredits: "1000" }] };
+  const r = await admit({ dir, feeCeilings: primes, candidate: oneCand,
+    fetch: mkFetch({ [W]: "252", [I]: "1034" }) });
+  ok("the typed writer and income thresholds are the per-type sums", r.admitted === true
+    && r.thresholds[W] === "252" && r.thresholds[I] === "1034");
+  await rejects("one credit below the typed writer threshold refuses",
+    admit({ dir: caseDir(), feeCeilings: primes, candidate: oneCand,
+      fetch: mkFetch({ [W]: "251", [I]: "9999" }) }),
+    /below its reserve threshold/);
+  // the TWO-POSITIVE companion (the default candidate): with nPos 2 the
+  // header-versus-receipt price swap moves the sum (their coefficients
+  // are 1 and nPos, equal only at nPos 1), so the pair of cases covers
+  // the swaps a single candidate is blind to
+  // writer = 2*(3 + 2*5 + 2*(7 + 88 + 13)) = 458; income = 1500 + 2*34 = 1568
+  const r2 = await admit({ dir: caseDir(), feeCeilings: primes,
+    fetch: mkFetch({ [W]: "458", [I]: "1568" }) });
+  ok("the two-positive typed thresholds are the per-type sums", r2.admitted === true
+    && r2.thresholds[W] === "458" && r2.thresholds[I] === "1568");
+  ok("the admitting result echoes the WHOLE ceiling set that decided (all six values)",
+    r2.feeCeilingsUsed
+    && JSON.stringify(Object.fromEntries(Object.entries(r2.feeCeilingsUsed).sort()))
+      === JSON.stringify(Object.fromEntries(Object.entries(primes).sort())));
+  // the echo is the VALIDATION-TIME SNAPSHOT, never a later re-read: the
+  // balance fetch mutates the caller's object mid-admission, and the
+  // echo must still report the values the arithmetic used (the third
+  // confirmation round's race, made observable)
+  const mutating = { ...primes };
+  const r3 = await admit({ dir: caseDir(), feeCeilings: mutating,
+    fetch: (idB58) => { mutating.header = "999983"; return mkFetch({ [W]: "458", [I]: "1568" })(idB58); } });
+  ok("the echoed set is the snapshot the arithmetic used, not a post-mutation re-read",
+    r3.admitted === true && r3.feeCeilingsUsed.header === "3"
+    && r3.thresholds[W] === "458");
+  // an INHERITED member is not a configuration, and MIXED ownership is
+  // the discriminating shape (an all-inherited object proves only the
+  // first check; one own member with five inherited proves the check
+  // runs per member, the second confirmation round)
+  await rejects("a prototype-supplied ceiling member refuses (own properties only)",
+    admit({ dir: caseDir(), feeCeilings: Object.create(primes),
+      fetch: mkFetch({ [W]: "9999", [I]: "9999" }) }),
+    /header fee ceiling is missing/);
+  await rejects("one own member with five inherited refuses at the first inherited one",
+    admit({ dir: caseDir(), feeCeilings: Object.assign(Object.create(primes), { header: "3" }),
+      fetch: mkFetch({ [W]: "9999", [I]: "9999" }) }),
+    /accrual fee ceiling is missing/);
+}
+// ---- the TYPED INVENTORY under distinct primes: pool B's epoch has a
+// HELD reservation beside owed part and receipt work, so its
+// reservation and receipt counts DIFFER (0 and 1), which is the one
+// asymmetry that exposes a reservation-versus-receipt price swap (both
+// carry coefficient nPos inside a candidate, so no candidate alone
+// can). This fixture's header and reservation counts are ZERO, so
+// those two terms' deletions are caught by the prime-priced
+// store-wide case above, not here; between the two fixtures every
+// typed term is load-bearing.
+// pool B typed writer = 2*(accruals 2*5 + res 0*7 + parts 8*11 + receipt 1*13) = 222
+// candidate (default, two positives) = 458; total writer = 680; income = 1568 (B's discharged)
+{
+  const dir = caseDir();
+  writeJournal(POOL_B, [lag(POOL_B, 5), headerW(POOL_B, 5, 2, true),
+    marker(POOL_B, "header", 5, null, hBytes(5)), headerCap(POOL_B, 5, 2),
+    ...happyAccrual(POOL_B, 5, B1)], dir);
+  const resolvePool = resolverFor({ [POOL_B]: poolAB() });
+  const primes = { header: "3", accrual: "5", reservation: "7",
+    receipt: "13", part: "11", creditTransfer: "17" };
+  const r = await admit({ dir, resolvePool, feeCeilings: primes,
+    fetch: mkFetch({ [W]: "680", [I]: "1568" }) });
+  ok("the typed inventory prices each remaining transition by its own ceiling",
+    r.admitted === true && r.thresholds[W] === "680" && r.thresholds[I] === "1568");
+}
+// ---- DUTY D2'S RECORDED CONSTANTS derive from the measured maxima by
+// the stated rule (measured max plus ten percent headroom, rounded up
+// to the next million), so a constant, a maxima entry or the rule
+// cannot drift alone ----
+{
+  const { D2_FEE_CEILINGS, D2_MEASURED_MAX_FEES } = require("./e2BalanceCheck.cjs");
+  const types = Object.keys(D2_FEE_CEILINGS).sort();
+  ok("the pin and the maxima cover the same six types",
+    JSON.stringify(types) === JSON.stringify(Object.keys(D2_MEASURED_MAX_FEES).sort())
+    && types.length === 6);
+  let allDerive = true;
+  for (const t of types) {
+    const max = BigInt(D2_MEASURED_MAX_FEES[t]);
+    const withHeadroom = (max * 11n + 9n) / 10n;
+    const derived = ((withHeadroom + 999999n) / 1000000n) * 1000000n;
+    if (String(derived) !== D2_FEE_CEILINGS[t]) { allDerive = false; console.error(`derivation fails for ${t}: ${derived} != ${D2_FEE_CEILINGS[t]}`); }
+  }
+  ok("every recorded ceiling is the stated derivation of its measured maximum", allDerive);
+  // the CANONICAL key set and the AUTHORITATIVE per-type mapping, an
+  // independent record of the recorded run (the third confirmation
+  // round: a rename or a both-objects value swap left the correlated
+  // assertions green while production repriced a type)
+  ok("the pin's keys are exactly the six canonical type names",
+    JSON.stringify(types) === JSON.stringify(
+      ["accrual", "creditTransfer", "header", "part", "receipt", "reservation"]));
+  ok("the measured maxima match the authoritative run record, per type",
+    D2_MEASURED_MAX_FEES.header === "30227725"
+    && D2_MEASURED_MAX_FEES.accrual === "55585023"
+    && D2_MEASURED_MAX_FEES.reservation === "47763004"
+    && D2_MEASURED_MAX_FEES.receipt === "276610563"
+    && D2_MEASURED_MAX_FEES.part === "197684183"
+    && D2_MEASURED_MAX_FEES.creditTransfer === "900940");
+}
+// ---- SINGLE-CEILING PERTURBATION: each type's price is raised by ONE
+// while the other five hold, and the threshold delta must equal exactly
+// that type's doubled coefficient in the formulas (default candidate:
+// memberCount 2, two positives; the store-wide pool B epoch adds
+// header 1, accrual 2, reservation 1, part 8, receipt 1, transfers 1).
+// This isolates every price: no linear alias across the fixed vectors
+// can satisfy all six deltas (the fourth confirmation round found such
+// an alias against the uniform-and-primes pair) ----
+{
+  const primes = { header: "3", accrual: "5", reservation: "7",
+    receipt: "13", part: "11", creditTransfer: "17" };
+  const mkStore = () => {
+    const dir = caseDir();
+    writeJournal(POOL_B, [lag(POOL_B, 5), headerW(POOL_B, 5, 2, true),
+      marker(POOL_B, "header", 5, null, hBytes(5))], dir);
+    return dir;
+  };
+  const resolvePool = resolverFor({ [POOL_B]: poolAB() });
+  const big = mkFetch({ [W]: "999999", [I]: "999999" });
+  const runOnce = async (ceilings) => admit({ dir: mkStore(), resolvePool,
+    feeCeilings: ceilings, fetch: big });
+  const base = await runOnce(primes);
+  // coefficients: candidate writer h1 a2 r2 p16 rc2, income t2;
+  // pool B writer h1 a2 r1 p8 rc1, income t1 (its 700 amount constant)
+  const expectDelta = { header: [2n + 2n, 0n], accrual: [4n + 4n, 0n],
+    reservation: [4n + 2n, 0n], part: [32n + 16n, 0n],
+    receipt: [4n + 2n, 0n], creditTransfer: [0n, 4n + 2n] };
+  let allIsolate = true;
+  for (const t of Object.keys(primes)) {
+    const bumped = { ...primes, [t]: String(BigInt(primes[t]) + 1n) };
+    const r = await runOnce(bumped);
+    const dW = BigInt(r.thresholds[W]) - BigInt(base.thresholds[W]);
+    const dI = BigInt(r.thresholds[I]) - BigInt(base.thresholds[I]);
+    if (dW !== expectDelta[t][0] || dI !== expectDelta[t][1]) {
+      allIsolate = false;
+      console.error(`perturbation fails for ${t}: writer delta ${dW} (want ${expectDelta[t][0]}), income delta ${dI} (want ${expectDelta[t][1]})`);
+    }
+  }
+  ok("each ceiling's unit bump moves the thresholds by exactly its doubled coefficient", allIsolate);
+  // SYNTHETIC ONE-HOT INVENTORY ROWS, labeled as such: every
+  // reader-producible fixture couples parts to receipts 8-to-1, so the
+  // perturbation above observes only the 8*part+receipt bundle, and an
+  // off-diagonal reprice with zero net (part plus one, receipt minus
+  // eight) is invisible to it (the fifth confirmation round). Only a
+  // direct computeThresholds fixture with one count set at a time can
+  // pin each price to its own named type; the reader never produces
+  // these rows, and the label says so.
+  {
+    const zero = { headerCount: 0n, accrualCount: 0n, reservationCount: 0n,
+      partCount: 0n, receiptCount: 0n, incomeAmount: 0n, incomeTransfers: 0n, positiveCount: 0n };
+    const emptyCand = { epochIndex: 7, memberCount: 1, positiveEntitlements: [] };
+    const oneHotThresholds = (member) => {
+      const inv = [{ poolId: POOL_B, writerIdentity: W, incomeIdentity: I, highestEpochIndex: null,
+        epochs: [{ epochIndex: 5, complete: false, remaining: { ...zero, [member]: 1n } }] }];
+      return computeThresholds({ candidate: emptyCand, identities: { writer: W, income: I },
+        inventory: inv, feeCeilings: primes }).thresholds;
+    };
+    const baseW = oneHotThresholds("positiveCount").get(W); // a no-op member: the candidate terms alone
+    const oneHotOk = [["headerCount", 6n], ["accrualCount", 10n], ["reservationCount", 14n],
+      ["partCount", 22n], ["receiptCount", 26n]]
+      .every(([m, want]) => oneHotThresholds(m).get(W) - baseW === want)
+      && oneHotThresholds("incomeTransfers").get(I) - oneHotThresholds("positiveCount").get(I) === 34n;
+    ok("each one-hot inventory count prices at exactly its own doubled ceiling (synthetic rows, labeled)", oneHotOk);
+  }
+}
+// ---- OWNERSHIP IS PER MEMBER: each of the six types in turn sits
+// behind the prototype while the other five are own properties, and
+// each refuses naming exactly the inherited type (the third
+// confirmation round: header-and-accrual-only ownership checks passed
+// the earlier fixtures) ----
+{
+  const primes = { header: "3", accrual: "5", reservation: "7",
+    receipt: "13", part: "11", creditTransfer: "17" };
+  for (const t of Object.keys(primes)) {
+    const own = { ...primes };
+    delete own[t];
+    const mixed = Object.assign(Object.create({ [t]: primes[t] }), own);
+    await rejects(`an inherited ${t} member refuses while the other five are own`,
+      admit({ dir: caseDir(), feeCeilings: mixed,
+        fetch: mkFetch({ [W]: "9999", [I]: "9999" }) }),
+      new RegExp(`${t} fee ceiling is missing`));
+  }
 }
 
 // ---- funding is strictly out of band: the admission's only external action
@@ -599,13 +850,15 @@ const admit = (over = {}) => {
   try {
     const r = await admitHeader({ dir, poolId: POOL_A, candidate, identities: { writer: W, income: I },
       resolvePool: resolverFor({}), fetchBalanceWithMetadata: mkFetch({ [W]: "9999", [I]: "9999" }),
-      feeCeilingCredits: "100", locks }); // no chainIdPin argument: the owned pin decides
+      feeCeilings: { header: "100", accrual: "100", reservation: "100",
+      receipt: "100", part: "100", creditTransfer: "100" }, locks }); // no chainIdPin argument: the owned pin decides
     ok("the default pin path admits against the owned E2_EXPECTED_CHAIN_ID", r.admitted === true);
     await rejects("the default pin path refuses a differing authenticated chainId",
       admitHeader({ dir, poolId: POOL_A, candidate, identities: { writer: W, income: I },
         resolvePool: resolverFor({}),
         fetchBalanceWithMetadata: mkFetch({ [W]: "9999", [I]: "9999" }, { chainId: "other" }),
-        feeCeilingCredits: "100", locks }), /differs from the owned pin/);
+        feeCeilings: { header: "100", accrual: "100", reservation: "100",
+      receipt: "100", part: "100", creditTransfer: "100" }, locks }), /differs from the owned pin/);
   } finally { locks.release(); }
 }
 
@@ -639,8 +892,11 @@ const admit = (over = {}) => {
   ok("the installed scalar source appears in the patch verbatim (default export unchanged)",
     patch.includes(installed.trim()));
   const bind = fs.readFileSync(path.join(__dirname, "..", "..", "run_acceptance.sh"), "utf8");
-  ok("the patch's bind line is in the acceptance PATCHES",
-    bind.includes("patches/getIdentityBalance-retainMetadata.js:/app/node_modules/dash-platform-sdk/src/identities/getIdentityBalance.js"));
+  // an ACTIVE array entry, not a substring: the same text in a shell comment
+  // must not pass (the identity-patches suite's rule, swept back here because
+  // this check carried the same comment-relocation hole)
+  ok("the patch's bind line is an ACTIVE entry in the acceptance PATCHES",
+    /^\s*-v "\$PWD\/patches\/getIdentityBalance-retainMetadata\.js:\/app\/node_modules\/dash-platform-sdk\/src\/identities\/getIdentityBalance\.js:ro"$/m.test(bind));
   // the named export's BODY equals the default's body except the return
   // line, so no semantic drift (a weakened verification branch included)
   // can hide in the copy
