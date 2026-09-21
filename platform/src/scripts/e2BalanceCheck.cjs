@@ -65,6 +65,41 @@ const PROTOCOL_VERSION_PIN = 12;
 // 1 reservation + up to 8 parts (proofPartCount maximum) + 1 receipt document
 const WRITER_PER_ENTITLEMENT = 10n;
 
+// DUTY D2'S RECORDED CONSTANTS, the MEASURE path (2026-08-28, the
+// committed measurement run e2FeeMeasureRun.mjs on the harness devnet,
+// chain pin dashmate_local_52 at protocol 12). Each figure is the
+// larger of two samples of a MAXIMUM-payload broadcast's proved
+// balance decrease (every schema byteArray at maxItems, every integer
+// at its schema maximum; the credit transfer's amount excluded), plus
+// ten percent headroom for the observed state-dependent variance (the
+// inter-sample spread stayed under thirty percent, and the reserve
+// formulas keep their own times-2 on top), rounded up to the next
+// million credits (the derivation is asserted by the battery against
+// the maxima below). The receipt and part maxima EXCEED the retired
+// provisional 100000000 single constant, which therefore undercounted
+// the writer reserve; this pin replaces it. The credit transfer's fee
+// measured identically at the minimum amount and at a 10^12-credit
+// amount, so the amount does not enter its fee at this schedule.
+// Repeated measurement runs showed the document maxima DRIFTING
+// upward slightly with ledger growth (under two percent per run, the
+// first sample of a run the larger), which the ten percent headroom
+// absorbs; the maxima below are the recorded authoritative run's, and
+// any protocol or fee-schedule change re-measures. THE RE-MEASURE
+// TRIGGER is stated rather than left to judgment: when any later
+// run's raw maximum comes within five percent of its type's ceiling,
+// re-measure and re-record (the drift samples after the authoritative
+// run peaked at 279600244 for the receipt against its 305000000
+// ceiling, an 8.3 percent margin).
+const D2_MEASURED_MAX_FEES = Object.freeze({
+  header: "30227725", accrual: "55585023", reservation: "47763004",
+  receipt: "276610563", part: "197684183", creditTransfer: "900940",
+});
+const D2_FEE_CEILINGS = Object.freeze({
+  header: "34000000", accrual: "62000000", reservation: "53000000",
+  receipt: "305000000", part: "218000000", creditTransfer: "1000000",
+});
+const CEILING_TYPES = Object.freeze(["header", "accrual", "reservation", "receipt", "part", "creditTransfer"]);
+
 const refuse = (why) => { throw new Error(`e2BalanceCheck: ${why}; refusing admission`); };
 
 const requireHex64 = (name, v) => {
@@ -300,7 +335,23 @@ const enumerateStoreInventory = ({ dir, resolvePool }) => {
     try { read = openValidatedJournal(poolId, base); }
     catch (e) { refuse(`pool ${poolId.slice(0, 8)}...'s journal is unreadable or invalid (${(e && e.message) || e})`); }
     const resolved = resolvePool(poolId);
-    if (!resolved || !HEX64.test(resolved.writerIdentity || "") || !HEX64.test(resolved.incomeIdentity || "")
+    // THE RESOLVER MUST ATTEST THAT THE POOL RESOLVED, and a journal it cannot resolve
+    // REFUSES the admission rather than contributing nothing to the threshold (a soundness-review finding).
+    // A resolver that answers with no entitlement rows is indistinguishable, at this
+    // seam, from a pool that genuinely owes nothing, so a caller unable to resolve a
+    // journal could quietly remove that journal's obligations from a store-wide funding
+    // sum. The live driver did exactly that for every journal it had not pre-resolved,
+    // disclosing it in a comment and a printed line, and a disclosure any caller may
+    // supply for free is the escape hatch the ordinary path takes.
+    //
+    // THE ATTESTATION IS NOT VERIFIABLE HERE, and that is the same trust boundary every
+    // injected value sits inside. What this closes is the SILENT case: a resolver that
+    // cannot resolve must now say so, and saying so stops the run instead of shrinking
+    // the reserve.
+    if (!resolved || resolved.resolved !== true) {
+      refuse(`pool ${poolId.slice(0, 8)}... did not resolve: the resolver returned no attestation that its formation inputs were established, and its journal's obligations cannot be quantified without them (a soundness-review finding)`);
+    }
+    if (!HEX64.test(resolved.writerIdentity || "") || !HEX64.test(resolved.incomeIdentity || "")
       || typeof resolved.entitlementsForEpoch !== "function") {
       refuse(`the resolver returned no usable formation identities for pool ${poolId.slice(0, 8)}...`);
     }
@@ -341,10 +392,14 @@ const enumerateStoreInventory = ({ dir, resolvePool }) => {
       // inference as the same defect class as the receipt-capture one);
       // only a stopped header ends the epoch's writer terms
       const writerFlowEnded = headerStopped;
-      let writerCount = 0n;
+      // the writer terms are TYPED (duty D2: each transition type
+      // carries its own measured ceiling, so a bare count cannot be
+      // priced); the guards are exactly the untyped count's
+      let headerCount = 0n, accrualCount = 0n, reservationCount = 0n,
+        partCount = 0n, receiptCount = 0n;
       if (!writerFlowEnded) {
-        writerCount += headerDone ? 0n : 1n;
-        writerCount += BigInt(e.header.memberCount); // accrual documents, no success evidence exists
+        headerCount += headerDone ? 0n : 1n;
+        accrualCount += BigInt(e.header.memberCount); // accrual documents, no success evidence exists
       }
       // the INCOME side is per accrual, never inferred from writer progress
       let incomeAmount = 0n;
@@ -357,18 +412,25 @@ const enumerateStoreInventory = ({ dir, resolvePool }) => {
         // counted until its own discharge
         if (headerStopped && !(e.accruals[p.accrualId] && e.accruals[p.accrualId].transfer)) continue;
         const res = e.accruals[p.accrualId] && e.accruals[p.accrualId].reservation;
-        if (!writerFlowEnded) writerCount += (res && res.state === "held" ? 0n : 1n) + 9n;
+        if (!writerFlowEnded) {
+          reservationCount += (res && res.state === "held" ? 0n : 1n);
+          partCount += 8n; // proofPartCount maximum, unknown pre-receipt
+          receiptCount += 1n;
+        }
         if (!receiptCaptured(p.accrualId)) {
           incomeAmount += p.amountCredits;
           incomeTransfers += 1n;
         }
       }
-      if (writerCount === 0n && incomeAmount === 0n && incomeTransfers === 0n) {
+      const writerTermsZero = headerCount === 0n && accrualCount === 0n
+        && reservationCount === 0n && partCount === 0n && receiptCount === 0n;
+      if (writerTermsZero && incomeAmount === 0n && incomeTransfers === 0n) {
         epochs.push({ epochIndex, complete: true, remaining: null });
         continue;
       }
       epochs.push({ epochIndex, complete: false,
-        remaining: { writerCount, incomeAmount, incomeTransfers, positiveCount: BigInt(positive.length) } });
+        remaining: { headerCount, accrualCount, reservationCount, partCount, receiptCount,
+          incomeAmount, incomeTransfers, positiveCount: BigInt(positive.length) } });
     }
     pools.push({ poolId, writerIdentity: resolved.writerIdentity, incomeIdentity: resolved.incomeIdentity,
       highestEpochIndex: read.highestEpochIndex, epochs });
@@ -383,28 +445,63 @@ const enumerateStoreInventory = ({ dir, resolvePool }) => {
  * compared against the SUM, never separately against two role thresholds.
  * Returns Map<identityHex, credits(BigInt)>.
  */
-const computeThresholds = ({ candidate, identities, inventory, feeCeilingCredits }) => {
-  const ceiling = asCredits("the fee ceiling", feeCeilingCredits);
-  const perTransition = ceiling * 2n;
+const computeThresholds = ({ candidate, identities, inventory, feeCeilings }) => {
+  // duty D2's typed ceilings: each transition type priced by its own
+  // measured constant, every price doubled (the standing times-2
+  // conservatism). All six members are REQUIRED as OWN properties; a
+  // missing one refuses rather than defaulting. (The provisional era's
+  // ADMISSION check refused a missing value, but the retired driver
+  // path DEFAULTED an unset environment key to the provisional figure,
+  // so the old surface as a whole did not fail closed; the drivers now
+  // pass the recorded pin and no defaulting env path remains.)
+  if (!feeCeilings || typeof feeCeilings !== "object") {
+    refuse("the typed fee ceilings are not set (duty D2's six recorded constants); a missing value refuses distribution rather than defaulting");
+  }
+  const per = {};
+  const usedCeilings = {};
+  for (const t of CEILING_TYPES) {
+    // OWN property, explicitly supplied: an inherited member is not a
+    // configuration (the unit screen's catch: a prototype could satisfy
+    // a plain lookup with no member ever supplied)
+    if (!Object.prototype.hasOwnProperty.call(feeCeilings, t)
+      || feeCeilings[t] === undefined || feeCeilings[t] === null) {
+      refuse(`the ${t} fee ceiling is missing from the typed ceilings (duty D2's six recorded constants; a missing value refuses rather than defaulting)`);
+    }
+    per[t] = asCredits(`the ${t} fee ceiling`, feeCeilings[t]) * 2n;
+    // SNAPSHOT at validation time, before any asynchronous boundary: the
+    // echoed set is the exact values the arithmetic used, never a later
+    // re-read of the caller's mutable object (the third confirmation
+    // round's race)
+    usedCeilings[t] = String(per[t] / 2n);
+  }
   const add = (map, id, credits) => map.set(id, (map.get(id) || 0n) + credits);
   const thresholds = new Map();
-  // the candidate epoch's arithmetic (it has no journal presence yet)
+  // the candidate epoch's arithmetic (it has no journal presence yet):
+  // 1 header + memberCount accruals + per positive entitlement one
+  // reservation, at most 8 parts, and the receipt (WRITER_PER_ENTITLEMENT
+  // stays the count identity: 1 + 8 + 1 = 10)
   const positives = candidate.positiveEntitlements;
-  const candWriterCount = 1n + BigInt(candidate.memberCount) + WRITER_PER_ENTITLEMENT * BigInt(positives.length);
-  add(thresholds, identities.writer, candWriterCount * perTransition);
+  const nPos = BigInt(positives.length);
+  add(thresholds, identities.writer,
+    per.header + BigInt(candidate.memberCount) * per.accrual
+    + nPos * (per.reservation + 8n * per.part + per.receipt));
   let candIncome = 0n;
   for (const [i, p] of positives.entries()) candIncome += asCredits(`candidate entitlement ${i}`, p.amountCredits);
-  candIncome += BigInt(positives.length) * perTransition; // the candidate's credit transfers
+  candIncome += nPos * per.creditTransfer; // the candidate's credit transfers
   add(thresholds, identities.income, candIncome);
   // every incomplete epoch of every pool in the store, grouped by its own identities
   for (const pool of inventory) {
     for (const e of pool.epochs) {
       if (e.complete) continue;
-      add(thresholds, pool.writerIdentity, e.remaining.writerCount * perTransition);
-      add(thresholds, pool.incomeIdentity, e.remaining.incomeAmount + e.remaining.incomeTransfers * perTransition);
+      const r = e.remaining;
+      add(thresholds, pool.writerIdentity,
+        r.headerCount * per.header + r.accrualCount * per.accrual
+        + r.reservationCount * per.reservation + r.partCount * per.part
+        + r.receiptCount * per.receipt);
+      add(thresholds, pool.incomeIdentity, r.incomeAmount + r.incomeTransfers * per.creditTransfer);
     }
   }
-  return thresholds;
+  return { thresholds, usedCeilings };
 };
 
 // ---- the shared header-admission primitive ----
@@ -428,9 +525,9 @@ const computeThresholds = ({ candidate, identities, inventory, feeCeilingCredits
  * refuses with the failing identity, its threshold and its balance.
  */
 const admitHeader = async ({ dir, poolId, candidate, identities, resolvePool,
-  fetchBalanceWithMetadata, feeCeilingCredits, chainIdPin, locks }) => {
-  if (feeCeilingCredits === undefined || feeCeilingCredits === null) {
-    refuse("e2FeeCeilingCredits is not set (the provisional per-type ceiling); a missing value refuses distribution rather than defaulting");
+  fetchBalanceWithMetadata, feeCeilings, chainIdPin, locks }) => {
+  if (feeCeilings === undefined || feeCeilings === null) {
+    refuse("the typed fee ceilings are not set (duty D2's six recorded constants under D2_FEE_CEILINGS, or a caller-supplied set); a missing value refuses distribution rather than defaulting");
   }
   requireHex64("the candidate poolId", poolId);
   requireHex64("the writer identity", identities && identities.writer);
@@ -464,7 +561,7 @@ const admitHeader = async ({ dir, poolId, candidate, identities, resolvePool,
     && candidate.epochIndex < ownPool.highestEpochIndex) {
     refuse(`the candidate epoch ${candidate.epochIndex} is below the pool's journal-visible epoch ${ownPool.highestEpochIndex} (the flow never writes backward)`);
   }
-  const thresholds = computeThresholds({ candidate, identities, inventory, feeCeilingCredits });
+  const { thresholds, usedCeilings } = computeThresholds({ candidate, identities, inventory, feeCeilings });
   // the comparison covers THIS header's distinct identities (one when the
   // roles coincide, its balance against the SUM). Thresholds computed for a
   // different pool's distinct income identity are that pool's own run's
@@ -481,11 +578,17 @@ const admitHeader = async ({ dir, poolId, candidate, identities, resolvePool,
     }
   }
   const toObj = (m) => Object.fromEntries([...m.entries()].map(([k, v]) => [k, String(v)]));
-  return { admitted: true, thresholds: toObj(thresholds), balances: toObj(balances) };
+  // the ceiling set that admitted is ECHOED, the validation-time
+  // snapshot the arithmetic used (a caller-selected set below the
+  // recorded pin remains the injected surface's trust statement; the
+  // echo makes it auditable BY a consumer that records the result,
+  // which is the result's offer, not this function's guarantee)
+  return { admitted: true, thresholds: toObj(thresholds), balances: toObj(balances),
+    feeCeilingsUsed: usedCeilings };
 };
 
 module.exports = {
-  PROTOCOL_VERSION_PIN, WRITER_PER_ENTITLEMENT,
+  PROTOCOL_VERSION_PIN, WRITER_PER_ENTITLEMENT, D2_FEE_CEILINGS, D2_MEASURED_MAX_FEES,
   identityLockName, acquireIdentityLocks,
   frontierPath, readFrontier, advanceFrontier, advanceFrontierFromCapture,
   pinnedBalance, enumerateStoreInventory, computeThresholds, admitHeader,

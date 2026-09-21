@@ -2815,7 +2815,237 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const ledZero = await runLedger(zeroRec);
     ok("a transfer record under a zero-entitlement accrual is a fetched extra",
       ledZero.recordSet.label === "REFUSED"
-      && ledZero.perEpoch.get(6).diagnostics.some((d) => /zero-entitlement accrual/.test(d)));
+      && ledZero.perEpoch.get(6).diagnostics.some((d) => /outside the expected receipt set/.test(d)));
+  }
+  {
+    // ---- THE CARRY LAYER (the D8 carry unit) ----
+    // a below-minimum owner (1000 bps over D = 800000 owes 80000) is
+    // EXCLUDED from epoch 5's expected receipt set and CARRIES; the
+    // zero-earning epoch 6 then expects that owner's accrual to hold the
+    // carried 80000 (effective = carry-in) while the other accruals stay
+    // zero, and both epochs are clean with receipts for the two payable
+    // owners only
+    const carryManifest = {
+      v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
+      owners: [
+        { owner: OA, amountDuffs: String(BigInt(EVO) / 2n), bps: 5000, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
+        { owner: OB, amountDuffs: String(BigInt(EVO) * 4n / 10n), bps: 4000, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
+        { owner: OC, amountDuffs: String(BigInt(EVO) / 10n), bps: 1000, rewardScriptHex: "76a914" + "33".repeat(20) + "88ac" },
+      ] };
+    const stripSmallOwner = (docs) => {
+      // the excluded row has NO machinery: drop the small owner's
+      // epoch-5 receipt and reservation (index 2, the third owner)
+      docs.receipt = docs.receipt.filter((r) => r.accrualId !== docs.accrual[2].id);
+      docs.reservation = docs.reservation.filter((r) => r.accrualId !== docs.accrual[2].id);
+    };
+    const wCarry = mkWorld({ manifest: carryManifest, mutateDocs: (docs) => {
+      stripSmallOwner(docs);
+      docs.accrual[5].amountCredits = 80000; // epoch 6, the small owner: the carried effective
+    } });
+    const ledCarry = await runLedger(wCarry);
+    ok("a below-minimum share carries: both epochs clean, receipts for the payable owners only",
+      ledCarry.recordSet.label === "READ-CHECKED"
+      && ledCarry.perEpoch.get(5).diagnostics.length === 0
+      && ledCarry.perEpoch.get(6).diagnostics.length === 0
+      && ledCarry.receiptEvaluations.length === 2
+      && ledCarry.lag.lagCount === 0);
+    // a zero-earning epoch that IGNORES the carry (zero accrual where
+    // the carried 80000 is expected) refuses against the recomputation
+    const wCarry0 = mkWorld({ manifest: carryManifest, mutateDocs: stripSmallOwner });
+    const ledCarry0 = await runLedger(wCarry0);
+    ok("a zero accrual where the carried effective is expected refuses",
+      ledCarry0.recordSet.label === "REFUSED"
+      && ledCarry0.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed 80000/.test(d)));
+    // machinery under the excluded epoch-5 row is a fetched extra
+    const wStuck = mkWorld({ manifest: carryManifest, mutateDocs: (docs) => {
+      docs.accrual[5].amountCredits = 80000;
+    } });
+    const ledStuck = await runLedger(wStuck);
+    ok("machinery under a below-minimum row is a fetched extra that keeps the epoch incomplete",
+      ledStuck.recordSet.label === "REFUSED"
+      && ledStuck.perEpoch.get(5).diagnostics.some((d) => /outside the expected receipt set/.test(d))
+      && ledStuck.lag.lagCount === 1);
+    // TWO MEMBERS CARRY CONCURRENTLY, each with their OWN amount (the
+    // per-member rule; the wave's repository-access pass named this the
+    // first uncased branch). OB carries 80000 and OC carries 90000 into
+    // the zero-earning epoch 6, whose accruals must hold each member's
+    // own carried amount
+    const twoCarryManifest = {
+      v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
+      owners: [
+        { owner: OA, amountDuffs: String(BigInt(EVO) * 7875n / 10000n), bps: 7875, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
+        { owner: OB, amountDuffs: String(BigInt(EVO) * 1000n / 10000n), bps: 1000, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
+        { owner: OC, amountDuffs: String(BigInt(EVO) * 1125n / 10000n), bps: 1125, rewardScriptHex: "76a914" + "33".repeat(20) + "88ac" },
+      ] };
+    const stripTwoCarriers = (docs) => {
+      docs.receipt = docs.receipt.filter((r) => r.accrualId !== docs.accrual[1].id && r.accrualId !== docs.accrual[2].id);
+      docs.reservation = docs.reservation.filter((r) => r.accrualId !== docs.accrual[1].id && r.accrualId !== docs.accrual[2].id);
+    };
+    const wTwoCarry = mkWorld({ manifest: twoCarryManifest, mutateDocs: (docs) => {
+      stripTwoCarriers(docs);
+      docs.accrual[4].amountCredits = 80000; // epoch 6, OB's carried effective
+      docs.accrual[5].amountCredits = 90000; // epoch 6, OC's carried effective
+    } });
+    const ledTwoCarry = await runLedger(wTwoCarry);
+    ok("two members carry concurrently, each into their own next-epoch accrual",
+      ledTwoCarry.recordSet.label === "READ-CHECKED"
+      && ledTwoCarry.perEpoch.get(5).diagnostics.length === 0
+      && ledTwoCarry.perEpoch.get(6).diagnostics.length === 0
+      && ledTwoCarry.receiptEvaluations.length === 1
+      && ledTwoCarry.lag.lagCount === 0);
+    // the DIFFERENTIAL twin swaps the two carried amounts, so an
+    // aliased or pooled carry state cannot satisfy both worlds
+    const wTwoCarryX = mkWorld({ manifest: twoCarryManifest, mutateDocs: (docs) => {
+      stripTwoCarriers(docs);
+      docs.accrual[4].amountCredits = 90000;
+      docs.accrual[5].amountCredits = 80000;
+    } });
+    const ledTwoCarryX = await runLedger(wTwoCarryX);
+    ok("swapped carried amounts refuse both members' epoch-6 accruals (carry is per member, never pooled)",
+      ledTwoCarryX.recordSet.label === "REFUSED"
+      && ledTwoCarryX.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed 80000/.test(d))
+      && ledTwoCarryX.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed 90000/.test(d)));
+    // PART-ONLY MACHINERY under an excluded row (the third uncased
+    // branch): the below-minimum row has no receipt and no reservation,
+    // only a lone part document, and the sweep must still fetch it
+    const wPartOnly = mkWorld({ manifest: carryManifest, mutateDocs: (docs) => {
+      stripSmallOwner(docs);
+      docs.accrual[5].amountCredits = 80000;
+      docs.part.push({ id: h32("7b"), poolId: POOL_HEX, accrualId: docs.accrual[2].id,
+        partIndex: 1, bytes: "aa" });
+    } });
+    const ledPartOnly = await runLedger(wPartOnly);
+    ok("a lone part document under a below-minimum row is a fetched extra",
+      ledPartOnly.recordSet.label === "REFUSED"
+      && ledPartOnly.perEpoch.get(5).diagnostics.some((d) => /outside the expected receipt set/.test(d))
+      && ledPartOnly.lag.lagCount === 1);
+    // CARRY THROUGH AN EFFECTIVE-LEVEL ENCODING REFUSAL (the second
+    // uncased branch). The single-member zero-fee pool is the one shape
+    // where owed can sit within a carry of the ceiling. Epoch 5 carries
+    // 80000, epoch 6's owed is encodable on its own while owed plus
+    // carry crosses the ceiling, so epoch 6 takes the encoding-refused
+    // treatment, and the carry must pass through UNCHANGED into the
+    // zero-earning epoch 7, whose accrual holds the preserved 80000
+    const soloManifest = { v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
+      owners: [{ owner: OB, amountDuffs: String(EVO), bps: 10000,
+        rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" }] };
+    const soloRange = async (start, end) => ({ epochs: [
+      { number: 5, totalProcessingFees: "8000000", totalDistributedStorageFees: "0",
+        coreBlockRewards: "0", totalBlocks: "100", proposedCount: 1 },
+      { number: 6, totalProcessingFees: "900719925470099100", totalDistributedStorageFees: "0",
+        coreBlockRewards: "0", totalBlocks: "100", proposedCount: 1 },
+      { number: 7, totalProcessingFees: "5000000", totalDistributedStorageFees: "0",
+        coreBlockRewards: "0", totalBlocks: "100", proposedCount: 0 },
+    ].filter((e) => e.number >= start && e.number <= end), proved: false });
+    const soloDocs = (epoch7Amount) => (docs) => {
+      docs.receipt = [];
+      docs.reservation = [];
+      const h5 = docs.header.find((h) => h.epochIndex === 5);
+      h5.grossCredits = 80000; h5.feeCredits = 0; h5.memberCount = 1;
+      docs.header = [h5,
+        { ...h5, id: h32("17"), epochIndex: 7, grossCredits: 0, feeCredits: 0 }];
+      const a5 = docs.accrual.find((a) => a.epochIndex === 5);
+      a5.amountCredits = 80000;
+      docs.accrual = [a5,
+        { id: h32("37"), poolId: POOL_HEX, epochIndex: 7, funderId: a5.funderId,
+          amountCredits: epoch7Amount }];
+    };
+    const wSolo = mkWorld({ manifest: soloManifest, operatorFeeBps: 0,
+      journalRecords: [], fetchRange: soloRange,
+      mutateFr: (fr) => { fr.participantCount = 1; },
+      mutateDocs: soloDocs(80000) });
+    const ledSolo = await runLedger(wSolo);
+    ok("carry passes through an effective-level encoding refusal unchanged",
+      ledSolo.perEpoch.get(6).condition === "encoding-refused"
+      && ledSolo.perEpoch.get(6).diagnostics.length === 0
+      && !ledSolo.perEpoch.get(5).diagnostics.some((d) => /differs from the recomputed/.test(d))
+      && !ledSolo.perEpoch.get(7).diagnostics.some((d) => /differs from the recomputed/.test(d)));
+    // the differential twin zeroes epoch 7's accrual, so a join that
+    // DROPS the carry at the refused epoch cannot satisfy both worlds
+    const wSolo0 = mkWorld({ manifest: soloManifest, operatorFeeBps: 0,
+      journalRecords: [], fetchRange: soloRange,
+      mutateFr: (fr) => { fr.participantCount = 1; },
+      mutateDocs: soloDocs(0) });
+    const ledSolo0 = await runLedger(wSolo0);
+    ok("a zero accrual after the refused epoch refuses against the preserved carry",
+      ledSolo0.perEpoch.get(7).diagnostics.some((d) => /differs from the recomputed 80000/.test(d)));
+    // TWO-EPOCH ACCUMULATION CROSSING THE MINIMUM (the spec's vector set
+    // 6): epoch 6 earns the same figures, so the small owner's effective
+    // there is 80000 + 80000 = 160000, PAYABLE; an epoch-6 accrual still
+    // holding the owed-only 80000 refuses against the recomputed 160000
+    const earning6 = new Map([
+      [5, { number: 5, totalProcessingFees: "100000000", totalDistributedStorageFees: "0",
+        coreBlockRewards: "0", totalBlocks: "100", proposedCount: 1 }],
+      [6, { number: 6, totalProcessingFees: "100000000", totalDistributedStorageFees: "0",
+        coreBlockRewards: "0", totalBlocks: "100", proposedCount: 1 }]]);
+    const wCross = mkWorld({ manifest: carryManifest, mutateDocs: (docs) => {
+      stripSmallOwner(docs);
+      docs.accrual[5].amountCredits = 80000; // owed-only, NOT the crossed 160000
+    } });
+    const ledCross = await runLedger(wCross, { epochInfo: earning6 });
+    ok("a two-epoch accumulation crossing the minimum recomputes the crossed effective",
+      ledCross.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed 160000/.test(d)));
+    // the DIFFERENTIAL companion. The closing wave's second outside
+    // family found in part C that the fixture is not a closed world,
+    // so bind the diagnostic to the carry fold. The identical world
+    // whose epoch-6 accrual holds the crossed 160000 produces NO
+    // recomputed-160000 mismatch, so the diagnostic above comes from
+    // the carry arithmetic, not from the fixture's unrelated epoch-6
+    // noise
+    const wCrossOk = mkWorld({ manifest: carryManifest, mutateDocs: (docs) => {
+      stripSmallOwner(docs);
+      docs.accrual[5].amountCredits = 160000;
+    } });
+    const ledCrossOk = await runLedger(wCrossOk, { epochInfo: earning6 });
+    ok("the crossed-effective accrual clears the mismatch (the differential control)",
+      !ledCrossOk.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed 160000/.test(d)));
+  }
+  {
+    // ---- the SELF-SHARE exclusion (the D8 carry unit) ----
+    const selfB58 = toBase58(INCOME);
+    const selfManifest = {
+      v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
+      owners: [
+        // ascending by decoded owner identifier (the allocation's sort
+        // rule; the self-share owner's ee.. bytes sort near the top)
+        { owner: OB, amountDuffs: String(BigInt(EVO) / 2n), bps: 5000, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
+        { owner: selfB58, amountDuffs: String(BigInt(EVO) / 2n), bps: 5000, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
+      ] };
+    const twoMemberWorld = (docs) => {
+      // the fixture world hard-codes a three-member shape: bring the
+      // headers and the epoch-6 zero-accrual set to this two-member
+      // allocation (the co-owner plus the income identity)
+      docs.header.forEach((h) => { h.memberCount = 2; });
+      docs.accrual = docs.accrual.filter((a) => !(a.epochIndex === 6 && (a.funderId === FA || a.funderId === FC)));
+      docs.accrual.push({ id: h32("3e"), poolId: POOL_HEX, epochIndex: 6, funderId: INCOME, amountCredits: 0 });
+    };
+    const stripSelf = (docs) => {
+      twoMemberWorld(docs);
+      const selfAccrual = docs.accrual.find((a) => a.epochIndex === 5 && a.funderId === INCOME);
+      docs.receipt = docs.receipt.filter((r) => r.accrualId !== selfAccrual.id);
+      docs.reservation = docs.reservation.filter((r) => r.accrualId !== selfAccrual.id);
+    };
+    const idServed = (base) => async (type, key) =>
+      type === "identity" ? { status: "served", doc: { id: key.identityId }, height: "892" } : base(type, key);
+    const wSelf = mkWorld({ manifest: selfManifest,
+      mutateFr: (fr) => { fr.participantCount = 2; },
+      mutateDocs: stripSelf, provedByKey: idServed });
+    const ledSelf = await runLedger(wSelf);
+    ok("a self-share settles without a receipt: the epoch is clean with the co-owner's receipt only",
+      ledSelf.recordSet.label === "READ-CHECKED"
+      && ledSelf.perEpoch.get(5).diagnostics.length === 0
+      && ledSelf.receiptEvaluations.length === 1
+      && ledSelf.lag.lagCount === 0);
+    const wSelfStuck = mkWorld({ manifest: selfManifest,
+      mutateFr: (fr) => { fr.participantCount = 2; },
+      mutateDocs: twoMemberWorld, provedByKey: idServed });
+    const ledSelfStuck = await runLedger(wSelfStuck);
+    ok("machinery under a self-share is a fetched extra that keeps the epoch incomplete",
+      ledSelfStuck.recordSet.label === "REFUSED"
+      && ledSelfStuck.perEpoch.get(5).diagnostics.some((d) => /outside the expected receipt set/.test(d))
+      // exactly one, so the lag demonstrably comes from epoch 5, the
+      // world's only incomplete epoch (the fold screen's checking)
+      && ledSelfStuck.lag.lagCount === 1);
   }
   {
     // a missing-receipt row's reservation answer binds to its key: a
@@ -3122,9 +3352,53 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
           coreBlockRewards: "0", totalBlocks: "100", proposedCount: 0 }]
           .filter((e) => e.number >= start && e.number <= end), proved: false }) });
     const ledIg = await runLedger(wP, { resolution: narrowed6 });
-    ok("a by-identifier served accrual in an IGNORED epoch carries no obligation",
-      ledIg.recordSet.label === "READ-CHECKED" && ledIg.diagnostics.extras.length === 0
+    ok("a by-identifier served accrual in an IGNORED epoch carries no obligation (the start-narrowed interval's own epoch is UNPROVED under the carry seed rule)",
+      ledIg.recordSet.label === "UNPROVED" && ledIg.diagnostics.extras.length === 0
+      && ledIg.perEpoch.get(6).diagnostics.some((d) => /carry seeding compares the interval start to the universe start/.test(d))
       && !ledIg.diagnostics.poolGlobal.some((d) => /INCOMPLETE/.test(d)));
+    // ---- THE SEED REFERENCE IS THE UNIVERSE START (the closing wave's
+    // convergent part B finding, both outside families independently,
+    // decided 2026-08-28). These two cases DISCRIMINATE the predicates,
+    // which no earlier world could (activation always equaled the
+    // configured start), and they pin THE PREDICATE ALONE. The worlds
+    // are empty and carry no member state, so the carry arithmetic
+    // under a seeded join is NOT their claim (the from-start carry
+    // chain cases above pin that). An interval starting AT a proved
+    // activation boundary LATER than the configured start SEEDS, and
+    // the lateConfiguredStart corner stays fail-closed. The range read
+    // is proved:false, the narrowed-interval precedent's own shape
+    const bareWorld = () => mkWorld({ journalRecords: [],
+      mutateDocs: (docs) => { Object.keys(docs).forEach((k) => { docs[k].length = 0; }); } });
+    const zeroEpoch = (n) => ({ number: n, totalProcessingFees: "5000000",
+      totalDistributedStorageFees: "0", coreBlockRewards: "0",
+      totalBlocks: "100", proposedCount: 0 });
+    const seedAct = await resolveInterval({ requestedStart: 7, requestedEnd: 7,
+      configuredStart: 5, provedActivation: 7, fetchRange: async (start, end) => ({
+        epochs: [zeroEpoch(7)].filter((e) => e.number >= start && e.number <= end), proved: false }) });
+    const ledSeedAct = await runLedger(bareWorld(), { resolution: seedAct });
+    ok("an interval starting at a proved activation boundary later than the configured start SEEDS (the universe start is the seed reference)",
+      !ledSeedAct.perEpoch.get(7).diagnostics.some((d) => /compares the interval start to the universe start/.test(d))
+      && ledSeedAct.perEpoch.get(7).r !== null);
+    // an interval beginning BEFORE the universe start still seeds (the
+    // fold screen's checking mutation, an equality comparison would
+    // wrongly refuse this real shape, a from-the-configured-start
+    // interval whose activation is proved later)
+    const seedBefore = await resolveInterval({ requestedStart: 5, requestedEnd: 7,
+      configuredStart: 5, provedActivation: 7, fetchRange: async (start, end) => ({
+        epochs: [zeroEpoch(5), zeroEpoch(6), zeroEpoch(7)]
+          .filter((e) => e.number >= start && e.number <= end), proved: false }) });
+    const ledSeedBefore = await runLedger(bareWorld(), { resolution: seedBefore });
+    ok("an interval beginning before the universe start seeds (the comparison is an ordering, not an equality)",
+      !ledSeedBefore.perEpoch.get(7).diagnostics.some((d) => /compares the interval start to the universe start/.test(d))
+      && ledSeedBefore.perEpoch.get(7).r !== null);
+    const seedLate = await resolveInterval({ requestedStart: 9, requestedEnd: 9,
+      configuredStart: 9, provedActivation: 7, fetchRange: async (start, end) => ({
+        epochs: [zeroEpoch(9)].filter((e) => e.number >= start && e.number <= end), proved: false }) });
+    const ledSeedLate = await runLedger(bareWorld(), { resolution: seedLate });
+    ok("the lateConfiguredStart corner stays fail-closed (an interval at a configured start past activation is unseeded)",
+      ledSeedLate.recordSet.label === "UNPROVED"
+      && ledSeedLate.perEpoch.get(9).diagnostics.some((d) => /compares the interval start to the universe start/.test(d))
+      && ledSeedLate.perEpoch.get(9).r === null);
     const wN = mkWorld({ mutateDocs: mut, provedByKey: (base) => async (type, key) =>
       type === "accrualById" ? { status: "served", doc: { ...side, poolId: h32("77") }, height: "2001" } : base(type, key) });
     const ledNc = await runLedger(wN);
@@ -3206,8 +3480,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
           .filter((e) => e.number >= start && e.number <= end), proved: false }) });
     const wIg = mkw(recovered);
     const ledIg2 = await runLedger(wIg, { resolution: narrowed6 });
-    ok("the same pair under an accrual recovered at an IGNORED epoch carries no obligation",
-      ledIg2.recordSet.label === "READ-CHECKED"
+    ok("the same pair under an accrual recovered at an IGNORED epoch carries no obligation (the interval's own epoch UNPROVED under the carry seed rule)",
+      ledIg2.recordSet.label === "UNPROVED"
+      && ledIg2.perEpoch.get(6).diagnostics.some((d) => /carry seeding compares the interval start to the universe start/.test(d))
       && ledIg2.diagnostics.orphans.length === 0 && ledIg2.diagnostics.extras.length === 0);
   }
   {
@@ -3320,8 +3595,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
           coreBlockRewards: "0", totalBlocks: "100", proposedCount: 0 }]
           .filter((e) => e.number >= start && e.number <= end), proved: false }) });
     const ledIgF = await runLedger(mkWorld({ mutateDocs: mutF }), { resolution: narrowed42 });
-    ok("a malformed funder identifier in an IGNORED epoch carries no obligation",
-      ledIgF.recordSet.label === "READ-CHECKED"
+    ok("a malformed funder identifier in an IGNORED epoch carries no obligation (the interval's own epoch UNPROVED under the carry seed rule)",
+      ledIgF.recordSet.label === "UNPROVED"
+      && ledIgF.perEpoch.get(6).diagnostics.some((d) => /carry seeding compares the interval start to the universe start/.test(d))
       && !ledIgF.diagnostics.poolGlobal.some((d) => /malformed funder identifier/.test(d)));
     const wStr = mkWorld({ mutateDocs: (docs) => {
       docs.header[0].grossCredits = "1000000";
@@ -4354,7 +4630,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const led = await runLedger({ ...w, deps });
     ok("a receipt under a KNOWN-KEY zero-entitlement accrual is a fetched extra",
       led.recordSet.label === "REFUSED"
-      && led.perEpoch.get(6).diagnostics.some((d) => /zero-entitlement accrual/.test(d)));
+      && led.perEpoch.get(6).diagnostics.some((d) => /outside the expected receipt set/.test(d)));
   }
   {
     // the SINGLE pinned reservation read is the evaluated one: an
@@ -4581,6 +4857,11 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && rep.aspects.binding.label === "UNVERIFIABLE"
       && rep.aspects.temporalOrder.label === "UNVERIFIABLE"
       && rep.aspects.shareConformance.label === "UNVERIFIABLE");
+    ok("the four pinned aspects carry dependency-naming notes in the report structure (the note TEXT is documentation; its accuracy is the spec's, not this assertion's)",
+      /gate G4/.test(rep.aspects.binding.note)
+      && /C3's machinery generalized/.test(rep.aspects.temporalOrder.note)
+      && /historical reward-share query/.test(rep.aspects.shareConformance.note)
+      && /balance-checkpoint interface/.test(rep.aspects.balance.note));
     ok("the lag and the per-epoch rows are the evaluation's",
       rep.lag.lagCount === 0 && rep.lag.undistributedCredits === "0"
       && rep.epochs.length === 2 && rep.epochs[0].r === "0"
@@ -5074,9 +5355,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
       owners: [
         { owner: OA, amountDuffs: String(BigInt(EVO) * 4n / 10n), bps: 4000, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
-        { owner: OB, amountDuffs: String(BigInt(EVO) * 3n / 10n), bps: 3000, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
+        { owner: OB, amountDuffs: String(BigInt(EVO) / 4n), bps: 2500, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
         { owner: OC, amountDuffs: String(BigInt(EVO) / 5n), bps: 2000, rewardScriptHex: "76a914" + "33".repeat(20) + "88ac" },
-        { owner: OD49, amountDuffs: String(BigInt(EVO) / 10n), bps: 1000, rewardScriptHex: "76a914" + "44".repeat(20) + "88ac" },
+        { owner: OD49, amountDuffs: String(BigInt(EVO) * 3n / 20n), bps: 1500, rewardScriptHex: "76a914" + "44".repeat(20) + "88ac" },
       ] },
       mutateFr: (fr) => { fr.participantCount = 4; },
       provedByKey: (base) => async (type, key) =>
@@ -5097,9 +5378,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       owners: [
         { owner: OA, amountDuffs: String(BigInt(EVO) * 3n / 10n), bps: 3000, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
         { owner: OB, amountDuffs: String(BigInt(EVO) / 4n), bps: 2500, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
-        { owner: OC, amountDuffs: String(BigInt(EVO) / 5n), bps: 2000, rewardScriptHex: "76a914" + "33".repeat(20) + "88ac" },
+        { owner: OC, amountDuffs: String(BigInt(EVO) * 7n / 40n), bps: 1750, rewardScriptHex: "76a914" + "33".repeat(20) + "88ac" },
         { owner: OD49, amountDuffs: String(BigInt(EVO) * 3n / 20n), bps: 1500, rewardScriptHex: "76a914" + "44".repeat(20) + "88ac" },
-        { owner: OE60, amountDuffs: String(BigInt(EVO) / 10n), bps: 1000, rewardScriptHex: "76a914" + "55".repeat(20) + "88ac" },
+        { owner: OE60, amountDuffs: String(BigInt(EVO) / 8n), bps: 1250, rewardScriptHex: "76a914" + "55".repeat(20) + "88ac" },
       ] },
       mutateFr: (fr) => { fr.participantCount = 5; },
       provedByKey: (base) => async (type, key) =>
@@ -5357,8 +5638,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
           coreBlockRewards: "0", totalBlocks: "100", proposedCount: 0 }]
           .filter((e) => e.number >= start && e.number <= end), proved: false }) });
     const ledIg3 = await runLedger(w2, { resolution: narrowed });
-    ok("a reservation without its receipt in an IGNORED epoch is not reported (no obligation there)",
-      ledIg3.recordSet.label === "READ-CHECKED"
+    ok("a reservation without its receipt in an IGNORED epoch is not reported (no obligation there; the interval's own epoch UNPROVED under the carry seed rule)",
+      ledIg3.recordSet.label === "UNPROVED"
+      && ledIg3.perEpoch.get(6).diagnostics.some((d) => /carry seeding compares the interval start to the universe start/.test(d))
       && !ledIg3.diagnostics.poolGlobal.some((d) => /no receipt/.test(d)));
     // and a NARROWED interval keeps the obligation for its IN-SCOPE
     // epochs: [5, 5] still reports epoch 5's missing receipt

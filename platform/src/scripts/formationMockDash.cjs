@@ -59,6 +59,17 @@ const LEDGER_TYPES = () => {
   if (S.isV3()) types.add("settlement");
   if (S.hasPledgeSlot()) types.add("pledgeSlot");
   if (S.hasCompletionReceipt()) types.add("completionReceipt");
+  // the five E2 record types, mirroring the capability table exactly as the
+  // additions above do (the v11 adoption row's mock awareness). WIDTH: this is
+  // TYPE-GATE membership only; on a non-E2 ledger the gate refuses the name
+  // the way an undefined type refuses, and on v11 a permitted E2 operation
+  // proceeds to the mock's normal handling WITHOUT a schema validator (the
+  // five E2 shapes are the E2 offline batteries' business, not this
+  // formation mock's)
+  if (S.hasE2Records()) {
+    for (const t of ["epochHeader", "platformAccrual", "transferReceipt",
+      "receiptProofPart", "transferReservation"]) types.add(t);
+  }
   return types;
 };
 const requireLedgerType = (type) => {

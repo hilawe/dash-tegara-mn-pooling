@@ -91,6 +91,33 @@ const ledger = (total, heights, log) => {
       fetchVerifiedPage: async () => ({ documents: [], height: "1" }) }),
     /declare status/);
 
+  // ---- the enumeration bounds itself (a soundness-review finding) ----
+  {
+    // An endless ledger: every page is full and strictly ascending above its
+    // cursor, so the page checker is satisfied on every call and never refuses.
+    // Nothing in the page rules stops this walk; only the loop's own ceiling
+    // does. A cursor-advance guard here would be dead code, because a page that
+    // ascends above its cursor necessarily ends above it.
+    //
+    // maxPages is lowered so the bound is reachable in a test. The production
+    // default is far above any real audit, which is why exceeding it is treated
+    // as something being wrong rather than as an ordinary large result.
+    let calls = 0;
+    const endlessLedger = async ({ limit, startAfter }) => {
+      const start = startAfter === null ? 0
+        : parseInt(startAfter.slice(0, 2), 16) + 1;
+      calls += 1;
+      return { status: "verified", documents: docs(start, limit), height: "70" };
+    };
+    await rejects("the enumeration refuses rather than walking an endless ledger",
+      enumerateProved({ type: "receipt", limit: 2, maxPages: 3,
+        fetchVerifiedPage: endlessLedger }),
+      /exceeded 3 pages/);
+    // TERMINATION is the property, so the call count is the assertion: an
+    // unbounded walk would not have stopped at all, let alone at three pages
+    ok("it stops at its ceiling rather than walking forever", calls === 3);
+  }
+
   // ---- the enumeration ----
   {
     const log = [];
@@ -589,7 +616,15 @@ const ledger = (total, heights, log) => {
     };
     const r = await enumerateProved({ type: "receipt", limit: 2, fetchVerifiedPage: flaky });
     ok("a later unverified page makes the WHOLE enumeration unproved, nothing partial (the exact shape)",
-      r.status === "unproved" && Object.keys(r).length === 1);
+      r.status === "unproved" && Object.keys(r).length === 2
+      && Object.prototype.hasOwnProperty.call(r, "strength"));
+    // the STRENGTH is the failing page's own status, not a default. The two
+    // sub-cases below differ ONLY in which strength the transport declared, so
+    // an implementation that hardcoded either one fails exactly one of them.
+    ok("the unproved enumeration carries the UNVERIFIED strength when that is how the page failed",
+      r.strength === "unverified");
+    ok("an unproved enumeration still claims NO documents and NO range whatever its strength",
+      r.documents === undefined && r.heightMin === undefined && r.heightMax === undefined);
     let call2 = 0;
     const flaky2 = async (args) => {
       call2 += 1;
@@ -598,12 +633,16 @@ const ledger = (total, heights, log) => {
     };
     const r2 = await enumerateProved({ type: "receipt", limit: 2, fetchVerifiedPage: flaky2 });
     ok("a later UNSERVED page is the same whole-enumeration unproved shape",
-      r2.status === "unproved" && Object.keys(r2).length === 1);
+      r2.status === "unproved" && Object.keys(r2).length === 2);
+    ok("the unproved enumeration carries the UNSERVED strength when that is how the page failed",
+      r2.strength === "unserved");
   }
   {
     const r = await enumerateProved({ type: "receipt", limit: 2,
       fetchVerifiedPage: async () => ({ status: "unserved" }) });
     ok("an unserved first page is unproved", r.status === "unproved");
+    ok("a FIRST-page failure carries the strength too, not only a later page",
+      r.strength === "unserved");
   }
   await rejects("a repeated document refuses (the no-progress rule)",
     enumerateProved({ type: "receipt", limit: 2,

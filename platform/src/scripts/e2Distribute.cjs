@@ -1,9 +1,16 @@
 /**
- * The E2 DISTRIBUTION PROCEDURE's first half: the start-epoch configuration
- * mode, the run start (discovery, the lag measurement, the a soundness-review finding binding),
- * and STEP 1, the header flow (admission under both identity locks, the
- * write-ahead, the committed sent-marker before any broadcast, the outcome
- * classification, the capture, and the recovery rules).
+ * The E2 DISTRIBUTION PROCEDURE, steps 1 through 4: the start-epoch
+ * configuration mode, the run start (discovery, the lag measurement, the
+ * a soundness-review finding binding), STEP 1, the header flow (admission under both identity
+ * locks, the write-ahead, the committed sent-marker before any broadcast,
+ * the outcome classification, the capture, and the recovery rules), STEP 2,
+ * the accrual documents through the document-write rule, and STEPS 3 AND 4,
+ * the per-accrual preflight-bounded claim-then-send sequence (the a soundness-review finding
+ * reservation, the transfer under the explicit lock handoff, the capture,
+ * then parts first and the receipt last) with the wait-only recovery and
+ * observation rules. (This header once said the second half was not in this
+ * file yet; that sentence outlived the second half's landing by three
+ * commits and misled a scoping pass, corrected 2026-08-27.)
  *
  * WHAT IT ESTABLISHES: every durable effect is SEMANTICALLY VALIDATED by
  * the D7 machine BEFORE its bytes commit (appendChecked runs the validator
@@ -22,9 +29,9 @@
  * income inputs, are the deps implementations' obligations, exercised at
  * acceptance stage in the container, not by the offline battery; the
  * battery proves SEQUENCING, DURABILITY ORDERING, REFUSALS and RECOVERY
- * against the real journal, store and admission. Steps 2 through 4 (the
- * accrual documents and the reservation-transfer-receipt sequence) are the
- * unit's second half and are not in this file yet.
+ * against the real journal, store and admission. The live deps composition
+ * (the harness runner) is the acceptance-stage unit that discharges those
+ * injected obligations.
  *
  * OPERATOR CONDITIONS (patience expiry, stops, rebuild decisions) are
  * journaled by the OPERATOR through the D7 record kinds; this module
@@ -32,9 +39,11 @@
  * never appends a surfacing or decision itself; it DOES append the
  * evidence records the machinery defines (the measurement, write-aheads,
  * markers, error records, captures, and the foreign-document observation
- * that establishes the duplicate path's conditions). The one exception
- * class the spec assigns to the run, the encoding-preflight declarations,
- * belongs to the transfer steps in the second half.
+ * that establishes the duplicate path's conditions). The exception class
+ * the spec assigns to the run, the preflight declarations
+ * (transfer-unencodable, and a soundness-review finding/a soundness-review finding classification pair
+ * self-share-settled and transfer-below-minimum), belongs to the
+ * transfer steps in the second half.
  *
  * ONE DECLARED ORDER DIVERGENCE, marked in the spec: step 1's prose
  * builds the transition and then obtains the pinned balances, while this
@@ -45,7 +54,8 @@
  * frontier floor either way.
  */
 const envStore = require("./envStore.cjs");
-const { validateJournal, openValidatedJournal, K, PROVED_HEADER_ROUTE } = require("./e2Journal.cjs");
+const { validateJournal, openValidatedJournal, K, PROVED_HEADER_ROUTE,
+  MIN_TRANSFER_AMOUNT_CREDITS } = require("./e2Journal.cjs");
 const { openJournal, appendRecord } = require("./e2JournalStore.cjs");
 const { discoverFinalizedEpochs } = require("./e2Discovery.cjs");
 const { classifyOutcome, TOKENS } = require("./e2Outcome.cjs");
@@ -56,6 +66,12 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const DEC_U32 = /^(0|[1-9][0-9]*)$/;
 const U32_MAX = 4294967295;
 
+// the pinned minimum transfer amount lives in e2Journal.cjs (the
+// record-format validator enforces the below-minimum declaration payload
+// against it); the classification preflight here checks self-share FIRST
+// because the pinned validation refuses sender-equals-recipient before
+// the amount
+
 const refuse = (why) => { throw new Error(`e2Distribute: ${why}; refusing`); };
 
 const poolRunLockName = (poolId) => `e2-pool-${poolId}`;
@@ -64,6 +80,184 @@ const startKeyOf = (poolId) => `E2_START_EPOCH_${poolId.toUpperCase()}`;
 const requirePool = (poolId) => {
   if (typeof poolId !== "string" || !HEX64.test(poolId)) refuse("poolId must be 64 lowercase hex characters");
   return poolId;
+};
+
+/**
+ * EVERY ROW SET IS VALIDATED AT EVERY CONSUMPTION SITE, against the
+ * closed row grammar: recipientId is 64
+ * lowercase hex (the identity comparisons' input), accrualId is 32
+ * bytes lowercase hex and UNIQUE per set (a duplicate would misbind the
+ * per-accrual journal key and the exclusivity tuple), amountCredits is
+ * a canonical decimal string (so a malformed amount refuses through
+ * this named path, never a raw construction error), and ONE ROW PER
+ * MEMBER PER EPOCH holds (the allocation preconditions' owner
+ * uniqueness restated here, because the carry rule's per-row minimum
+ * comparison is wrong when two rows share an owner). ALL FOUR row
+ * consumers call this on the rows they fetch (startRun, runHeaderStep,
+ * runAccrualStep and runTransferStep), so a calculation swapped
+ * between steps cannot smuggle a malformed set past an earlier check.
+ * The accrual site was the gap the closing wave's second outside
+ * family found in part D, where the step between header and transfer
+ * wrote durable documents from an unvalidated set. The income identity
+ * is a REQUIRED argument, so a self-share row carrying an explicit
+ * nonzero carryInCredits refuses at every consumption site, not only
+ * where classification runs, and no caller can skip the duty by
+ * omission (the same wave's part D minor, hardened by the fold
+ * screen).
+ */
+// the carry member's grammar and bounds, one predicate for every
+// surface that reads it (validateEntitlementRows and the exported
+// classifier), so no caller can reach a raw BigInt construction error
+// or a silently accepted malformed member
+const validateCarryMember = (row) => {
+  if (row.carryInCredits === undefined) return;
+  if (typeof row.carryInCredits !== "string" || !DEC_U32.test(row.carryInCredits)) {
+    refuse("an entitlement row's carryInCredits must be a canonical decimal string when present");
+  }
+  if (BigInt(row.carryInCredits) >= MIN_TRANSFER_AMOUNT_CREDITS) {
+    refuse("an entitlement row's carryInCredits must be below the pinned minimum (a carried amount never reaches it)");
+  }
+  if (BigInt(row.carryInCredits) > BigInt(row.amountCredits)) {
+    refuse("an entitlement row's carryInCredits cannot exceed its effective amountCredits");
+  }
+};
+
+const validateEntitlementRows = (rows, incomeIdentity) => {
+  // the income identity is REQUIRED, not optional. The fold screen
+  // caught that an omissible duty is the unchecked-never-means-passed
+  // shape, and a caller that cannot name the income identity cannot
+  // enforce the never-receives-carry rule it owes
+  if (!HEX64.test(incomeIdentity || "")) {
+    refuse("validateEntitlementRows requires the caller's income identity (64 lowercase hex)");
+  }
+  const seenRecipients = new Set();
+  const seenAccruals = new Set();
+  for (const row of rows) {
+    if (!HEX64.test(row.accrualId || "")) {
+      refuse("an entitlement row's accrualId must be 32 bytes lowercase hex");
+    }
+    if (seenAccruals.has(row.accrualId)) {
+      refuse(`two entitlement rows share one accrualId (${row.accrualId.slice(0, 8)}...); the row set's accrual identity is not unique`);
+    }
+    seenAccruals.add(row.accrualId);
+    if (typeof row.amountCredits !== "string" || !DEC_U32.test(row.amountCredits)) {
+      refuse("an entitlement row's amountCredits must be a canonical decimal string");
+    }
+    // the OPTIONAL carry-in member (the decided two-value migration
+    // rule's second accepted value derives from it): absent means zero;
+    // when present it obeys the carry layer's own invariants through
+    // the shared predicate
+    validateCarryMember(row);
+    if (!HEX64.test(row.recipientId || "")) {
+      refuse("an entitlement row's recipientId must be 64 lowercase hex (the payability exclusions compare identities)");
+    }
+    // the never-receives-carry invariant at EVERY consumption site, so
+    // a self-share row with an explicit nonzero carry-in refuses here,
+    // not only at classification
+    if (row.recipientId === incomeIdentity
+        && BigInt(row.carryInCredits || "0") !== 0n) {
+      refuse("a self-share row cannot carry a nonzero carryInCredits (the income identity's rows never receive carry)");
+    }
+    if (seenRecipients.has(row.recipientId)) {
+      refuse(`two entitlement rows share one owner (${row.recipientId.slice(0, 8)}...); the allocation's owner uniqueness is violated`);
+    }
+    seenRecipients.add(row.recipientId);
+  }
+};
+
+/**
+ * THE ONE CLASSIFIER (the closing wave's second outside family, part C:
+ * the classification lived in three re-derivations, the measurement,
+ * the transfer step and the driver's nonce prefetch, a drift surface).
+ * Returns exactly "self-share", "below-minimum" or "payable", in the
+ * pinned validation's own order (self-share first). Rows reach it
+ * validated (validateEntitlementRows), and the hex check here is the
+ * defensive floor for any direct caller.
+ */
+const classifyEntitlement = (row, incomeIdentity) => {
+  // the export is SELF-CONTAINED (the batch confirmation pass): a
+  // direct caller gets the same closed grammar the integrated paths
+  // assert, so no call surface classifies a row the grammar refuses.
+  // That includes the SECOND argument (the wave's repository-access
+  // pass), because a malformed or absent income identity cannot
+  // recognize a self-share and would answer payable for one
+  if (!HEX64.test(incomeIdentity || "")) {
+    refuse("classifyEntitlement requires the caller's income identity (64 lowercase hex)");
+  }
+  if (!HEX64.test(row.recipientId || "")) {
+    refuse("an entitlement row's recipientId must be 64 lowercase hex (the payability exclusions compare identities)");
+  }
+  if (typeof row.amountCredits !== "string" || !DEC_U32.test(row.amountCredits)) {
+    refuse("an entitlement row's amountCredits must be a canonical decimal string");
+  }
+  if (BigInt(row.amountCredits) <= 0n) {
+    refuse("only a positive entitlement is classified (zero rows never reach the transfer machinery)");
+  }
+  // the carry member's grammar on EVERY row. Without this the closing
+  // wave's second outside family showed in part D that a direct
+  // caller's malformed member was silently accepted on a non-self-share
+  // row and reached a raw BigInt construction error on a self-share one
+
+  validateCarryMember(row);
+  if (row.recipientId === incomeIdentity) {
+    // the carry layer's invariant, enforced AT ITS REACHABLE WIDTH: an
+    // EXPLICIT nonzero carry-in on a self-share refuses (no calculation
+    // can conformingly hand one a carry-in); an omitted member is the
+    // pre-carry shape inside the row trust boundary, indistinguishable
+    // by construction (the decided rule declined an era marker)
+    if (BigInt(row.carryInCredits || "0") !== 0n) {
+      refuse("a self-share row cannot carry a nonzero carryInCredits (the income identity's rows never receive carry)");
+    }
+    return "self-share";
+  }
+  if (BigInt(row.amountCredits) < MIN_TRANSFER_AMOUNT_CREDITS) return "below-minimum";
+  return "payable";
+};
+
+/**
+ * The income identity BINDS TO THE INJECTED POOL RESOLVER (the checker
+ * round's fold): the classification and the measurement compare rows
+ * against deps.identities.income, so a caller-selected value would let a
+ * wrong identity silently reclassify a payable row. Every step that runs
+ * those comparisons resolves the pool through deps.resolvePool and
+ * refuses a disagreeing configuration. WHAT THIS ESTABLISHES is agreement
+ * between two injected values; that the resolver actually performs the
+ * a soundness-review finding-pinned formation reads is the resolver implementation's deps
+ * obligation, the same trust statement as every injected surface here.
+ */
+const requireIncomeBinding = (deps, poolId, what) => {
+  if (typeof deps.resolvePool !== "function") {
+    refuse(`${what} needs deps.resolvePool (the a soundness-review finding-pinned formation reads); the income identity must bind to the pool record`);
+  }
+  const resolved = deps.resolvePool(poolId);
+  if (!resolved || resolved.incomeIdentity !== deps.identities.income) {
+    refuse(`${what} refuses: deps.identities.income disagrees with the pool record's income identity`);
+  }
+};
+
+/**
+ * THE CANONICAL-GATE CONSULT (the battery definition's rule: every E2 writer
+ * except the battery's own one-shot gate path REFUSES to write any E2 record
+ * while E2_GATE_CAPTURE is absent or fails the strict lookup). It runs FIRST
+ * in each writer entry, before any journal or ledger write. The lookup is an
+ * injected dependency like every other external fact this module consumes
+ * (production callers pass e2CaptureBattery.verifyGateCapture wired to their
+ * journal reader); it must RESOLVE to { admitted: true }, so a stub that
+ * returns nothing, throws, or reports anything else refuses, and there is no
+ * parameter that waives the consult.
+ */
+const requireGateAdmission = async (deps, what) => {
+  if (typeof (deps && deps.verifyGateCapture) !== "function") {
+    refuse(`${what} needs deps.verifyGateCapture (the canonical-gate strict lookup); no E2 record is written without it`);
+  }
+  let verdict;
+  try { verdict = await deps.verifyGateCapture(); }
+  catch (e) {
+    refuse(`${what} refuses: the canonical-gate strict lookup did not admit (${(e && e.message) || String(e)})`);
+  }
+  if (!verdict || verdict.admitted !== true) {
+    refuse(`${what} refuses: the canonical-gate strict lookup returned no admission`);
+  }
 };
 
 /**
@@ -118,17 +312,84 @@ const readConfiguredStartKey = (poolId) => {
 // deps.epochDistributionComplete (its unproved status before C1 propagates
 // to the measurement exactly as the spec states, and a false or absent
 // answer counts the epoch lagging, the conservative direction). The
-// journal supplies only the outstanding-amount SUM (positive entitlements
-// without a receipt capture, at full value).
-const journalOutstandingSum = (read, epochIndex, rows) => {
+// journal supplies only the outstanding-amount SUM: positive PAYABLE
+// entitlements without a receipt capture, at full value. PAYABLE applies
+// step 5's exclusions (a soundness-review finding): a self-share is settled where it
+// sits and a below-minimum amount reappears inside a later epoch's
+// effective entitlements, so counting either would overstate or
+// double-count.
+// The return reports BOTH sums over the epoch it is called for, so the
+// BELOW-MINIMUM exclusion is visible instead of vanishing (a measurement
+// reports what it excluded, not only its verdict). HOW THE CALLER USES
+// THE TWO DIFFERS, and that difference is a soundness-review finding correction: `payable`
+// is a FLOW and accumulates across incomplete epochs, while `carried` is
+// a STOCK and the caller keeps only the frontier epoch's. The
+// MACHINERY test comes FIRST for every row (the checker's fold):
+// any row whose accrual carries journaled transfer or reservation
+// machinery without a receipt keeps the OLD undistributed accounting,
+// self-shares included, because unresolved machinery is outstanding
+// process state whatever the row's classification would be. With no
+// machinery: a SELF-SHARE contributes nothing (its value rests at the
+// owner's own identity, nothing outstanding), a below-minimum row
+// contributes nothing HERE because it is a deferral rather than a payable,
+// and a payable row contributes its amount.
+//
+// THIS FUNCTION NO LONGER REPORTS THE DEFERRAL, and that separation is
+// a soundness-review finding rule taken at its word. The deferral is a property of the CARRY
+// RULE alone, computed by the caller from the rows; it does not consult
+// the journal, because a below-minimum amount is deferred by rule whatever
+// machinery sits on its accrual. Deriving it here instead, with the
+// machinery exclusion applied, was a deviation that produced two defects a
+// review found: an earlier epoch's stuck amount was reported as payable
+// AND folded into the frontier's deferral, and a complete frontier holding
+// a stuck below-minimum row reported nothing at all while the carry rule
+// required the next epoch to contain it.
+//
+// THE TWO FIGURES MEASURE DIFFERENT THINGS AND MAY OVERLAP, which is worth
+// stating rather than engineering away. `undistributedCredits` is
+// outstanding PROCESS state across incomplete epochs; `carriedCredits` is
+// the deferral at the frontier by the carry rule. A stuck below-minimum row
+// is genuinely both, and reporting it in both is more truthful than
+// choosing one and leaving the other silent.
+const journalOutstandingPayable = (read, epochIndex, rows, incomeIdentity) => {
   const e = read.perEpoch[epochIndex];
-  let out = 0n;
+  let payable = 0n;
   for (const r of rows) {
     if (BigInt(r.amountCredits) <= 0n) continue;
+    const cls = classifyEntitlement(r, incomeIdentity);
     const a = e && e.accruals[r.accrualId];
-    if (!(a && a.receiptCaptured)) out += BigInt(r.amountCredits);
+    if (a && a.receiptCaptured) continue;
+    const hasMachinery = !!(a && (a.transfer || a.reservation));
+    if (hasMachinery) { payable += BigInt(r.amountCredits); continue; }
+    if (cls === "self-share") continue; // settled where it sits
+    if (cls === "below-minimum") continue; // a deferral, not a payable
+    payable += BigInt(r.amountCredits);
   }
-  return out;
+  return payable;
+};
+
+/**
+ * THE LIFECYCLE ANSWER, READ THROUGH ONE PREDICATE THAT REFUSES WHAT IT CANNOT READ.
+ *
+ * Both consumers compare this dependency's answer with `!== true` and neither awaits it,
+ * which is a contract that silently misreads the one implementation the specification
+ * actually calls for. Step 5's lifecycle is a derivation over PLATFORM READS, so an honest
+ * implementation is asynchronous, and a Promise is not strictly equal to `true`. Supplied
+ * asynchronously, answers that give lag 1 synchronously give lag 2 instead, with nothing
+ * said and nothing failing.
+ *
+ * THIS DOES NOT MAKE THE SEAM ASYNCHRONOUS, which is a larger decision about where the
+ * canonical lifecycle rule should live. It makes the seam refuse an answer it cannot read
+ * correctly, so the next implementation that returns a Promise, a truthy string or nothing
+ * at all is stopped by name rather than quietly changing what the writer measures and
+ * which epoch it selects.
+ */
+const epochComplete = (deps, epochIndex) => {
+  const answer = deps.epochDistributionComplete(epochIndex);
+  if (answer !== true && answer !== false) {
+    refuse(`deps.epochDistributionComplete must answer a strict boolean for epoch ${epochIndex}, and answered ${answer && typeof answer.then === "function" ? "a Promise (this seam is synchronous: an asynchronous lifecycle check would be read as incomplete for every epoch)" : JSON.stringify(answer)}`);
+  }
+  return answer;
 };
 
 // ---- the run start ----
@@ -147,6 +408,10 @@ const startRun = async ({ poolId, dir, deps }) => {
     || typeof deps.epochDistributionComplete !== "function") {
     refuse("startRun needs deps.fetchRange (discovery), deps.entitlementsForEpoch and deps.epochDistributionComplete (the step-5 lifecycle over platform reads)");
   }
+  if (!deps.identities || !HEX64.test(deps.identities.income || "")) {
+    refuse("startRun needs deps.identities.income (hex): the measurement's payability exclusions compare against it");
+  }
+  requireIncomeBinding(deps, poolId, "startRun");
   envStore.acquireOpLock(poolRunLockName(poolId));
   try {
     const read = openValidatedJournal(poolId, dir);
@@ -169,21 +434,97 @@ const startRun = async ({ poolId, dir, deps }) => {
 
     let lag = 0;
     let undistributed = 0n;
+    // THE DEFERRED STOCK AT THE FRONTIER (a soundness-review finding), not a sum across epochs.
+    // With a carry-capable calculation each epoch's effective amount already
+    // contains every earlier epoch's deferral for that member, so adding the
+    // epochs together counts one deferral once per epoch it survives into.
+    // The frontier is the LAST universe epoch, the newest finalized one
+    // (Hilawe, 2026-08-30): the figure exists so that a deferred amount is
+    // visible and never vanishes, and stopping at the last COMPLETED epoch
+    // would make a deferral sitting in a finalized-but-unworked epoch
+    // invisible, which is the disappearance it was added to prevent. The
+    // recursion is deterministic and execution-independent by the build
+    // spec's own first carry property, so the newest finalized epoch is as
+    // well-founded a frontier as any epoch the run has worked.
+    // AN EMPTY UNIVERSE REPORTS ZERO, and that is a specified identity rather than a
+    // value left over from an unexecuted loop. With no finalized epoch there is no epoch
+    // whose entitlements could have been below the minimum, so nothing is deferred, and
+    // zero is the deferral rather than a stand-in for one. The measurement is still
+    // appended, because the run start's record is what binds the configured start and is
+    // owed whether or not discovery found anything.
+    let carriedStock = 0n;
+    // A DEFERRAL MAY NOT SHRINK OR DISAPPEAR ACROSS EPOCHS, which is the part
+    // of the row source's carry-capability the writer can actually see.
+    // Replacing the carried figure rather than accumulating it is correct only
+    // if each epoch's rows already contain the previous epoch's deferral, and
+    // an omitted `carryInCredits` cannot distinguish a zero carry from a
+    // pre-carry calculation. THIS CHECK IS A SUBSET AND THE WIDTH IS WORTH
+    // STATING: effective is the deferral plus a non-negative owed amount, so a
+    // member deferring X must be owed at least X at the next epoch, and a
+    // source answering LESS has lost the deferral. A source answering EXACTLY
+    // X while the member was owed more is indistinguishable from a conforming
+    // one owed nothing, and no check here can separate them, because the owed
+    // amount is precisely what the writer delegates. It bounds the TOTAL from
+    // below and establishes nothing about ATTRIBUTION, and it cannot: an
+    // omitted `carryInCredits` is a cost-free opt-out BY DESIGN, since the
+    // build spec's migration rule declined a calculation-era marker, so
+    // absence is the pre-carry shape and no record says which era produced a
+    // row. The build spec's trust statement stands; this closes the shape
+    // where value goes missing, not the shape where it is mis-attributed.
+    let deferredPrev = new Map();
     for (const ep of universe) {
       const rows = deps.entitlementsForEpoch(ep.number);
       if (!Array.isArray(rows)) refuse(`deps.entitlementsForEpoch returned no rows for epoch ${ep.number}`);
-      if (deps.epochDistributionComplete(ep.number) !== true) {
+      // every enumerated epoch's rows have their recipientId validated,
+      // COMPLETE ones included: a completeness answer never exempts the
+      // identity comparison's input from the check
+      validateEntitlementRows(rows, deps.identities.income);
+      if (deferredPrev.size > 0) {
+        const present = new Set();
+        for (const r of rows) {
+          present.add(r.recipientId);
+          const owedForward = deferredPrev.get(r.recipientId);
+          if (owedForward !== undefined && BigInt(r.amountCredits) < owedForward) {
+            refuse(`epoch ${ep.number}'s entitlement for ${r.recipientId.slice(0, 8)}... is ${r.amountCredits}, below the ${owedForward} deferred to it by the previous epoch; the calculation is not carry-capable and this run's measurement would understate the deferral`);
+          }
+        }
+        for (const [rid, amt] of deferredPrev) {
+          if (!present.has(rid)) {
+            refuse(`epoch ${ep.number} carries no row for ${rid.slice(0, 8)}..., to whom the previous epoch deferred ${amt}; a deferral cannot vanish by its member leaving the row set`);
+          }
+        }
+      }
+      // WHAT THIS EPOCH DEFERS, by the carry rule alone and derived ONCE. The
+      // same map obliges the next epoch to contain these amounts and, at the
+      // last universe epoch, IS the reported stock, so the obligation and the
+      // report cannot disagree about what is deferred. Per-recipient keying is
+      // sound because validateEntitlementRows above refuses a row set in which
+      // two rows share an owner.
+      deferredPrev = new Map();
+      for (const r of rows) {
+        if (BigInt(r.amountCredits) <= 0n) continue;
+        if (classifyEntitlement(r, deps.identities.income) === "below-minimum") {
+          deferredPrev.set(r.recipientId, BigInt(r.amountCredits));
+        }
+      }
+      // REPLACED, never accumulated: after the loop this holds the LAST
+      // universe epoch's deferral, which is the stock at the frontier
+      carriedStock = 0n;
+      for (const amt of deferredPrev.values()) carriedStock += amt;
+      if (epochComplete(deps, ep.number) !== true) {
         lag += 1;
-        undistributed += journalOutstandingSum(read, ep.number, rows);
+        undistributed += journalOutstandingPayable(read, ep.number, rows, deps.identities.income);
       }
     }
 
     appendChecked(poolId, dir, { v: 1, kind: K.DECLARATION, object: "pool", gen: 1, poolId,
       condition: "lag-measurement", reasoning: "run start", lagCount: lag,
       undistributedCredits: String(undistributed),
+      carriedCredits: String(carriedStock),
       ...(read.records.length === 0 ? { configuredStartEpoch: configuredStart } : {}) });
 
     return { configuredStart, universe, lag, undistributedCredits: String(undistributed),
+      carriedCredits: String(carriedStock),
       discoveryProved: discovery.proved,
       // the RUN TOKEN: the pool and the appended measurement's record
       // index, which every header step of THIS run must present (a later
@@ -202,7 +543,7 @@ const pickNextEpoch = (universe, deps) => {
   // step-5 lifecycle does not report COMPLETE; a stalled earlier epoch
   // stalls the run here, and journal evidence never infers completion
   for (const ep of universe) {
-    if (deps.epochDistributionComplete(ep.number) !== true) return ep.number;
+    if (epochComplete(deps, ep.number) !== true) return ep.number;
   }
   return null;
 };
@@ -247,6 +588,7 @@ const unconsumedRebuild = (read, epochIndex, gen) => {
  */
 const runHeaderStep = async ({ poolId, dir, deps, run }) => {
   requirePool(poolId);
+  await requireGateAdmission(deps, "runHeaderStep");
   const need = ["fetchRange", "entitlementsForEpoch", "epochNumbers", "epochDistributionComplete",
     "buildHeaderTransition", "broadcastAndAwait", "awaitResult", "buildHeaderCapture",
     "provedHeaderQuery", "fetchBalanceWithMetadata", "resolvePool"];
@@ -314,6 +656,7 @@ const runHeaderStep = async ({ poolId, dir, deps, run }) => {
   }
 
   const rows = deps.entitlementsForEpoch(epochIndex);
+  validateEntitlementRows(rows, deps.identities.income);
   const numbers = deps.epochNumbers(epochIndex);
   const expectedContents = { poolId, epochIndex, grossCredits: numbers.grossCredits,
     feeCredits: numbers.feeCredits, allocationHash: numbers.allocationHash,
@@ -354,7 +697,7 @@ const runHeaderStep = async ({ poolId, dir, deps, run }) => {
         positiveEntitlements: positives.map((r) => ({ accrualId: r.accrualId, amountCredits: r.amountCredits })) },
       identities: deps.identities, resolvePool: deps.resolvePool,
       fetchBalanceWithMetadata: deps.fetchBalanceWithMetadata,
-      feeCeilingCredits: deps.feeCeilingCredits, chainIdPin: deps.chainIdPin, locks });
+      feeCeilings: deps.feeCeilings, chainIdPin: deps.chainIdPin, locks });
 
     // construction consumes a nonce, so it happens inside the locks
     const built = deps.buildHeaderTransition({ poolId, epochIndex, expectedContents });
@@ -396,6 +739,25 @@ const finishHeaderOutcome = async ({ poolId, dir, deps, epochIndex, gen, W, expe
       return { status: "unresolved-pending", epochIndex,
         note: "duplicate refusal but the proved query shows no header; wait-only" };
     }
+    // THE ANSWER MUST ATTEST THAT IT WAS PROVED, and one that does not is REFUSED here
+    // rather than journaled (a soundness-review finding). What is journaled below carries
+    // `route: PROVED_HEADER_ROUTE`, whose literal value says proved, and the journal
+    // validator uses an observation on THAT ROUTE as the establishing evidence permitting
+    // the degraded continuation past this refusal. The live adapter supplying this
+    // dependency was an ordinary document query that obtained no proof and checked no
+    // verified-call marker, so an unauthenticated answer with matching fields could
+    // authorize that continuation while the durable record asserted it was proved.
+    //
+    // WHAT THIS CAN AND CANNOT DO, at its real width: the writer cannot verify an
+    // attestation, and an adapter that lies is inside the same trust boundary as one that
+    // lies about any other injected value. What it closes is the SILENT case, where an
+    // adapter that proves nothing says nothing and is believed anyway. The refusal
+    // precedes every append, so a failed verification leaves no record claiming a proved
+    // route.
+    if (q.proved !== true) {
+      return { status: "proved-header-unattested", epochIndex,
+        note: "the header query answered a document but did not attest that it was proved; refusing rather than journaling it under the proved route (a soundness-review finding)" };
+    }
     // the proved result IS the establishing evidence D7 requires before
     // header-foreign or header-capture-incomplete can be surfaced, so it
     // is journaled as the foreign-document observation HERE (an
@@ -433,8 +795,14 @@ const finishHeaderOutcome = async ({ poolId, dir, deps, epochIndex, gen, W, expe
     note: "ambiguous outcome journals nothing; recovery is wait-only on the persisted hash" };
 };
 
-const journalHeaderCapture = ({ poolId, dir, deps, epochIndex, gen, W, expectedContents, result, locks }) => {
-  const capture = deps.buildHeaderCapture({ poolId, epochIndex, gen, writeAhead: W, expectedContents, result });
+// the CAPTURE builders may be async (the live capture signer is; the
+// battery's sync mocks resolve through the same await unchanged): unlike
+// the TRANSITION builders, whose synchronous contract exists for the
+// nonce-window reason, a capture consumes no nonce, so awaiting it holds
+// no resource beyond the locks already held (the rehearsal run's fix:
+// the writer consumed the builder's promise as a record and refused)
+const journalHeaderCapture = async ({ poolId, dir, deps, epochIndex, gen, W, expectedContents, result, locks }) => {
+  const capture = await deps.buildHeaderCapture({ poolId, epochIndex, gen, writeAhead: W, expectedContents, result });
   if (!capture || capture.kind !== HEADER_KIND) refuse("deps.buildHeaderCapture must return the signed header-capture record");
   appendChecked(poolId, dir, capture);
   // the capture's verified metadata height advances the RECORD WRITER's
@@ -460,8 +828,9 @@ const journalHeaderCapture = ({ poolId, dir, deps, epochIndex, gen, W, expectedC
 // explicit lock handoff), plus step 4's no-automatic-rebroadcast rule.
 // The same disciplines as the first half: the run token and per-pool
 // lock around every step, appendChecked before every byte, persisted
-// transitions never rebuilt, operator conditions never appended (the one
-// run-side declaration the spec assigns, transfer-unencodable, is
+// transitions never rebuilt, operator conditions never appended (the
+// run-side declarations the spec assigns, transfer-unencodable and the
+// classification pair self-share-settled and transfer-below-minimum, are
 // appended here, once per subject), and completion never inferred.
 // ============================================================
 
@@ -548,6 +917,7 @@ const documentWriteOnce = async ({ poolId, dir, deps, object, epochIndex, accrua
  */
 const runAccrualStep = async ({ poolId, dir, deps, run, epochIndex }) => {
   requirePool(poolId);
+  await requireGateAdmission(deps, "runAccrualStep");
   for (const k of ["entitlementsForEpoch", "accrualPayload"]) {
     if (typeof (deps && deps[k]) !== "function") refuse(`runAccrualStep needs deps.${k}`);
   }
@@ -561,6 +931,10 @@ const runAccrualStep = async ({ poolId, dir, deps, run, epochIndex }) => {
     const locks = acquireIdentityLocks([deps.identities.writer]);
     try {
       const rows = deps.entitlementsForEpoch(epochIndex);
+      // the fourth consumption site (the closing wave's part D major).
+      // Durable accrual documents are never written from a row set the
+      // grammar refuses
+      validateEntitlementRows(rows, deps.identities.income);
       const statuses = [];
       for (const row of rows) {
         const r = await documentWriteOnce({ poolId, dir, deps, object: "accrual", epochIndex,
@@ -568,7 +942,15 @@ const runAccrualStep = async ({ poolId, dir, deps, run, epochIndex }) => {
         statuses.push({ accrualId: row.accrualId, ...r });
         if (r.status !== "present" && r.status !== "written") break; // no row advances past a stall
       }
-      return { statuses };
+      // the step-level answer, so a caller need not re-derive the stall
+      // from the per-row statuses (the closing wave's first outside
+      // family, part B): complete means every row of a NONEMPTY set
+      // advanced (an empty set examined nothing, and a pool always has
+      // 1..8 allocation rows, so empty rows are upstream nonconformance,
+      // never a completed step; the batch confirmation pass)
+      return { statuses,
+        complete: rows.length > 0 && statuses.length === rows.length
+          && statuses.every((s) => s.status === "present" || s.status === "written") };
     } finally { locks.release(); }
   } finally { envStore.releaseOpLock(poolRunLockName(poolId)); }
 };
@@ -576,9 +958,11 @@ const runAccrualStep = async ({ poolId, dir, deps, run, epochIndex }) => {
 // subject-state helpers over the read result
 const accrualRecordsOf = (read, epochIndex, accrualId, object) =>
   read.records.filter((r) => r.object === object && r.epochIndex === epochIndex && r.accrualId === accrualId);
+const findAccrualDeclaration = (read, epochIndex, accrualId, condition) =>
+  read.records.find((r) => r.kind === K.DECLARATION && r.condition === condition
+    && r.epochIndex === epochIndex && r.accrualId === accrualId) || null;
 const hasUnencodable = (read, epochIndex, accrualId) =>
-  read.records.some((r) => r.kind === K.DECLARATION && r.condition === "transfer-unencodable"
-    && r.epochIndex === epochIndex && r.accrualId === accrualId);
+  findAccrualDeclaration(read, epochIndex, accrualId, "transfer-unencodable") !== null;
 const unconsumedReservationRebuild = (read, epochIndex, accrualId, gen) => {
   const decided = read.records.some((r) => r.kind === K.DECISION && r.object === "reservation"
     && r.epochIndex === epochIndex && r.accrualId === accrualId && r.gen === gen
@@ -602,7 +986,24 @@ const unconsumedReservationRebuild = (read, epochIndex, accrualId, gen) => {
  * transfer sent-marker needs the operator's journaled
  * rebroadcast-identical decision, which this function never appends).
  *
- * Statuses: "unencodable-stopped", "reservation-refused",
+ * THE CLASSIFICATION PREFLIGHT (a soundness-review finding) runs for an accrual with
+ * no journaled transfer records, on the row alone, before any build,
+ * nonce read, write-ahead or reservation, in the pinned validation's own
+ * order: a SELF-SHARE (owner IS the income identity) is settled without
+ * a transfer at any amount, and a positive entitlement below the pinned
+ * minimum is carried into the member's next-epoch effective entitlement;
+ * each appends its accrual-scoped declaration once per subject and the
+ * accrual never reaches the transfer machinery. An accrual with
+ * journaled transfer state is NOT reclassified: its recovery follows the
+ * durable-state rules unchanged. THE JOURNAL CANNOT PROVE such state
+ * predates the correction: a conforming corrected writer never creates
+ * it (classification precedes construction), so a store containing a
+ * transfer write-ahead for a row that now classifies excluded is either
+ * pre-correction or non-conforming, indistinguishable from the journal
+ * alone, a stated limitation.
+ *
+ * Statuses: "self-share-settled", "below-minimum-carried",
+ * "unencodable-stopped", "reservation-refused",
  * "reservation-unresolved-pending", "reservation-foreign-pending",
  * "wait-only-observation", "receipt-observed", "transfer-refused",
  * "transfer-unresolved-pending", "completed" (capture + parts + receipt
@@ -611,6 +1012,7 @@ const unconsumedReservationRebuild = (read, epochIndex, accrualId, gen) => {
  */
 const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }) => {
   requirePool(poolId);
+  await requireGateAdmission(deps, "runTransferStep");
   const need = ["entitlementsForEpoch", "buildTransferTransition", "buildReservationTransition",
     "reservationDocumentIdOf", "buildReceiptCapture", "fetchReservation", "observeReceipt",
     "broadcastAndAwait", "awaitResult", "receiptPayloads"];
@@ -619,12 +1021,21 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
     refuse("runTransferStep needs deps.transferBytesBound (the D3 transitionBytes bound)");
   }
   if (!deps.documents) refuse("runTransferStep needs deps.documents");
+  // the classification preflight compares the row's owner against the
+  // income identity, so a malformed identities member is a refusal here,
+  // never a silent misclassification into the payable path
+  if (!deps.identities || !HEX64.test(deps.identities.writer || "") || !HEX64.test(deps.identities.income || "")) {
+    refuse("runTransferStep needs deps.identities ({ writer, income } hex)");
+  }
+  requireIncomeBinding(deps, poolId, "runTransferStep");
 
   envStore.acquireOpLock(poolRunLockName(poolId));
   try {
     let read = openValidatedJournal(poolId, dir);
     requireRunToken(run, poolId, read);
-    const row = deps.entitlementsForEpoch(epochIndex).find((x) => x.accrualId === accrualId);
+    const allRows = deps.entitlementsForEpoch(epochIndex);
+    validateEntitlementRows(allRows, deps.identities.income);
+    const row = allRows.find((x) => x.accrualId === accrualId);
     if (!row || BigInt(row.amountCredits) <= 0n) refuse("runTransferStep runs only for a positive entitlement row");
 
     // the step's full lock set, canonical order, independent handles for
@@ -640,6 +1051,11 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
     try {
       for (const id of sorted) handles.set(id, acquireIdentityLocks([id]));
     } catch (e) {
+      // the unwind SWALLOWS release failures DELIBERATELY (recorded for
+      // the closing wave's first outside family): the primary
+      // acquisition error is the one the operator must see, and a
+      // secondary release failure surfaces on the next acquisition of
+      // that lock rather than masking the cause here
       for (const h of [...handles.values()].reverse()) { try { h.release(); } catch { /* unwind */ } }
       throw e;
     }
@@ -691,7 +1107,38 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
           releaseIncome, writerHandle, incomeHandle });
       }
 
-      // ---- (a) build and preflight, or honor the journaled refusal ----
+      // ---- (a) honor a journaled classification or refusal, else
+      // classify and build. A DECLARATION NEVER SUBSTITUTES FOR THE ROW
+      // (of this unit's checker): the classification is
+      // REDERIVED from the current row and compared with the journaled
+      // record, so a declaration that does not describe this accrual
+      // refuses instead of silently suppressing a payable transfer ----
+      const rowClass = classifyEntitlement(row, deps.identities.income);
+      const selfDecl = findAccrualDeclaration(read, epochIndex, accrualId, "self-share-settled");
+      if (selfDecl) {
+        if (rowClass !== "self-share"
+          || selfDecl.amountCredits !== String(BigInt(row.amountCredits))) {
+          refuse("the journaled self-share-settled declaration disagrees with the recomputed row (owner or amount)");
+        }
+        return { status: "self-share-settled", accrualId };
+      }
+      const minDecl = findAccrualDeclaration(read, epochIndex, accrualId, "transfer-below-minimum");
+      if (minDecl) {
+        // the TWO-VALUE comparison (the decided migration rule): the
+        // declaration's amount must equal the current EFFECTIVE
+        // entitlement or the current OWED-ONLY amount (effective minus
+        // the row's carry-in, the value a pre-carry calculation
+        // produced); payability is rederived first, so a declaration
+        // over a payable row still refuses outright, and with zero
+        // carry-in the two values coincide
+        const effectiveStr = String(BigInt(row.amountCredits));
+        const owedOnlyStr = String(BigInt(row.amountCredits) - BigInt(row.carryInCredits || "0"));
+        if (rowClass !== "below-minimum"
+          || (minDecl.amountCredits !== effectiveStr && minDecl.amountCredits !== owedOnlyStr)) {
+          refuse("the journaled transfer-below-minimum declaration disagrees with the recomputed row (neither the effective nor the owed-only amount)");
+        }
+        return { status: "below-minimum-carried", accrualId };
+      }
       if (hasUnencodable(read, epochIndex, accrualId)) {
         return { status: "unencodable-stopped", accrualId };
       }
@@ -699,6 +1146,29 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
       if (tW) {
         transferBytes = tW.transitionBytes; transferHash = tW.transitionHash; // never rebuilt
       } else {
+        // ---- the classification preflight (a soundness-review finding): before any
+        // build, nonce read, write-ahead or reservation, on the row
+        // alone, self-share FIRST (the pinned validation's own order).
+        // An accrual with journaled transfer state never reaches here
+        // (the tW branch above), so pre-correction subjects keep their
+        // recovery semantics unchanged. The row was validated at the
+        // step's entry and classified once above.
+        const amount = BigInt(row.amountCredits);
+        if (rowClass === "self-share") {
+          appendChecked(poolId, dir, { v: 1, kind: K.DECLARATION, object: "accrual", gen: 1,
+            poolId, epochIndex, accrualId, condition: "self-share-settled",
+            reasoning: "the owner is the pool's income identity; settled without a transfer (a soundness-review finding)",
+            amountCredits: String(amount) });
+          return { status: "self-share-settled", accrualId };
+        }
+        if (rowClass === "below-minimum") {
+          appendChecked(poolId, dir, { v: 1, kind: K.DECLARATION, object: "accrual", gen: 1,
+            poolId, epochIndex, accrualId, condition: "transfer-below-minimum",
+            reasoning: "the effective entitlement is below the pinned minimum; carried to the next epoch (a soundness-review finding)",
+            amountCredits: String(amount),
+            minimumCredits: String(MIN_TRANSFER_AMOUNT_CREDITS) });
+          return { status: "below-minimum-carried", accrualId };
+        }
         const built = deps.buildTransferTransition({ poolId, epochIndex, accrualId,
           amountCredits: row.amountCredits, recipientId: row.recipientId });
         const byteLen = built.transitionBytes.length / 2;
@@ -824,8 +1294,8 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
       // the income frontier advanced, then the explicit lock handoff ----
       const tWnow = accrualRecordsOf(openValidatedJournal(poolId, dir), epochIndex, accrualId, "transfer")
         .find((r) => r.kind === K.WRITE_AHEAD);
-      const capture = deps.buildReceiptCapture({ poolId, epochIndex, accrualId,
-        writeAhead: tWnow, result: transferResult });
+      const capture = await deps.buildReceiptCapture({ poolId, epochIndex, accrualId,
+        writeAhead: tWnow, result: transferResult }); // async-capable, like the header capture builder
       if (!capture || capture.kind !== RECEIPT_KIND) refuse("deps.buildReceiptCapture must return the signed receipt-capture record");
       appendChecked(poolId, dir, capture);
       advanceFrontierFromCapture({ kind: RECEIPT_KIND, height: BigInt(capture.inclusionHeight),
@@ -876,8 +1346,91 @@ const finishDocuments = async ({ poolId, dir, deps, epochIndex, accrualId, relea
   return { status: "completed", accrualId, statuses };
 };
 
+/**
+ * THE CONSECUTIVE RUN A POOL'S JOURNAL EVIDENCES, for a caller that must recompute that
+ * pool's effective entitlements. The carry recursion needs a consecutive run from the
+ * configured start, and a pool's journal is the record of what the writer COMMITTED per
+ * epoch, so its journaled headers are where a run can be read from without asking the
+ * chain anything.
+ *
+ * WHY THIS EXISTS AT ALL: the store-wide admission asks a per-pool resolver about whatever
+ * epochs each journal happens to hold, one at a time, which is not a run. A resolver
+ * answering those from a PRE-CARRY split under-reserves the income identity's funding once
+ * any pool's run passes one epoch, because the admission sums those amounts. This is the
+ * shape a resolver needs to answer them correctly instead.
+ *
+ * Returns [{ number, distributableCredits }] ascending from the configured start, or an
+ * EMPTY array when the journal evidences no header numbers at all (a pool whose first
+ * header has not been written is not an error, it is a pool with nothing to recompute).
+ *
+ * IT REFUSES ON A GAP rather than skipping it. An epoch missing from the middle of the run
+ * is an epoch whose owed amounts never entered the carry, so every later epoch's effective
+ * amount would be computed from a carry-in that is short by exactly that epoch's
+ * contribution, and the answer would look ordinary.
+ */
+const runFromJournal = (read) => {
+  const start = read.configuredStartEpoch;
+  const numbersAt = (n) => {
+    const e = read.perEpoch[n];
+    if (!e || !e.header || e.header.grossCredits === null || e.header.grossCredits === undefined) return null;
+    if (e.header.feeCredits === null || e.header.feeCredits === undefined) return null;
+    return { gross: BigInt(e.header.grossCredits), fee: BigInt(e.header.feeCredits),
+      allocationHash: e.header.allocationHash, memberCount: e.header.memberCount };
+  };
+  // AN EMPTY RUN IS AN ANSWER ABOUT THE EVIDENCE, so it is not given without looking at
+  // it. With no configured start there is no base for the recursion, and returning empty
+  // over a journal that DOES carry header numbers would report "nothing to recompute"
+  // about a pool that has plenty, which is the affirmative-result-from-an-unperformed-check
+  // shape. Empty is reserved for a journal evidencing no header numbers at all.
+  if (!Number.isSafeInteger(start)) {
+    const evidenced = Object.keys(read.perEpoch)
+      .map(Number).filter((k) => Number.isSafeInteger(k) && numbersAt(k) !== null);
+    if (evidenced.length) {
+      refuse(`the journal evidences header numbers for epoch ${Math.min(...evidenced)} but binds no configured start, so the carry recursion has no base and no run can be read from it`);
+    }
+    return [];
+  }
+  const out = [];
+  for (let n = start; ; n++) {
+    const num = numbersAt(n);
+    if (num === null) {
+      // the run ENDS here, and that is only conformant if nothing above it is journaled.
+      // A later epoch carrying header numbers over a hole means the hole's owed amounts
+      // never entered the carry, and every epoch above it would be recomputed short.
+      const higher = Object.keys(read.perEpoch)
+        .map(Number).filter((k) => Number.isSafeInteger(k) && k > n && numbersAt(k) !== null);
+      if (higher.length) {
+        refuse(`the journal evidences epoch ${Math.min(...higher)} but not epoch ${n}; the carry recursion needs a consecutive run from the configured start ${start}, and the missing epoch's owed amounts would be absent from every later epoch's carry-in`);
+      }
+      break;
+    }
+    if (num.fee > num.gross) {
+      refuse(`epoch ${n}'s journaled header has feeCredits ${num.fee} above grossCredits ${num.gross}; the distributable amount would be negative`);
+    }
+    // THE RUN MUST NOT SPAN AN ALLOCATION CHANGE. A caller recomputes the whole run under
+    // ONE allocation, the pool's current one, so a run whose journaled headers disagree
+    // about the allocation hash or the member count would apply today's membership to an
+    // epoch that was written under different membership, and the carry threaded through it
+    // would be one member's claim credited to another. The single-epoch width used to make
+    // this unrepresentable; a run makes it representable, so it is refused by name rather
+    // than left to be noticed. Supporting such a transition needs per-epoch allocations,
+    // which is a larger change than reading a run.
+    if (out.length) {
+      const first = out[0];
+      if (num.allocationHash !== first.allocationHash || num.memberCount !== first.memberCount) {
+        refuse(`epoch ${n}'s journaled header carries a different allocation than epoch ${first.number}'s (hash ${String(num.allocationHash).slice(0, 12)}... memberCount ${num.memberCount} against ${String(first.allocationHash).slice(0, 12)}... and ${first.memberCount}); one allocation is applied to a whole run, so a run spanning a change would recompute an epoch under membership it was not written under`);
+      }
+    }
+    out.push({ number: n, distributableCredits: String(num.gross - num.fee),
+      allocationHash: num.allocationHash, memberCount: num.memberCount,
+      grossCredits: String(num.gross), feeCredits: String(num.fee) });
+  }
+  return out;
+};
+
 module.exports = { setStart, startRun, runHeaderStep, runAccrualStep, runTransferStep,
-  startKeyOf, poolRunLockName, appendChecked };
+  startKeyOf, poolRunLockName, appendChecked, MIN_TRANSFER_AMOUNT_CREDITS,
+  classifyEntitlement, runFromJournal };
 
 // the literal CLI configuration mode
 if (require.main === module) {

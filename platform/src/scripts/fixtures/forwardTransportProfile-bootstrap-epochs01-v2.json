@@ -1,0 +1,27 @@
+{
+  "kind": "tegara.e2.forwardTransportProfile.v2",
+  "subject": "the persisted bootstrap pool at epochs 0 and 1 on the local dashmate devnet, the plan inputs derived from the proved formation, the journaled header and the income identity through the per-epoch context, epoch 1 fresh with no declared fixture (the per-epoch context design, section 7; tegara/docs/LIVE_TRANSPORT_EXPECTATIONS.md)",
+  "required": {
+    "allReadsVerified": true,
+    "headerServedOne": true,
+    "enumerationMatchesMemberCount": true,
+    "oldClauseRefusedWithIndexError": true,
+    "plannedEqualsServed": true,
+    "compositionState": "complete",
+    "compositionReasons": [],
+    "heightSpanMax": 5,
+    "sweepAgainstAbsentEmpty": true,
+    "planBuiltBeforeAnyRead": true,
+    "planFiguresSource": "journaled-header",
+    "planHeaderEqualsFormation": true,
+    "selfShareDerived": true,
+    "identifiersCanonical": true,
+    "verdictOwner": "shared-verifier",
+    "freshEpochPrecondition": true,
+    "universe": [0, 1],
+    "refreshCountMax": 3,
+    "generationSequence": [0, 1, 2],
+    "earlyStop": null
+  },
+  "optional": {}
+}

@@ -114,6 +114,24 @@ const happyEpoch = (epoch, opts = {}) => [
   ok("the binding reads back", r.configuredStartEpoch === 5);
   ok("the header derives captured with its expected numbers",
     r.perEpoch[5].header.state === "captured" && r.perEpoch[5].header.memberCount === 2);
+  // THE PROJECTION CARRIES EVERY MEMBER ITS CONSUMERS READ, asserted member by member rather
+  // than by the state and one number. It used to carry three of the five, and the two it
+  // dropped are the ones `runFromJournal` hands to the epoch-context builder, so every live
+  // run refused (a soundness-review finding). The review then found that deleting either one again passed the
+  // journal, distribution and forward-composition suites, which is why this is here.
+  ok("the projection carries the allocation hash the distribution reader consumes",
+    r.perEpoch[5].header.allocationHash === h32("ee"));
+  ok("the projection carries the calculation version",
+    r.perEpoch[5].header.calcVersion === 1);
+  ok("and the three it always carried",
+    r.perEpoch[5].header.grossCredits === 1000 && r.perEpoch[5].header.feeCredits === 10
+      && r.perEpoch[5].header.memberCount === 2);
+  ok("a header with no write-ahead record projects every member as null rather than dropping it",
+    (() => {
+      const h = { gen: 1, state: "annotated", stopped: false, memberCount: null, grossCredits: null,
+        feeCredits: null, allocationHash: null, calcVersion: null, captureIncomplete: false };
+      return Object.keys(h).every((k) => k in r.perEpoch[5].header);
+    })());
   ok("highestEpochIndex covers every epoch-bearing record", r.highestEpochIndex === 5);
   ok("an epoch-scoped declaration bounds highestEpochIndex (perEpoch does not see it)",
     validateJournal(POOL, [lag({ first: 5 }), { v: 1, kind: K.DECLARATION, object: "epoch",

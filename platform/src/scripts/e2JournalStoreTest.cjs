@@ -17,8 +17,9 @@ const path = require("path");
 const crypto = require("crypto");
 const {
   journalPath, boundaryPath, encodeFrame, encodeBoundary, parseBoundary,
-  openJournal, appendRecord,
+  openJournal, appendRecord, probeStoreDir,
 } = require("./e2JournalStore.cjs");
+const { STATE_DIR } = require("./envStore.cjs");
 const { canonicalString } = require("./canonicalJson.cjs");
 
 let passed = 0, failed = 0;
@@ -284,6 +285,36 @@ const freshDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "tegara-e2js-"));
   const r = openJournal(POOL, d);
   ok("a zero-byte write stall refuses and commits nothing",
     threw && r.committedOffset === off && r.records.length === 0);
+}
+
+// ---- a soundness-review finding: PROBE OUTPUT CANNOT LAND IN THE LIVE ADMISSION STORE ----
+// The capture battery mints a fresh random pool per run and used to journal it into the
+// live store, so every run left another journal there that nothing could resolve. Nine
+// accumulated and the live driver quantified their obligations as zero. Moving them out
+// was cleanup; this is the property that stops them coming back, and it is asserted here
+// rather than remembered in the battery.
+{
+  // AN UNEXPECTED THROW IS A RECORDED FAILURE HERE. `probeStoreDir` REFUSES when its
+  // derivation would collapse onto the live store, so the mutation that collapses it is
+  // caught by that refusal, and letting the refusal end the process would read as a
+  // detection while the summary line never printed.
+  const okTry = (name, fn) => {
+    try { ok(name, fn()); }
+    catch (e) { failed++; console.error(`FAIL: ${name} threw unexpectedly: ${(e && e.message) || String(e)}`); }
+  };
+  okTry("the probe store is not the live store",
+    () => path.resolve(probeStoreDir()) !== path.resolve(STATE_DIR));
+  okTry("and it is not INSIDE the live store either, so a walk of the live inventory cannot reach it",
+    () => !path.resolve(probeStoreDir()).startsWith(path.resolve(STATE_DIR) + path.sep));
+  // a journal written to the probe store lands there and NOWHERE in the live store, which
+  // is the inventory statement the battery needs and the one a caller can check
+  const pool = "ab".repeat(32);
+  okTry("a probe journal's path is under the probe store",
+    () => path.dirname(path.resolve(journalPath(pool, probeStoreDir()))) === path.resolve(probeStoreDir()));
+  okTry("and the same pool's LIVE path is a different file entirely, so the two inventories cannot alias",
+    () => path.resolve(journalPath(pool, probeStoreDir())) !== path.resolve(journalPath(pool, undefined)));
+  okTry("the boundary file follows its journal into the probe store",
+    () => path.dirname(path.resolve(boundaryPath(pool, probeStoreDir()))) === path.resolve(probeStoreDir()));
 }
 
 console.log(`e2JournalStoreTest: ${passed} passed, ${failed} failed`);

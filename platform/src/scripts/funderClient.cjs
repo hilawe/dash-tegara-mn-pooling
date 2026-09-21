@@ -11,7 +11,9 @@
  * Subcommands (node src/scripts/funderClient.cjs <cmd> [...]):
  *   portfolio            my identity, credit balance, shares, requests, and earnings (default)
  *   pools                every pool on the ledger with its recorded share total
- *   earnings             my reward accruals, per pool per epoch, with the sum
+ *   earnings             my reward accruals, per pool per epoch, with the sum; on an
+ *                        e2Records ledger (v11) platform-credit income follows as its
+ *                        own section, in CREDITS, never combined with the DASH totals
  *   deposit <duffs>      convert my own L1 DASH into credits at MY identity
  *   compound <poolId> <duffs|all> | status | release <id> --verified-never-landed
  *                        turn earned rewards into contribution (crash-recoverable journal)

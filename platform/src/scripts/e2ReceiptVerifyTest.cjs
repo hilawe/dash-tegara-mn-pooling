@@ -660,9 +660,9 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
   {
     const PUBLIC = ["PART_BOUND_B", "ROUTE_REGISTRY", "PROTOCOL_VERSION_PIN",
       "verifyReceipt", "verifyCaptureRecord", "verifyCapturePair",
-      "verifyReceiptWithCapture", "__testing"].sort();
+      "verifyReceiptWithCapture", "verifyTransferExecution", "__testing"].sort();
     const actual = Object.keys(verifyModule).sort();
-    ok("the verifier exports exactly the four entries, the pinned constants, and the test surface",
+    ok("the verifier exports exactly the five entries (the shared transfer composition since the per-epoch context design), the pinned constants, and the test surface",
       JSON.stringify(actual) === JSON.stringify(PUBLIC));
     if (JSON.stringify(actual) !== JSON.stringify(PUBLIC)) {
       console.error("   surface drift:", JSON.stringify(actual));
@@ -791,6 +791,99 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
         verify(fix, { deps: { ...mkDeps(), [decoder]: () => { throw thrown; } } }),
         /does not decode/);
     }
+  }
+}
+
+// ---- verifyTransferExecution: the ONE shared composition the audit and the forward
+// orchestrator both consume (the per-epoch context design, section 6; a soundness-review finding/a soundness-review finding) ----
+{
+  const { verifyTransferExecution } = verifyModule;
+  const fix = mkReceipt(smallCarrier);
+  const capture = mkReceiptCapture();
+  const sharedDeps = { verifierDeps: mkDeps(), verifyCaptureBasis: async () => true };
+  const args = { receipt: fix.receipt, parts: fix.parts, reservation: SERVED, capture, supersessions: [],
+    entitlementRow: ROW, incomeIdentity: INCOME, chainIdPin: CHAIN, deps: sharedDeps };
+  const v = await verifyTransferExecution(args);
+  ok("shared: the golden receipt with its capture earns CAPTURE-VERIFIED carrying the entitlement's amount",
+    v.label === "CAPTURE-VERIFIED" && v.verifiedAmountCredits === String(ROW.amountCredits) && v.captureValid === true);
+  const noCap = await verifyTransferExecution({ ...args, capture: null });
+  ok("shared: no capture refuses (the capture IS the execution evidence)", noCap.label === "REFUSED" && /capture/.test(noCap.reason));
+  const badRow = await verifyTransferExecution({ ...args, entitlementRow: { ...ROW, amountCredits: String(BigInt(ROW.amountCredits) + 1n) } });
+  ok(`shared: a receipt refusal is returned as REFUSED with the verifier's own reason (${badRow.reason})`,
+    badRow.label === "REFUSED" && typeof badRow.reason === "string" && badRow.reason.length > 0 && badRow.verifiedAmountCredits === undefined);
+  const noBasis = await verifyTransferExecution({ ...args, deps: { ...sharedDeps, verifyCaptureBasis: async () => false } });
+  ok("shared: a false capture basis refuses (validity clause 1)", noBasis.label === "REFUSED" && /basis/.test(noBasis.reason));
+  const badPair = await verifyTransferExecution({ ...args, capture: mkReceiptCapture({ transitionHash: h32("77") }) });
+  ok("shared: a capture whose transition differs from the receipt's refuses", badPair.label === "REFUSED");
+  // THE ORDER UNDER MIXED FAILURES (the pre-commit checker's construction): the receipt is
+  // judged before the basis, the basis before the capture record, so the reason names the
+  // FIRST stage that refused and a later stage's adapter is never consulted after a refusal
+  {
+    let basisCalls = 0;
+    const receiptAndBasis = await verifyTransferExecution({ ...args,
+      entitlementRow: { ...ROW, amountCredits: String(BigInt(ROW.amountCredits) + 1n) },
+      deps: { ...sharedDeps, verifyCaptureBasis: async () => { basisCalls += 1; return false; } } });
+    ok(`shared order: a receipt refusal is returned before the basis is consulted (basis calls ${basisCalls})`,
+      receiptAndBasis.label === "REFUSED" && !/basis/.test(receiptAndBasis.reason) && basisCalls === 0);
+    const basisAndCapture = await verifyTransferExecution({ ...args, capture: mkReceiptCapture({ transitionHash: h32("77") }),
+      deps: { ...sharedDeps, verifyCaptureBasis: async () => false } });
+    ok("shared order: a false basis is returned before the capture record is judged (the reason is the basis's, not the capture's)",
+      basisAndCapture.label === "REFUSED" && /basis/.test(basisAndCapture.reason));
+  }
+  const unres = await verifyTransferExecution({ ...args, reservation: { status: "unserved" } });
+  ok("shared: an unserved reservation answer leaves that aspect unproved and the execution still verifies (the audit's separation)",
+    unres.label === "CAPTURE-VERIFIED");
+  // FAULTS PROPAGATE as thrown Errors (never returned as verdicts): a fault in the
+  // adapter or the caller says nothing about the record
+  const faults = async (name, p, re) => {
+    let threw = null, r = null;
+    try { r = await p; } catch (e) { threw = e; }
+    ok(`${name} (${threw ? (threw.message || "").slice(0, 60) : `returned ${JSON.stringify(r)}`})`,
+      threw !== null && threw instanceof Error && re.test(threw.message));
+  };
+  await faults("shared: a capture-basis adapter fault propagates as a clean Error, never a verdict",
+    verifyTransferExecution({ ...args, deps: { ...sharedDeps, verifyCaptureBasis: async () => { throw new Error("basis down"); } } }),
+    /basis down/);
+  await faults("shared: a null-prototype thrown value is reported as a clean Error, never an escaping TypeError",
+    verifyTransferExecution({ ...args, deps: { ...sharedDeps, verifyCaptureBasis: async () => { throw Object.create(null); } } }),
+    /capture-basis adapter failed/);
+  await faults("shared: a non-boolean capture basis is a fault, never a verdict",
+    verifyTransferExecution({ ...args, deps: { ...sharedDeps, verifyCaptureBasis: async () => "yes" } }),
+    /non-boolean/);
+  await faults("shared: a missing verifier dependency is a fault, never a verdict",
+    verifyTransferExecution({ ...args, deps: { verifyCaptureBasis: async () => true } }),
+    /verifierDeps/);
+  // FAULT-FIRST ORDER, stated: dependencies are checked before the capture, so a call with no
+  // capture AND missing dependencies is a fault (the audit's old inline order refused on the
+  // capture first; a missing dependency says nothing about the record and is checked first now)
+  await faults("shared: no capture beside missing dependencies is the dependency fault, not the no-capture refusal",
+    verifyTransferExecution({ ...args, capture: null, deps: { verifyCaptureBasis: async () => true } }),
+    /verifierDeps/);
+  // THE PRODUCER SWEEP: the claim that this function is the one path producing
+  // CAPTURE-VERIFIED is checked against the source tree, not asserted. Every non-test module
+  // under src/scripts that writes the label literal is listed here; the transport runner is
+  // the labeled constant verdict of the experimental instrument (step 5 retires it).
+  {
+    const fs = require("fs"), path = require("path");
+    const dir = __dirname;
+    const producers = fs.readdirSync(dir)
+      .filter((f) => /\.(cjs|mjs)$/.test(f) && !/Test\.cjs$/.test(f))
+      .filter((f) => fs.readFileSync(path.join(dir, f), "utf8").includes('label: "CAPTURE-VERIFIED"'))
+      .sort();
+    // THE PROPERTY IS "NOTHING ELSE WRITES IT", which is a SUBSET claim, and the earlier
+    // equality claim was not that. It required both allowed producers to be PRESENT, so it
+    // failed on the curated public tree, where the .mjs runners are deliberately held out and
+    // only the verifier ships. The export's suite gate caught it. An equality test on a file
+    // listing binds the allowlist's contents as well as the property, which is more than this
+    // sweep is for.
+    //
+    // WHAT IS STILL BOUND, and it is the whole point: any producer OUTSIDE the allowed pair
+    // fails, in either tree, and the verifier itself must be one of them so the sweep cannot
+    // pass vacuously over a tree where nothing writes the label at all.
+    const ALLOWED = ["e2ForwardTransportRun.mjs", "e2ReceiptVerify.cjs"];
+    const unexpected = producers.filter((f) => !ALLOWED.includes(f));
+    ok(`the producer sweep: no module outside the verifier and the labeled transport runner writes the CAPTURE-VERIFIED label (found ${producers.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"})`,
+      unexpected.length === 0 && producers.includes("e2ReceiptVerify.cjs"));
   }
 }
 
