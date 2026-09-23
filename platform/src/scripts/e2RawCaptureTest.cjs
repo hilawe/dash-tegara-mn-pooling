@@ -376,7 +376,7 @@ const prCanonical = hex([
   eq("a wrapper-produced verified-proof classifies success-with-proof",
     classifyOutcome(success), TOKENS.SUCCESS);
   eq("a wrapper-produced execution-refusal classifies to the terminal other-error token",
-    classifyOutcome(executionRefusal({ code: 4009, data: "00ff", message: "refused" })), TOKENS.OTHER);
+    classifyOutcome(executionRefusal({ code: 40105, data: "00ff", message: "refused" })), TOKENS.OTHER);
   eq("a wrapper-produced malformed-response classifies ambiguous",
     classifyOutcome(malformedResponse("unexpected oneof")), TOKENS.AMBIGUOUS);
   eq("a wrapper-produced transport-failure classifies ambiguous",

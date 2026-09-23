@@ -85,7 +85,9 @@ const numbersOf = () => ({ grossCredits: 1000, feeCredits: 10,
 // classifier so the fixtures cannot drift from its contract
 const SUCCESS_RESULT = { outcome: "verified-proof", proof: { p: 1 }, metadata: { height: "1000" },
   proofMsg: "aa", metadataMsg: "bb", unknownFieldsDropped: 0 };
-const REFUSAL_RESULT = { outcome: "execution-refusal", code: 7, data: "00", message: "node refusal" };
+// a CONSENSUS code, the pinned table's duplicate-unique-index refusal, which the unique-index
+// cases below pin as the identity; any code outside the consensus range is ambiguous (a soundness-review finding)
+const REFUSAL_RESULT = { outcome: "execution-refusal", code: 40105, data: "00", message: "node refusal" };
 const AMBIGUOUS_RESULT = { outcome: "transport-failure", reason: "timeout" };
 if (classifyOutcome(SUCCESS_RESULT) !== TOKENS.SUCCESS
   || classifyOutcome(REFUSAL_RESULT) !== TOKENS.OTHER
@@ -95,7 +97,7 @@ if (classifyOutcome(SUCCESS_RESULT) !== TOKENS.SUCCESS
 // the duplicate-refusal token needs the pinned identity, unpinned in
 // production; the governed seam supplies ONLY the identity argument (the
 // closed-shape validation always runs), exactly the e2Outcome precedent
-const UNIQUE_ID = { code: 7, dataMatches: () => true };
+const UNIQUE_ID = { code: 40105, dataMatches: () => true };
 
 const mkCapture = ({ poolId, epochIndex, gen, writeAhead }) => ({ v: 1, kind: HEADER_KIND,
   object: "header", gen, poolId, epochIndex, transitionBytes: writeAhead.transitionBytes,
@@ -1139,6 +1141,64 @@ const openEpoch = async (pool, dir, over = {}) => {
   ok("the resumed wait captures from the awaited result with no resend and no rebuild",
     r2.status === "completed" && resumed._calls.broadcast.length === 0 && resumed._calls.build.length === 0);
 }
+// ---- THE GATEWAY'S OWN TIMEOUT IS NOT A REFUSAL, on every wait-only path (a soundness-review finding) ----
+// The answer below is the one Platform's gateway returned live on 2026-09-23 for a wait whose
+// deadline elapsed, copied from the error record the writer journaled in that live run.
+// Before the repair each path below journaled it as an execution refusal and stopped.
+{
+  const LIVE_TIMEOUT = { outcome: "execution-refusal", code: 13, data: "", message: "Timeout error: deadline has elapsed" };
+  const errorsOf = (pool, dir) => openValidatedJournal(pool, dir).records.filter((x) => x.kind === K.ERROR).length;
+
+  { // the header
+    const pool = freshPool(); const dir = caseDir();
+    setStart(pool, "5", { dir });
+    const deps = mkDeps(pool, dir, { outcome: () => AMBIGUOUS_RESULT });
+    const run = await startRun({ poolId: pool, dir, deps });
+    await runHeaderStep({ poolId: pool, dir, deps, run });
+    const timedOut = mkDeps(pool, dir, { awaitOutcome: () => LIVE_TIMEOUT });
+    const r = await runHeaderStep({ poolId: pool, dir, deps: timedOut, run });
+    ok("a header wait that times out stays unresolved, with no error record and no resend",
+      r.status === "unresolved-pending" && errorsOf(pool, dir) === 0
+      && openValidatedJournal(pool, dir).perEpoch[5].header.state === "sent" && timedOut._calls.broadcast.length === 0
+      && timedOut._calls.build.length === 0);
+    const later = mkDeps(pool, dir, { awaitOutcome: () => SUCCESS_RESULT });
+    ok("and a later answer still captures it", (await runHeaderStep({ poolId: pool, dir, deps: later, run })).status === "captured");
+  }
+  { // the reservation, the path observed live
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    const ambiguous = mkDeps(pool, dir, {
+      outcome: (hash, bytes) => bytes.startsWith("0c0d") ? AMBIGUOUS_RESULT : SUCCESS_RESULT });
+    await runTransferStep({ poolId: pool, dir, deps: ambiguous, run, epochIndex: 5, accrualId: A1 });
+    const timedOut = mkDeps(pool, dir, { awaitOutcome: () => LIVE_TIMEOUT });
+    const r = await runTransferStep({ poolId: pool, dir, deps: timedOut, run, epochIndex: 5, accrualId: A1 });
+    ok("a reservation wait that times out is reservation-unresolved-pending, never reservation-refused",
+      r.status === "reservation-unresolved-pending" && errorsOf(pool, dir) === 0
+      && openValidatedJournal(pool, dir).perEpoch[5].accruals[A1].reservation.state !== "refused"
+      && timedOut._calls.broadcast.length === 0 && timedOut._calls.build.length === 0);
+    const later = mkDeps(pool, dir, { awaitOutcome: () => SUCCESS_RESULT });
+    ok("and a later answer still completes the accrual",
+      (await runTransferStep({ poolId: pool, dir, deps: later, run, epochIndex: 5, accrualId: A1 })).status === "completed");
+  }
+  { // the transfer, where a false refusal would strand the payment behind a terminal stop
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    const ambiguous = mkDeps(pool, dir, {
+      outcome: (hash, bytes) => bytes.startsWith("0a0b") ? AMBIGUOUS_RESULT : SUCCESS_RESULT });
+    await runTransferStep({ poolId: pool, dir, deps: ambiguous, run, epochIndex: 5, accrualId: A1 });
+    const timedOut = mkDeps(pool, dir, { awaitOutcome: () => LIVE_TIMEOUT });
+    const r = await runTransferStep({ poolId: pool, dir, deps: timedOut, run, epochIndex: 5, accrualId: A1 });
+    ok("a transfer wait that times out is transfer-unresolved-pending, never transfer-refused",
+      r.status === "transfer-unresolved-pending" && errorsOf(pool, dir) === 0
+      && openValidatedJournal(pool, dir).perEpoch[5].accruals[A1].transfer.state !== "refused"
+      && timedOut._calls.broadcast.length === 0 && timedOut._calls.build.length === 0);
+    const later = mkDeps(pool, dir, { awaitOutcome: () => SUCCESS_RESULT });
+    ok("and a later answer still completes it, with no resend",
+      (await runTransferStep({ poolId: pool, dir, deps: later, run, epochIndex: 5, accrualId: A1 })).status === "completed"
+      && later._calls.broadcast.length === 0);
+  }
+}
+
 {
   // a stalled part write leaves documents-pending, the receipt unattempted
   const pool = freshPool();
