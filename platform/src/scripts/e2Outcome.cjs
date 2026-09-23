@@ -7,8 +7,25 @@
  *   "execution-error-unique-index" <- { outcome: "execution-refusal", ... } whose
  *                                     structured code matches the PINNED
  *                                     unique-index consensus-error identity
- *   "execution-error-other"        <- every other execution-refusal
- *   "ambiguous"                    <- malformed-response and transport-failure
+ *   "execution-error-other"        <- every other execution-refusal whose code is
+ *                                     a CONSENSUS code (10000 to 49999)
+ *   "ambiguous"                    <- malformed-response, transport-failure, and an
+ *                                     execution-refusal whose code is NOT a
+ *                                     consensus code (a soundness-review finding)
+ *
+ * THE CORRECTION TO THE SPEC'S FALLBACK (a soundness-review finding). The spec read every structured
+ * error as "the ledger processed and refused". Platform's gateway does not keep
+ * that promise: it converts its OWN failures, a wait deadline that elapsed among
+ * them, into the same structured member (rs-dapi,
+ * `build_wait_for_state_transition_error_response`, whose own test asserts a
+ * timeout arrives as code 13). Those answers say nothing about whether the
+ * transition executed, and on 2026-09-23 one was journaled live as a reservation
+ * refusal. Platform's own mapping (rs-dapi `error_mapping.rs`, `grpc_code`) reads
+ * 0 to 16 as gRPC statuses and 10000 to 49999 as consensus codes, and the pinned
+ * consensus table (rs-dpp `errors/consensus/codes.rs` at 37ea011c87) spans 10000
+ * to 40904. So only a code in the consensus range is a refusal; any other code
+ * is AMBIGUOUS, and the caller keeps waiting rather than recording a refusal the
+ * ledger never made.
  *
  * The CALLER selects the outcome table's column for its own object (header,
  * reservation, transfer) and applies that column's row for the token; this
@@ -19,15 +36,16 @@
  * protocol definitions and recorded beside the client pins, with fixtures for
  * header and reservation uniqueness). The installed packages carry no such
  * enumeration (verified during this build unit), so UNTIL THE PIN LANDS the
- * identity below is null and EVERY refusal classifies as
+ * identity below is null and EVERY consensus-range refusal classifies as
  * "execution-error-other". THIS MODULE CLAIMS TOKEN ROUTING ONLY (the
  * batched checker's finding 5): the run-level consequence, that the
  * other-error rows stop at a human decision and are strictly more
  * conservative than the fetch-and-compare continuation, is the procedure
  * consumer's behaviour and is execution-tested there when it lands. The
- * closed fallbacks are the spec's: an UNKNOWN structured code is
- * "execution-error-other" (the ledger processed and refused; which refusal
- * is unknown), a PINNED code whose promised data payload does not decode is
+ * closed fallbacks are the spec's, with one correction (a soundness-review finding): an UNKNOWN
+ * consensus code is "execution-error-other" (the ledger processed and refused;
+ * which refusal is unknown), a code outside the consensus range is "ambiguous",
+ * a PINNED code whose promised data payload does not decode is
  * MALFORMED and classifies "ambiguous", never as an execution error, and
  * message-text matching is non-conforming and absent here.
  *
@@ -57,6 +75,11 @@ const TOKENS = Object.freeze({
 });
 
 const HEX_RE = /^([0-9a-f]{2})*$/;
+
+// the consensus error code range, from Platform's own mapping (see the header)
+const CONSENSUS_CODE_MIN = 10000;
+const CONSENSUS_CODE_END = 50000; // exclusive
+const isConsensusCode = (code) => code >= CONSENSUS_CODE_MIN && code < CONSENSUS_CODE_END;
 
 const refuse = (why) => {
   throw new Error(`e2Outcome: the wrapper result is outside the closed contract (${why}); ` +
@@ -108,6 +131,8 @@ const classifyWith = (result, IDENTITY) => {
         refuse("data is not lowercase hex");
       }
       if (typeof result.message !== "string") refuse("message is not a string");
+      // a code outside the consensus range is the gateway speaking, not the ledger
+      if (!isConsensusCode(result.code)) return TOKENS.AMBIGUOUS;
       if (IDENTITY !== null && result.code === IDENTITY.code) {
         const m = IDENTITY.dataMatches(result.data);
         if (m === true) return TOKENS.UNIQUE;
@@ -119,8 +144,9 @@ const classifyWith = (result, IDENTITY) => {
         // ledger processed and refused, which refusal is unknown
         return TOKENS.OTHER;
       }
-      // unknown code, or the identity not yet pinned: the ledger processed and
-      // refused, which refusal is unknown; fail-closed to the terminal rows
+      // a consensus code that is not the pinned identity, or the identity not yet
+      // pinned: the ledger processed and refused, which refusal is unknown;
+      // fail-closed to the terminal rows
       return TOKENS.OTHER;
     }
     case "malformed-response": {
@@ -142,4 +168,4 @@ const classifyWith = (result, IDENTITY) => {
   }
 };
 
-module.exports = { classifyOutcome, TOKENS, UNIQUE_INDEX_IDENTITY };
+module.exports = { classifyOutcome, TOKENS, UNIQUE_INDEX_IDENTITY, isConsensusCode };
