@@ -63,18 +63,19 @@ const child = (interruptAt, targetAccrual) => {
 // WHAT WAS PAID, BY ACCRUAL, decoded from the bytes that left rather than read from a label. A
 // review re-sent the same transfer as uppercase hex and as a Buffer and a label-based count
 // missed both, so the harness decodes its own encoding and the count keys on the decoded accrual.
-const paymentsFor = (accrualId) => D.externalEffects()
+const paymentsFor = (accrualId) => D.externalEffects().filter((e) => e.kind === "send")
   .filter((e) => e.what === "credit-transfer" && e.accrualId === accrualId);
-const allPayments = () => D.externalEffects().filter((e) => e.what === "credit-transfer");
+const allPayments = () => D.externalEffects()
+  .filter((e) => e.kind === "send" && e.what === "credit-transfer");
 // nothing may leave that this harness did not build: a send is either a decoded transfer or one
 // of the other transitions the demo constructs, and anything else is unaccounted for.
-const unrecognizedSends = () => D.externalEffects()
+const unrecognizedSends = () => D.externalEffects().filter((e) => e.kind === "send")
   .filter((e) => e.what !== "credit-transfer" && e.what !== "other-transition");
 
 const main = async () => {
   console.log("=== EVERY MEMBER IS PAID WHAT THEY ARE OWED, EXACTLY ONCE, ACROSS AN INTERRUPTION ===");
   console.log(`state root: ${ROOT}`);
-  console.log(`external effect ledger: ${D.LEDGER}  (the harness's record of what left the machine)\n`);
+  console.log(`event log: ${D.LEDGER}  (the harness's record of what left the machine)\n`);
 
   // ---- THE OWED AMOUNTS, taken from the resolution ONCE, before any phase runs ----
   const resolution = await D.resolvePoolForDemo();
@@ -184,14 +185,118 @@ const main = async () => {
     } else {
       ok(`${p.at}: the unsent transfer is NOT invented by the resume, and that member stays unpaid`,
         secondNow.length === 0);
+      // AND THE RESUME NAMES THE OUTSTANDING CONDITION rather than reporting the obligation
+      // finished. This is what binds a soundness-review finding repair in THIS gate. An independent round showed
+      // that restoring the unconditional success answer to the wait-only route left all 105
+      // assertions here green, because "the member stays unpaid" was true either way: with a
+      // fabricated success the writer captured a receipt and reported the accrual COMPLETED
+      // without any payment having left, and nothing above could tell the two apart. The
+      // resumed child prints its per-accrual status, so the status for the unsent accrual is
+      // required to be a named non-terminal condition.
+      const line = (c2.out.match(new RegExp(`CHILD-STATUS ${SECOND.accrualId.slice(0, 8)} (\\S+)`)) || [])[1] || "";
+      ok(`${p.at}: the resume NAMES the outstanding condition for that member rather than reporting it completed (status ${line || "(none printed)"})`,
+        Boolean(line) && line !== "completed");
     }
     resumed++;
     operatorClearsStaleLocks();
   }
 
+
+  // ================= THE WINDOW SWEEP =================
+  // TWENTY-FOUR WINDOWS: twelve points in the transfer sequence, each interrupted on BOTH sides
+  // of the thing that happens there. An independent round swept exactly these by hand and found
+  // none that produced a second payment; a hand sweep is an observation, and this makes it a gate.
+  //
+  // THE INVARIANT IS THE SAME AT EVERY WINDOW, which is why there is no table of per-window
+  // expected counts. Such a table would bind the sequence's current shape as well as the property
+  // and would have to be rewritten whenever a step moved. What is asserted instead:
+  //
+  //   - NO ACCRUAL IS EVER PAID MORE THAN ONCE. This is the safety property, and it is the one
+  //     that must hold at every single window without exception.
+  //   - EVERY PAYMENT IS FOR THE AMOUNT THE RESOLUTION OWED that member.
+  //   - NOTHING LEAVES THE MACHINE that this harness did not build.
+  //
+  // A WINDOW THAT DOES NOT INTERRUPT IS REPORTED, NEVER COUNTED AS SAFE. "At most once" is
+  // trivially satisfied by a run that never got far enough to pay anybody, so a window where the
+  // child completed normally is recorded as UNREACHABLE and named in the summary. That is the
+  // difference between a sweep that observes and one that only looks like it does.
+  {
+    const POINTS = [
+      "transfer/writeAhead", "transfer/sentMarker", "transfer/send", "transfer/receiptCapture",
+      "reservation/writeAhead", "reservation/sentMarker", "reservation/send",
+      "reservation/reservationSuccess",
+      "accrual/write", "part1/write", "part2/write", "receipt/write",
+    ];
+    const WINDOWS = [];
+    for (const p of POINTS) for (const side of ["before", "after"]) WINDOWS.push(`${p}/${side}`);
+
+    console.log(`\n=== THE WINDOW SWEEP: ${WINDOWS.length} windows over ${POINTS.length} points ===`);
+    const unreachable = [];
+    const rows = [];
+    let overpaid = 0;
+    for (const w of WINDOWS) {
+      await freshEpochReadyToPay();
+      const c1 = child(w, SECOND.accrualId);
+      const interrupted = c1.status !== 0 && !/CHILD-DONE/.test(c1.out);
+      const atInterrupt = allPayments().length;
+      operatorClearsStaleLocks();
+      const c2 = child("", "");
+      const resumed = /CHILD-DONE/.test(c2.out);
+
+      // A WINDOW THAT DID NOT INTERRUPT IS EXCLUDED FROM EVERY TOTAL, not merely named. This
+      // file recorded unreachability and then ran its assertions and its repeated-payment tally
+      // on the uninterrupted execution anyway, which contradicted its own exclusion claim; the
+      // multi-epoch sweep beside it already skips such a window, and a review named the
+      // difference. "At most once" is trivially true of a run that never got far enough to pay.
+      if (!interrupted) {
+        unreachable.push(w);
+        rows.push({ w, interrupted, atInterrupt, resumed, final: "excluded" });
+        operatorClearsStaleLocks();
+        continue;
+      }
+
+      // THE SAFETY PROPERTY, per accrual, over the whole window
+      const perAccrual = OWED.map((o) => ({ who: o.recipientId.slice(0, 8),
+        owed: o.amountCredits, paid: paymentsFor(o.accrualId) }));
+      const twice = perAccrual.filter((a) => a.paid.length > 1);
+      if (twice.length) overpaid += 1;
+      ok(`${w}: no member is paid more than once (${perAccrual.map((a) => `${a.who}=${a.paid.length}`).join(" ")})`,
+        twice.length === 0);
+      ok(`${w}: every payment is for the amount owed`,
+        perAccrual.every((a) => a.paid.every((p) => p.amountCredits === a.owed)));
+      ok(`${w}: nothing left the machine that this harness did not build`,
+        unrecognizedSends().length === 0);
+      rows.push({ w, interrupted, atInterrupt, resumed,
+        final: perAccrual.map((a) => a.paid.length).join("/") });
+      operatorClearsStaleLocks();
+    }
+
+    console.log("\n  window                                  interrupted  paid@cut  resumed  final(A/B)");
+    for (const r of rows) {
+      console.log(`  ${r.w.padEnd(38)} ${String(r.interrupted).padEnd(12)} ${String(r.atInterrupt).padEnd(9)} ${String(r.resumed).padEnd(8)} ${r.final}`);
+    }
+    console.log(`\n  ${WINDOWS.length} windows, ${WINDOWS.length - unreachable.length} of them genuinely interrupted, ${overpaid} producing a repeated payment.`);
+    ok(`NO WINDOW PRODUCED A REPEATED PAYMENT (${overpaid} of ${WINDOWS.length} did)`, overpaid === 0);
+    if (unreachable.length) {
+      console.log(`  UNREACHABLE (the child completed normally, so these windows observed nothing):`);
+      for (const u of unreachable) console.log(`    ${u}`);
+    }
+    // an unreachable window is REPORTED and does not silently count as evidence; a sweep where
+    // most windows never fired would be a sweep in name only, so the count is bound
+    ok(`at least three quarters of the windows genuinely interrupted (${WINDOWS.length - unreachable.length} of ${WINDOWS.length})`,
+      (WINDOWS.length - unreachable.length) >= Math.ceil(WINDOWS.length * 0.75));
+  }
+
   const guarded = PHASES.filter((p) => p.exercisesSendGuard).map((p) => p.at);
   console.log(`\n=== ${passed} passed, ${failed} failed over ${PHASES.length} interruption points, ${resumed} resumed ===`);
-  console.log("WIDTH: the transport is the harness's, not a network, so this establishes the");
+  console.log("WIDTH: what this establishes is RECORD CONSISTENCY UNDER TRUSTWORTHY, TIMELY,");
+  console.log("       APPEND-ONLY RECORDING BY THE HARNESS. The child writes the log it is judged");
+  console.log("       by, so it could rewrite history or delay a record; a review executed both");
+  console.log("       against the multi-epoch demonstration beside this one. What is caught is");
+  console.log("       plausible harness defects and product defects, not a harness written to");
+  console.log("       deceive its own reader. This paragraph was absent here while the handoff");
+  console.log("       claimed both demonstrations carried it, which a review corrected.");
+  console.log("       the transport is the harness's, not a network, so this establishes the");
   console.log("WRITER's behaviour across an interruption and not the network's deduplication.");
   console.log("      the pool resolution is the REAL module over fake transport; the amounts are its own.");
   console.log(`      ${guarded.length} of ${PHASES.length} phases exercise the NO-RESEND guard (${guarded.join(", ")}).`);

@@ -224,7 +224,12 @@ const makeEpochDepsFactory = (env) => {
     // contract fixes the builders sync; the prefetch happens per accrual just
     // before the step, and nothing else consumes those nonces in between) ----
     const prefetched = { identityNonce: null, contractNonce: null, headerContractNonce: null };
-    let lastReservationDocIdHex = null;
+    // KEYED BY ACCRUAL, not a bare "last" (a soundness-review finding). The old single pointer was correct only
+    // because the epoch loop clears it between accruals, which is an invariant maintained at a
+    // distance from the thing it protects. A map makes "the id this process built FOR THIS
+    // ACCRUAL" a local, checkable property. It is no longer the ANSWER, only a cross-check
+    // against the ledger, so nothing depends on the clear being called at the right moment.
+    const builtReservationDocIdByAccrual = new Map();
     const buildTransferTransition = ({ accrualId, amountCredits }) => {
       const row = ctx.rowFor(accrualId);
       if (prefetched.identityNonce === null) throw new Error("the identity nonce was not prefetched for this accrual");
@@ -242,7 +247,7 @@ const makeEpochDepsFactory = (env) => {
       if (prefetched.contractNonce === null) throw new Error("the contract nonce was not prefetched for this accrual");
       const nonce = prefetched.contractNonce; prefetched.contractNonce = null; // consumed once
       const { b58, entropy } = docIdOfObject("reservation", { accrualId });
-      lastReservationDocIdHex = idHex(b58);
+      builtReservationDocIdByAccrual.set(accrualId, idHex(b58));
       const doc = mkDoc("transferReservation",
         { poolId, accrualId, transitionHash: boundTransferHash }, b58, entropy);
       const stt = sdk.documents.createStateTransition(doc, "create", { identityContractNonce: nonce });
@@ -418,9 +423,102 @@ const makeEpochDepsFactory = (env) => {
       },
       buildTransferTransition,
       buildReservationTransition,
-      reservationDocumentIdOf: () => {
-        if (!lastReservationDocIdHex) throw new Error("no reservation was built in this step");
-        return lastReservationDocIdHex;
+      // THE RESERVATION DOCUMENT'S IDENTIFIER COMES FROM THE LEDGER (a soundness-review finding), never from state
+      // this process happens to hold. The old version returned a variable set at BUILD time, so
+      // the wait-only resume route, which by design builds nothing, found it empty and threw
+      // `no reservation was built in this step`. A run interrupted between the reservation's
+      // sent marker and its success record could therefore never be resumed: every resume ended
+      // with an unhandled error instead of a status, and the pool was stuck for good. Found by
+      // the first live payment run, 2026-09-22.
+      //
+      // WHY DERIVING IT WOULD NOT HAVE BEEN A FIX. `docIdOfObject` is deterministic, so the
+      // builder's id is recomputable from the accrual alone and that looks like the cheap
+      // repair. It answers which id THIS writer WOULD have used, which is a different question
+      // from which document is there. On a resume the bytes being waited on were produced by an
+      // earlier process, and the runner's own header (`e2DistributeRun.mjs`) discusses a
+      // conforming branch writing a logical row under different entropy, so the recomputed id
+      // and the real one can differ. A derivation cannot tell those cases apart.
+      //
+      // WHAT MAKES THE LOOKUP CORRECT is the CONTRACT, not the document-write recovery rule.
+      // An earlier version of this comment cited that rule, and a review was right that it does
+      // not apply: the spec scopes it to accruals, proof parts and the receipt, and reservations
+      // have their own success and holder rules. The reservation's guarantee is narrower and
+      // sufficient. `contractV11.cjs` makes `transferReservation` unique by accrual, immutable
+      // and undeletable, so once THIS transition has genuinely succeeded no later branch can
+      // put a different document under this accrual. The row served under the unique binding is
+      // therefore the one the record is about. A branch that LOST the unique index never reaches
+      // here: a duplicate refusal is not a success, and it enters the refusal and foreign-claim
+      // arms below instead.
+      //
+      // IT REPORTS RATHER THAN THROWS. Every unanswerable case is an answer the caller turns
+      // into a named non-terminal status, because a read that cannot be completed must leave a
+      // re-run able to recover rather than end the run unhandled. That was the other half of
+      // a soundness-review finding, and the first version of this repair still left two ways to throw, a rejecting
+      // query and a served identifier that cannot be decoded, both of which a review executed.
+      //
+      // WHAT "RECOVERABLE" DOES AND DOES NOT PROMISE. A later pass resumes IF the read becomes
+      // answerable AND this accrual's transfer nonce has not been consumed in the meantime by a
+      // row the loop went on to work. A review reproduced that sequence: the accrual returns
+      // pending, a later row sends under the nonce this one had built against, and the resumed
+      // transfer is refused. That is the spec's already-recorded nonce-stranding limitation
+      // reached by a new route, not a new one, and the wording here no longer says otherwise.
+      // A persistent multiplicity or a persistent disagreement is also not something waiting
+      // fixes; both are conditions for an operator, and the status is deliberately conservative
+      // rather than terminal because neither establishes an execution refusal.
+      //
+      // WIDTH, STATED: this read is the plain document query, not the proof-verifying one, so it
+      // carries the same trust as `fetchReservation` and `observeReceipt` beside it, which the
+      // foreign-claim decision below already rests on. Moving all three to the proved route is a
+      // separate change and is not made here.
+      // THE ARGUMENT IS DEFAULTED because a call with none must produce a REFUSAL, not a
+      // destructuring crash. The whole point of this repair is that an unanswerable identifier
+      // stops one accrual with a named condition rather than ending the run, and a throw here
+      // would put the old failure back under a new message.
+      // THE ARGUMENT IS NORMALIZED rather than destructured, because `null` is not `undefined`
+      // and a default parameter does not cover it: `({ x } = {})` still throws on an explicit
+      // null. A review found that hole.
+      reservationDocumentIdOf: async (key) => {
+        const accrualId = (key && typeof key === "object") ? key.accrualId : undefined;
+        if (typeof accrualId !== "string" || !/^[0-9a-f]{64}$/.test(accrualId)) {
+          return { found: false, reason: "the accrual identifier is missing or malformed" };
+        }
+        // THE QUERY ITSELF CAN REJECT, and an uncaught rejection here is the original defect
+        // wearing a different coat: the run would end unhandled on a transport failure instead
+        // of stopping one accrual recoverably.
+        let found;
+        try {
+          found = await sdk.documents.query(V11, "transferReservation",
+            [["accrualId", "==", Buffer.from(accrualId, "hex")]]);
+        } catch (e) {
+          return { found: false, reason: `the reservation read did not complete (${(e && e.message) || e})` };
+        }
+        if (!Array.isArray(found)) {
+          return { found: false, reason: "the reservation read answered something that is not a list of documents" };
+        }
+        if (found.length === 0) {
+          return { found: false, reason: "the ledger serves no reservation for this accrual" };
+        }
+        if (found.length !== 1) {
+          return { found: false, reason: `the ledger serves ${found.length} reservations for this accrual, which the unique binding forbids` };
+        }
+        // AND THE SERVED IDENTIFIER MAY NOT DECODE. Same reasoning as the query above.
+        let ledgerId;
+        try { ledgerId = idHex(found[0].id); }
+        catch (e) { return { found: false, reason: `the served reservation's identifier could not be read (${(e && e.message) || e})` }; }
+        if (typeof ledgerId !== "string" || !/^[0-9a-f]{64}$/.test(ledgerId)) {
+          return { found: false, reason: "the served reservation's identifier is not a 32-byte value, which the record requires" };
+        }
+        const builtHere = builtReservationDocIdByAccrual.get(accrualId);
+        // A CROSS-CHECK ON A STATE THAT SHOULD BE UNREACHABLE. When this process built the
+        // reservation AND its transition succeeded, the document under this accrual's unique
+        // binding is that one, so the two must agree. They are compared anyway, because the
+        // alternative to comparing is assuming, and a disagreement would mean the success
+        // belonged to a different document than the record is about to name.
+        if (builtHere && builtHere !== ledgerId) {
+          return { found: false,
+            reason: `the reservation built here is ${builtHere.slice(0, 12)} and the ledger serves ${ledgerId.slice(0, 12)} for the same accrual` };
+        }
+        return { found: true, documentId: ledgerId };
       },
       fetchReservation: async (poolId, epochIndex, accrualId) => {
         const found = await sdk.documents.query(V11, "transferReservation",
@@ -457,7 +555,10 @@ const makeEpochDepsFactory = (env) => {
       },
     };
     return { deps, prefetched, contractNonce, identityNonce,
-      clearLastReservation: () => { lastReservationDocIdHex = null; } };
+      // KEPT so the epoch loop's per-accrual call still means something, but it no longer
+      // guards a correct answer: the id comes from the ledger keyed by the accrual, so a stale
+      // entry cannot be returned for a different accrual whether or not this is called.
+      clearLastReservation: () => { builtReservationDocIdByAccrual.clear(); } };
   };
 };
 

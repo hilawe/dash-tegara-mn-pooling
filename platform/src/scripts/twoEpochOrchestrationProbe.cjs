@@ -303,7 +303,7 @@ const buildDeps = (platform, calc, contexts, snapshotRef, opts = {}) => {
       const bytes = "0c0d" + String(epochIndex).padStart(4, "0") + accrualId.slice(0, 4);
       return { transitionBytes: bytes, transitionHash: shaBytes(bytes) };
     },
-    reservationDocumentIdOf: () => h32("d1"),
+    reservationDocumentIdOf: () => ({ found: true, documentId: h32("d1") }),
     buildHeaderCapture: ({ poolId, epochIndex, gen, writeAhead }) => ({ v: 1,
       kind: "tegara.e2.headerCapture.v1", object: "header", gen, poolId, epochIndex,
       transitionBytes: writeAhead.transitionBytes, transitionHash: writeAhead.transitionHash,

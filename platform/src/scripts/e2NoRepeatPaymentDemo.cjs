@@ -75,6 +75,39 @@ const ensureStore = () => {
   if (!fs.existsSync(id)) fs.writeFileSync(id, "00112233aabbccdd");
 };
 ensureStore();
+// ---- THE INTERRUPTION HOOK ON THE JOURNAL, INSTALLED BEFORE THE WRITER LOADS ----
+// `e2Distribute` DESTRUCTURES `appendRecord` out of the store at load time, so a patch applied
+// afterwards would never be seen by it. Patching the module object here, before that require
+// runs, is what lets a phase end the process on either side of a specific journal append. This
+// is the same reason the child is a separate process: the interruption has to be real.
+//
+// THE POINTS THIS REACHES are the four record kinds the transfer sequence commits, each for the
+// object it belongs to, which together with the two adapter-level points below give every window
+// an independent review swept by hand.
+const jstore = require("./e2JournalStore.cjs");
+const { K: JK } = require("./e2Journal.cjs");
+const { RECEIPT_KIND } = require("./e2CaptureRecord.cjs");
+const journalStage = (rec) => {
+  if (!rec || typeof rec !== "object") return null;
+  const obj = rec.object;
+  if (rec.kind === JK.WRITE_AHEAD && (obj === "transfer" || obj === "reservation")) return `${obj}/writeAhead`;
+  if (rec.kind === JK.SENT_MARKER && (obj === "transfer" || obj === "reservation")) return `${obj}/sentMarker`;
+  if (rec.kind === JK.RESERVATION_SUCCESS) return "reservation/reservationSuccess";
+  if (rec.kind === RECEIPT_KIND && obj === "transfer") return "transfer/receiptCapture";
+  return null;
+};
+// installed unconditionally so the tag mapping is exercised on every run, not only interrupted
+// ones; with no interrupt configured `endHereGlobal` is a no-op and the wrapper is transparent
+let endHereGlobal = () => {};
+const realAppendRecord = jstore.appendRecord;
+jstore.appendRecord = (poolId, committedOffset, payloadObj, dir) => {
+  const stage = journalStage(payloadObj);
+  if (stage) endHereGlobal(`${stage}/before`);
+  const out = realAppendRecord(poolId, committedOffset, payloadObj, dir);
+  if (stage) endHereGlobal(`${stage}/after`);
+  return out;
+};
+
 const distribute = require("./e2Distribute.cjs");
 const { setStart, startRun, runHeaderStep, runAccrualStep, runTransferStep,
   poolRunLockName } = distribute;
@@ -107,39 +140,29 @@ const idHex = (v) => {
   return s.startsWith("b58:") ? s.slice(4) : s;
 };
 
-// ---- THE EXTERNAL EFFECT LEDGER ----
+// ---- THE EXTERNAL EFFECT LEDGER AND THE DECODER THAT SAYS WHAT A PAYMENT IS ----
 // One line per transition that left the machine, appended and fsynced before the adapter returns
 // or ends the process. It is the harness's own record, never the journal's, and the payment count
 // is read from here and nowhere else.
-const LEDGER = path.join(ROOT, "external-effects.jsonl");
-const recordExternalEffect = (entry) => {
-  const fd = fs.openSync(LEDGER, "a");
-  try {
-    fs.writeSync(fd, JSON.stringify(entry) + "\n");
-    fs.fsyncSync(fd); // it must survive the process ending in the next statement
-  } finally { fs.closeSync(fd); }
-};
-const externalEffects = () => (fs.existsSync(LEDGER)
-  ? fs.readFileSync(LEDGER, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
-  : []);
-
-// WHAT LEFT IS DECODED FROM THE BYTES, never taken from a label and never compared as a string.
-// A review re-sent the same transfer as uppercase hex and as a Buffer, and a label-based record
-// filed both as something else, so a real second payment was invisible. The encoding is this
-// harness's own, declared here, and the decoder is its inverse.
-const hexOf = (b) => (Buffer.isBuffer(b) ? b.toString("hex") : String(b)).toLowerCase();
-const TRANSFER_TAG = "0a0b";
-const encodeTransfer = (accrualId, amountCredits) =>
-  TRANSFER_TAG + accrualId + Buffer.from(String(amountCredits), "utf8").toString("hex");
-const decodeTransfer = (bytes) => {
-  const hex = hexOf(bytes);
-  if (!hex.startsWith(TRANSFER_TAG) || hex.length < TRANSFER_TAG.length + 64) return null;
-  const accrualId = hex.slice(4, 68);
-  let amountCredits;
-  try { amountCredits = Buffer.from(hex.slice(68), "hex").toString("utf8"); } catch { return null; }
-  if (!/^[0-9]+$/.test(amountCredits)) return null;
-  return { accrualId, amountCredits };
-};
+//
+// BOTH LIVE IN `e2PaymentLedger.cjs` rather than here, because the multi-epoch demonstration
+// reads the same ledger and is judged by the same decoder. Two copies could disagree about what
+// counts as a payment and both would look green while doing so. The decoder is the ORACLE these
+// demonstrations are judged by, so it has its own battery: identity is decoded from the bytes,
+// never taken from a label, after a review re-sent one transfer as uppercase hex and as a Buffer
+// and a label-based record filed both as something else.
+const paymentLedger = require("./e2PaymentLedger.cjs");
+const { encodeTransfer, decodeTransfer } = paymentLedger;
+const LEDGER = path.join(ROOT, "events.jsonl");
+// THE NON-PAYMENT SHAPES THIS HARNESS BUILDS ARE DECLARED, so a send matching none of them is
+// UNRECOGNIZED rather than absorbed into a catch-all class that nothing can fall outside of.
+const OTHER_SHAPES = Object.freeze({ reservation: "0c0d", header: "0102" });
+// ONE APPEND-ONLY EVENT LOG, shared with the multi-epoch demonstration. This one records only
+// sends, because a single-epoch run makes no completion declarations and so has no moment for the
+// log's ORDER to carry; the multi-epoch one needs that ordering and both read the same module.
+const effects = paymentLedger.makeEventLog(LEDGER, { otherShapes: OTHER_SHAPES });
+const recordExternalEffect = (entry) => effects.record(entry);
+const externalEffects = () => effects.events();
 
 const SUCCESS = { outcome: "verified-proof", proof: { p: 1 }, metadata: { height: "1000" },
   proofMsg: "aa", metadataMsg: "bb", unknownFieldsDropped: 0 };
@@ -197,6 +220,9 @@ const mkDeps = (poolId, interruptAt, resolution) => {
       process.exit(9);
     }
   };
+  // the journal hook installed at load time shares this one decision, so a phase names a
+  // journal point and an adapter point in exactly the same way
+  endHereGlobal = endHere;
   return {
     identities: { writer: W, income: I },
     verifyGateCapture: async () => ({ admitted: true }),
@@ -231,30 +257,59 @@ const mkDeps = (poolId, interruptAt, resolution) => {
     // ---- THE ONE ADAPTER THAT REACHES THE OUTSIDE WORLD ----
     broadcastAndAwait: async (hash, bytes) => {
       const decoded = decodeTransfer(bytes);
-      if (decoded) endHere("after-marker-before-send"); // marker committed; nothing has left
-      recordExternalEffect({
-        what: decoded ? "credit-transfer" : "other-transition",
-        accrualId: decoded ? decoded.accrualId : null,
-        amountCredits: decoded ? decoded.amountCredits : null,
-        hash, bytes: hexOf(bytes), pid: process.pid, at: new Date().toISOString() });
-      if (decoded) endHere("after-send-before-capture"); // it HAS left; no record of it yet
+      // WHICH SEND THIS IS, named so a phase can interrupt the reservation's send and the
+      // transfer's send separately. The reservation reaches the ledger too, but it moves no
+      // credits; only a decoded transfer counts as a payment.
+      const stage = decoded ? "transfer/send" : "reservation/send";
+      endHere(`${stage}/before`);
+      if (decoded) endHere("after-marker-before-send"); // kept: the original phase name
+      // THE ENTRY IS BUILT BY THE SHARED LEDGER from the bytes that left, not from what this
+      // adapter believes it is sending, so both demonstrations classify a send identically.
+      recordExternalEffect(effects.entryForSend(hash, bytes));
+      endHere(`${stage}/after`);
+      if (decoded) endHere("after-send-before-capture"); // kept: the original phase name
       return SUCCESS;
     },
-    // the wait-only recovery route. It must NEVER reach the outside world, so it records no
-    // external effect: if the writer ever resolved a pending send by sending again, the ledger
-    // would gain a line and this demonstration would say so.
-    awaitResult: async () => SUCCESS,
+    /**
+     * the wait-only recovery route. It must NEVER reach the outside world, so it records no
+     * external effect: if the writer ever resolved a pending send by sending again, the ledger
+     * would gain a line and this demonstration would say so.
+     *
+     * IT ALSO MUST NOT ANSWER SUCCESS FOR A TRANSITION THAT NEVER LEFT (a soundness-review finding). It did until
+     * 2026-09-21, unconditionally, which is the adapter-always-answers-true shape a healthy run
+     * cannot detect. The consequence was specific: interrupted with the sent marker committed and
+     * the transition not yet sent, the resume asked this route what had happened, was told the
+     * transition succeeded, and captured a receipt for a payment that never left. The phase table
+     * below recorded the member as staying unpaid, which was true, but the ROUTE it travelled to
+     * get there was a fabricated success rather than the unresolved answer the writer handles.
+     * The product asked the right question and the harness answered it wrongly.
+     *
+     * It now answers from the external effect ledger, the harness's own record of what left. A
+     * hash that is not in it has NO RESULT, which is a transport failure and not a refusal, so
+     * the writer classifies it unresolved and returns its operator condition.
+     */
+    awaitResult: async (hash) => {
+      const left = effects.events().some((e) => e.kind === "send" && e.hash === hash);
+      if (left) return SUCCESS;
+      return { outcome: "transport-failure",
+        reason: "no result for this transition: it never reached the transport" };
+    },
 
     transferBytesBound: 4096,
-    buildTransferTransition: ({ accrualId, amountCredits }) => {
-      const bytes = encodeTransfer(accrualId, amountCredits);
+    buildTransferTransition: ({ accrualId, recipientId, amountCredits }) => {
+      // THE RECIPIENT GOES INTO THE BYTES. The earlier envelope dropped the recipient the writer
+      // passes, so two obligations differing only in who is paid encoded identically and a
+      // recipient error was unobservable through this ledger.
+      const bytes = encodeTransfer(accrualId, recipientId, amountCredits);
       return { transitionBytes: bytes, transitionHash: sha(bytes) };
     },
     buildReservationTransition: ({ accrualId }) => {
       const b = "0c0d" + accrualId;
       return { transitionBytes: b, transitionHash: sha(b) };
     },
-    reservationDocumentIdOf: () => h32("d1"),
+    // a soundness-review finding shape: answers { found, documentId } and is keyed by the accrual it is asked
+    // about, so a resume that built nothing still gets an answer.
+    reservationDocumentIdOf: ({ accrualId }) => ({ found: true, documentId: sha(accrualId) }),
     buildReceiptCapture: ({ epochIndex, accrualId, writeAhead }) => ({ v: 1,
       kind: "tegara.e2.receiptCapture.v1", object: "transfer", gen: 1, poolId, epochIndex,
       accrualId, transitionHash: writeAhead.transitionHash,
@@ -272,8 +327,13 @@ const mkDeps = (poolId, interruptAt, resolution) => {
         return f ? { found: true, fields: f } : { found: false };
       },
       write: async (object, key, payload) => {
+        // each document write is its own window: the parts are numbered, so part1 and part2 are
+        // distinct points rather than one
+        const tag = object === "part" ? `part${key.partIndex}` : object;
+        endHere(`${tag}/write/before`);
         if (object === "part" || object === "receipt") endHere("after-capture-before-documents");
         ledger.set(docKey(object, key), payload);
+        endHere(`${tag}/write/after`);
         return SUCCESS;
       },
     },
@@ -291,6 +351,12 @@ const runChildPhase = async () => {
   const resolution = await resolvePoolForDemo();
   const run = await startRun({ poolId: POOL, dir: undefined,
     deps: mkDeps(POOL, "", resolution) });
+  // THE ACCRUAL STEP RUNS IN THE CHILD TOO, which the first version skipped. Its document writes
+  // are a real part of the sequence, and leaving them to the parent's setup made the two
+  // accrual/write windows unreachable: the child completed normally and the sweep correctly
+  // reported it had observed nothing there. A window that cannot fire is not evidence.
+  await runAccrualStep({ poolId: POOL, dir: undefined,
+    deps: mkDeps(POOL, interruptAt, resolution), run, epochIndex: EPOCH });
   const rows = mkDeps(POOL, "", resolution).entitlementsForEpoch(EPOCH);
   for (const row of rows) {
     // only the named accrual carries the interruption; the others run clean
