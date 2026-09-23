@@ -105,7 +105,7 @@ const mkCapture = ({ poolId, epochIndex, gen, writeAhead }) => ({ v: 1, kind: HE
   heightRoute: "tenderdash-tx", signerIdentity: h32("f0"), signerKeyId: 2, sig: "00".repeat(65) });
 
 const mkDeps = (poolId, dir, over = {}) => {
-  const calls = { broadcast: [], await: [], build: [], proved: [], fetch: [], docWrites: [] };
+  const calls = { broadcast: [], await: [], build: [], proved: [], fetch: [], docWrites: [], resDocId: [] };
   const ledger = over.ledger || new Map();
   const docKey = (object, key) => [object, key.epochIndex, key.accrualId ?? "", key.partIndex ?? ""].join("|");
   const depsLedger = { ledger, docKey };
@@ -216,7 +216,15 @@ const mkDeps = (poolId, dir, over = {}) => {
       const bytes = "0c0d" + String(epochIndex).padStart(4, "0") + accrualId.slice(0, 4);
       return { transitionBytes: bytes, transitionHash: sha(bytes) };
     },
-    reservationDocumentIdOf: () => h32("d1"),
+    // OVERRIDABLE, which it was not before, and that omission is why no offline case caught
+    // a soundness-review finding. The real adapter could fail to answer (it read state only a building process
+    // held); this double answered unconditionally, so the composition case below drove the
+    // wait-only resume route and saw a success the production path could never produce. A
+    // double without the subject's failure mode cannot exercise the subject's recovery.
+    reservationDocumentIdOf: async (arg) => {
+      calls.resDocId.push(arg && arg.accrualId);
+      return (over.reservationDocumentId || (() => ({ found: true, documentId: h32("d1") })))(arg);
+    },
     buildReceiptCapture: ({ poolId: p2, epochIndex, accrualId, writeAhead }) => ({ v: 1,
       kind: "tegara.e2.receiptCapture.v1", object: "transfer", gen: 1, poolId: p2, epochIndex,
       accrualId, transitionHash: writeAhead.transitionHash, transitionBytes: writeAhead.transitionBytes,
@@ -930,6 +938,96 @@ const openEpoch = async (pool, dir, over = {}) => {
   ok("the resumed reservation waits on the RESERVATION's persisted hash and completes",
     r2.status === "completed" && resumed._calls.await[0] === sha(resBytes)
     && resumed._calls.broadcast.some((b) => b.bytes.startsWith("0a0b")));
+  // THE RESUME ASKS FOR THE IDENTIFIER BY THE ACCRUAL IT IS RECOVERING, which is what makes the
+  // answer that accrual's rather than whatever the process last built (a soundness-review finding).
+  ok("the resumed reservation asks for its document identifier by ITS OWN accrual",
+    resumed._calls.resDocId.length >= 1 && resumed._calls.resDocId[0] === A1);
+}
+{
+  // a soundness-review finding COMPOSITION CASE: the resume succeeds on the network and the document cannot be
+  // identified. This is the shape that used to end the whole run with an unhandled error. It
+  // must now stop THIS ACCRUAL with a named non-terminal status and write NO reservation success,
+  // so a later run can still recover it.
+  const pool = freshPool();
+  const dir = caseDir();
+  const { run } = await openEpoch(pool, dir);
+  const ambiguous = mkDeps(pool, dir, {
+    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? AMBIGUOUS_RESULT : SUCCESS_RESULT });
+  await runTransferStep({ poolId: pool, dir, deps: ambiguous, run, epochIndex: 5, accrualId: A1 });
+  const blind = mkDeps(pool, dir, { awaitOutcome: () => SUCCESS_RESULT,
+    reservationDocumentId: () => ({ found: false, reason: "the ledger serves no reservation for this accrual" }) });
+  // THE THROW IS CAUGHT AND NAMED. Ignoring the not-found answer makes the step throw inside the
+  // journal's schema check, which is red for the wrong reason and reads like any other crash.
+  // Turning it into a named failure is what makes this case report the defect rather than the
+  // exception.
+  let rb = null, rbThrew = "";
+  try { rb = await runTransferStep({ poolId: pool, dir, deps: blind, run, epochIndex: 5, accrualId: A1 }); }
+  catch (e) { rbThrew = (e && e.message) || String(e); }
+  ok("a reservation that succeeded but cannot be identified stops the accrual with a NAMED status rather than throwing",
+    rbThrew === "" && rb && rb.status === "reservation-unresolved-pending" && /serves no reservation/.test(rb.note || ""));
+  const readBlind = openValidatedJournal(pool, dir);
+  ok("and NO reservation success is recorded, so the claim is not made on an identifier nobody has",
+    rbThrew === "" && (!(readBlind.perEpoch[5].accruals[A1].reservation || {}).state
+      || readBlind.perEpoch[5].accruals[A1].reservation.state !== "success"));
+  ok("and no transfer is broadcast on that pass, since the accrual stopped before the send",
+    !blind._calls.broadcast.some((b) => b.bytes.startsWith("0a0b")));
+  // THE RETURNED IDENTIFIER IS THE ONE JOURNALED, which the suite did not bind: a writer that
+  // ignored the answer and wrote a constant survived a reviewer's mutation. A DISTINCTIVE value
+  // is used so the record can only carry it by having come from the adapter.
+  {
+    const pool2 = freshPool();
+    const dir2 = caseDir();
+    const { run: run2 } = await openEpoch(pool2, dir2);
+    const DISTINCT = "7e".repeat(32);
+    const marked = mkDeps(pool2, dir2, { reservationDocumentId: () => ({ found: true, documentId: DISTINCT }) });
+    const rm = await runTransferStep({ poolId: pool2, dir: dir2, deps: marked, run: run2, epochIndex: 5, accrualId: A1 });
+    const readMarked = openValidatedJournal(pool2, dir2);
+    const successRec = readMarked.records.find((r) => r.kind === K.RESERVATION_SUCCESS && r.accrualId === A1);
+    ok("the reservation success record carries the identifier the adapter RETURNED, not one the writer chose",
+      rm.status === "completed" && !!successRec && successRec.reservationDocumentId === DISTINCT);
+  }
+  // THE FRESH-SEND PATH ALSO STOPS when the identifier is unanswerable. The composition case
+  // above exercises the RESUMED path only, and a reviewer's mutation that threw on the fresh
+  // path alone survived the whole suite because of that.
+  {
+    const pool3 = freshPool();
+    const dir3 = caseDir();
+    const { run: run3 } = await openEpoch(pool3, dir3);
+    const blindFresh = mkDeps(pool3, dir3, {
+      reservationDocumentId: () => ({ found: false, reason: "the ledger serves no reservation for this accrual" }) });
+    let rf = null, rfThrew = "";
+    try { rf = await runTransferStep({ poolId: pool3, dir: dir3, deps: blindFresh, run: run3, epochIndex: 5, accrualId: A1 }); }
+    catch (e) { rfThrew = (e && e.message) || String(e); }
+    ok("a FRESH reservation whose identifier cannot be answered stops with the same named status",
+      rfThrew === "" && rf && rf.status === "reservation-unresolved-pending");
+    ok("and the pending result names the accrual it is about",
+      rfThrew === "" && rf && rf.accrualId === A1);
+    ok("and the fresh path sends no transfer either",
+      !blindFresh._calls.broadcast.some((b) => b.bytes.startsWith("0a0b")));
+  }
+  // A TRUTHY-BUT-NOT-TRUE ANSWER IS NOT A SUCCESS. The call site compares against `true`, and
+  // nothing observed that until a reviewer mutated it to accept any truthy value.
+  {
+    const pool4 = freshPool();
+    const dir4 = caseDir();
+    const { run: run4 } = await openEpoch(pool4, dir4);
+    const sloppy = mkDeps(pool4, dir4, {
+      reservationDocumentId: () => ({ found: "yes", documentId: "9a".repeat(32) }) });
+    let r4 = null, threw4 = "";
+    try { r4 = await runTransferStep({ poolId: pool4, dir: dir4, deps: sloppy, run: run4, epochIndex: 5, accrualId: A1 }); }
+    catch (e) { threw4 = (e && e.message) || String(e); }
+    ok("an answer whose `found` is truthy but not true is NOT treated as an identification",
+      threw4 === "" && r4 && r4.status === "reservation-unresolved-pending");
+  }
+  // the SAME journal then recovers once the identifier is answerable, which is the property
+  // a soundness-review finding destroyed: the pool must not be stuck for good.
+  const later = mkDeps(pool, dir, { awaitOutcome: () => SUCCESS_RESULT });
+  const rl = await runTransferStep({ poolId: pool, dir, deps: later, run, epochIndex: 5, accrualId: A1 });
+  // NARROWED after a review reproduced the exception: recovery holds WHEN the read becomes
+  // answerable and this accrual's transfer nonce has not been consumed by a later row in the
+  // meantime. That nonce-stranding limitation is the spec's own, not new here.
+  ok("a LATER run over the same journal recovers and completes, once the identifier is answerable",
+    rl.status === "completed");
 }
 {
   // the unique-index claim: an equal bound-transfer hash is an identical

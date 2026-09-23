@@ -74,7 +74,11 @@ const ctxFor = (epoch, rows) => ({
   figures: { grossCredits: String(10000 + epoch), feeCredits: String(100 + epoch),
     allocationHash: "ee".repeat(32), memberCount: rows.length, calcVersion: 1 },
   rowFor: (accrualId) => rows.find((r) => r.accrualId === accrualId) || null,
-  docIdFor: (type, subject) => ({ b58: `b58-${type}-${subject}`,
+  // A DOCUMENT IDENTIFIER IS 32 BYTES. The fixture used to yield a short label, which no
+  // document could carry, so a case built on it could not exercise a writer that requires the
+  // real shape. It is derived here the way the real one is, deterministically from the type and
+  // the subject, so a case can still predict it.
+  docIdFor: (type, subject) => ({ b58: sha256hex(Buffer.from(`docid:${type}:${subject}`)),
     entropy: Buffer.alloc(32, 7), hex: sha256hex(Buffer.from(`${type}:${subject}`)) }),
 });
 const EP0 = ctxFor(0, [rowOf(0, 0), rowOf(0, 1)]);
@@ -149,6 +153,21 @@ const mkEnv = (over = {}) => {
 };
 
 // build a bundle from the CLEAN module (or a mutant), for one epoch
+// A SERVED RESERVATION IDENTIFIER IS 32 BYTES, because that is what the record requires and
+// what the store can actually emit. An earlier fixture used a short label, which no document
+// could carry, so it proved nothing about the shape the writer journals.
+const LEDGER_RES_ID = "5c".repeat(32);
+
+// A THROW FROM THIS ADAPTER MUST FAIL AN ASSERTION, NOT END THE BATTERY. a soundness-review finding defect WAS a
+// throw, so a mutant restoring it would otherwise crash the file at the first direct call and
+// every case below would report nothing, which is red for a reason nobody can attribute. Calls
+// go through here so a throw becomes a named failure; the one case that is ABOUT throwing calls
+// the adapter raw on purpose.
+const ask = async (deps, key) => {
+  try { return key === undefined ? await deps.reservationDocumentIdOf() : await deps.reservationDocumentIdOf(key); }
+  catch (e) { return { found: false, threw: true, reason: `THREW: ${(e && e.message) || e}` }; }
+};
+
 const bundleOf = (mod, ctx, completed = new Set(), over = {}) => {
   const e = mkEnv(over);
   const factory = mod.makeEpochDepsFactory(e.env);
@@ -412,7 +431,9 @@ const main = async () => {
 
   // ================= 9. the transfer and reservation builders =================
   {
-    const b = bundleOf(CLEAN, EP0);
+    // the ledger answers ONLY for a reservation lookup, so nothing else in this section changes
+    const b = bundleOf(CLEAN, EP0, new Set(), {
+      queryAnswer: async (type) => (type === "transferReservation" ? [{ id: LEDGER_RES_ID }] : []) });
     const row = EP0.rows[0];
     throws("a transfer build with no prefetched identity nonce refuses",
       () => b.deps.buildTransferTransition({ accrualId: row.accrualId, amountCredits: row.amountCredits }),
@@ -442,12 +463,30 @@ const main = async () => {
     throws("a reservation build with no prefetched contract nonce refuses",
       () => b.deps.buildReservationTransition({ poolId: POOL, accrualId: row.accrualId, boundTransferHash: t.transitionHash }),
       /contract nonce was not prefetched/);
-    throws("asking for a reservation document id before one is built refuses",
-      () => b.deps.reservationDocumentIdOf(), /no reservation was built in this step/);
+    // a soundness-review finding. These cases USED TO assert that asking before a build REFUSES, and that assertion
+    // is what pinned the defect in place: the wait-only resume route builds nothing by design,
+    // so "refuse when nothing was built" is exactly wrong for the one caller that matters. The
+    // identifier now comes from the LEDGER, keyed by the accrual, so a resume gets an answer and
+    // a build is only a cross-check.
+    ok("asking before any build answers from the LEDGER rather than refusing (the resume case)",
+      await (async () => {
+        const r = await ask(b.deps, { accrualId: row.accrualId });
+        return r.found === true && r.documentId === LEDGER_RES_ID;
+      })());
     b.prefetched.contractNonce = 42n;
     b.deps.buildReservationTransition({ poolId: POOL, accrualId: row.accrualId, boundTransferHash: t.transitionHash });
-    ok("after a reservation is built its document id is available",
-      typeof b.deps.reservationDocumentIdOf() === "string" && b.deps.reservationDocumentIdOf().length > 0);
+    // a build AGREEING with the ledger: the stub now serves exactly what the builder derived,
+    // which is the ordinary fresh-payment case. The DISAGREEING case is in section 12.
+    const builtId = sha256hex(Buffer.from(`docid:transferReservation:${row.accrualId}`)); // what docIdFor yields
+    const bAgree = bundleOf(CLEAN, EP0, new Set(), {
+      queryAnswer: async (type) => (type === "transferReservation" ? [{ id: builtId }] : []) });
+    bAgree.prefetched.contractNonce = 42n;
+    bAgree.deps.buildReservationTransition({ poolId: POOL, accrualId: row.accrualId, boundTransferHash: t.transitionHash });
+    ok("after a reservation is built the answer is still the LEDGER'S, and the two agree",
+      await (async () => {
+        const r = await ask(bAgree.deps, { accrualId: row.accrualId });
+        return r.found === true && r.documentId === builtId;
+      })());
     // THE RESERVATION'S NONCE IS CONSUMED ONCE TOO. The transfer builder had this pair and the
     // reservation builder did not, so removing its clear was invisible. Two reservations over
     // one prefetched contract nonce would submit two documents under the same nonce.
@@ -463,8 +502,148 @@ const main = async () => {
         && resDoc.fields.transitionHash.toString("hex") === t.transitionHash
         && resDoc.fields.poolId.toString("hex") === POOL);
     b.clearLastReservation();
-    throws("clearing the reservation pointer makes a stale id unavailable rather than returning the previous step's",
-      () => b.deps.reservationDocumentIdOf(), /no reservation was built in this step/);
+    ok("after clearing, the answer is still the ledger's for THIS accrual, not a previous step's",
+      await (async () => {
+        const r = await ask(b.deps, { accrualId: row.accrualId });
+        return r.found === true && r.documentId === LEDGER_RES_ID;
+      })());
+
+    // ---- a soundness-review finding refusal branches. Each one REPORTS rather than throws, because the caller
+    // turns a not-found into a named non-terminal status and an exception here would put the
+    // original defect back under a different message.
+    const askWith = async (answer, key = { accrualId: row.accrualId }) => {
+      const bb = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async (type) => (type === "transferReservation" ? answer : []) });
+      return ask(bb.deps, key);
+    };
+    ok("a ledger serving NO reservation is reported, not thrown, and says so",
+      await (async () => {
+        const r = await askWith([]);
+        return r.found === false && !r.threw && /serves no reservation/.test(r.reason);
+      })());
+    ok("a ledger serving TWO reservations for one accrual is refused by the unique binding",
+      await (async () => {
+        const r = await askWith([{ id: "a".repeat(64) }, { id: "b".repeat(64) }]);
+        return r.found === false && !r.threw && /2 reservations/.test(r.reason) && /unique binding/.test(r.reason);
+      })());
+    ok("a malformed accrual identifier is refused rather than sent to the ledger",
+      await (async () => {
+        const r = await askWith([{ id: LEDGER_RES_ID }], { accrualId: "not-hex" });
+        return r.found === false && !r.threw && /missing or malformed/.test(r.reason);
+      })());
+    ok("asking with NO argument at all is refused rather than crashing on the destructure",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [{ id: LEDGER_RES_ID }] });
+        const r = await ask(bb.deps, undefined);
+        return r.found === false && !r.threw && /missing or malformed/.test(r.reason);
+      })());
+    ok("a malformed identifier never reaches the ledger, so no query is issued for it",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [{ id: LEDGER_RES_ID }] });
+        const before = bb.queries.length;
+        await ask(bb.deps, { accrualId: "not-hex" });
+        return bb.queries.length === before;
+      })());
+    // THIS CASE EXISTS SO A MUTANT REPORTS ITSELF BY NAME. Restoring the throw makes every case
+    // above go red by CRASHING the run, which is red for the wrong reason and indistinguishable
+    // from any other exception. Reporting rather than throwing IS the property, so it gets an
+    // assertion of its own over every refusal shape at once.
+    ok("the adapter REPORTS every refusal shape and throws for none of them",
+      await (async () => {
+        const shapes = [
+          ["no reservation on the ledger", [], { accrualId: row.accrualId }],
+          ["two reservations on the ledger", [{ id: "a".repeat(64) }, { id: "b".repeat(64) }], { accrualId: row.accrualId }],
+          ["a malformed accrual", [{ id: LEDGER_RES_ID }], { accrualId: "not-hex" }],
+          ["no argument at all", [{ id: LEDGER_RES_ID }], undefined],
+        ];
+        for (const [, answer, key] of shapes) {
+          const bb = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => answer });
+          let threw = false, out = null;
+          try { out = await (key === undefined ? bb.deps.reservationDocumentIdOf() : bb.deps.reservationDocumentIdOf(key)); }
+          catch { threw = true; }
+          if (threw || !out || out.found !== false || typeof out.reason !== "string") return false;
+        }
+        return true;
+      })());
+    // ---- CASES ADDED AFTER AN INDEPENDENT REVIEW EXECUTED NINE DEFECTS THAT SURVIVED THE
+    // SUITE. Each one below binds a rule that was enforced but unobserved. They are the
+    // reviewer's counterexamples, not the author's, which is the point of them.
+    ok("the lookup addresses the CONTRACT, not merely the right type and filter",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [{ id: LEDGER_RES_ID }] });
+        await ask(bb.deps, { accrualId: row.accrualId });
+        return bb.queries[bb.queries.length - 1].contractId === V11;
+      })());
+    ok("an accrual identifier ONE CHARACTER SHORT is refused, not just an obviously wrong one",
+      await (async () => {
+        const r = await askWith([{ id: LEDGER_RES_ID }], { accrualId: "a".repeat(63) });
+        return r.found === false && !r.threw && /missing or malformed/.test(r.reason);
+      })());
+    ok("an accrual identifier one character LONG is refused too",
+      await (async () => {
+        const r = await askWith([{ id: LEDGER_RES_ID }], { accrualId: "a".repeat(65) });
+        return r.found === false && !r.threw && /missing or malformed/.test(r.reason);
+      })());
+    ok("THREE served reservations are refused, not only two, so the rule is cardinality and not a special case",
+      await (async () => {
+        const r = await askWith([{ id: "a".repeat(64) }, { id: "b".repeat(64) }, { id: "c".repeat(64) }]);
+        return r.found === false && !r.threw && /3 reservations/.test(r.reason);
+      })());
+    ok("built and served identifiers are compared IN FULL, so a shared prefix is still a disagreement",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), {
+          queryAnswer: async () => [{ id: builtId.slice(0, 60) + "ffff" }] });
+        bb.prefetched.contractNonce = 42n;
+        bb.deps.buildReservationTransition({ poolId: POOL, accrualId: row.accrualId, boundTransferHash: t.transitionHash });
+        const r = await ask(bb.deps, { accrualId: row.accrualId });
+        return r.found === false && !r.threw && /built here is/.test(r.reason);
+      })());
+    ok("the built-id map is keyed per accrual, so a build for one does not cross-check another",
+      await (async () => {
+        const other = EP0.rows[1];
+        const otherLedger = sha256hex(Buffer.from(`docid:transferReservation:${other.accrualId}`));
+        const bb = bundleOf(CLEAN, EP0, new Set(), {
+          queryAnswer: async () => [{ id: otherLedger }] });
+        bb.prefetched.contractNonce = 42n;
+        // a build for the FIRST accrual, then an answer asked about the SECOND, with no clear
+        bb.deps.buildReservationTransition({ poolId: POOL, accrualId: row.accrualId, boundTransferHash: t.transitionHash });
+        const r = await ask(bb.deps, { accrualId: other.accrualId });
+        return r.found === true && r.documentId === otherLedger;
+      })());
+    ok("a served identifier that is not 32 bytes is refused rather than journaled",
+      await (async () => {
+        const r = await askWith([{ id: "too-short" }]);
+        return r.found === false && !r.threw && /not a 32-byte value/.test(r.reason);
+      })());
+    ok("a REJECTING query is reported rather than thrown",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), {
+          queryAnswer: async () => { throw new Error("transport is down"); } });
+        const r = await ask(bb.deps, { accrualId: row.accrualId });
+        return r.found === false && !r.threw && /did not complete/.test(r.reason) && /transport is down/.test(r.reason);
+      })());
+    ok("a served identifier that cannot be decoded is reported rather than thrown",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), {
+          queryAnswer: async () => [{ get id() { throw new Error("undecodable"); } }] });
+        const r = await ask(bb.deps, { accrualId: row.accrualId });
+        return r.found === false && !r.threw && /could not be read/.test(r.reason);
+      })());
+    ok("an explicit null argument is refused rather than throwing on the destructure",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [{ id: LEDGER_RES_ID }] });
+        let threw = false, out = null;
+        try { out = await bb.deps.reservationDocumentIdOf(null); } catch { threw = true; }
+        return !threw && out && out.found === false && /missing or malformed/.test(out.reason);
+      })());
+    ok("the ledger is asked by the accrual's UNIQUE BINDING, which is what makes the answer that accrual's",
+      await (async () => {
+        const bb = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [{ id: LEDGER_RES_ID }] });
+        await ask(bb.deps, { accrualId: row.accrualId });
+        const q = bb.queries[bb.queries.length - 1];
+        return q.type === "transferReservation" && q.where.length === 1
+          && q.where[0][0] === "accrualId" && q.where[0][1] === "=="
+          && q.where[0][2].toString("hex") === row.accrualId;
+      })());
   }
 
   // ================= 10. the unique logical bindings and the fetch =================
@@ -547,7 +726,10 @@ const main = async () => {
   // `prefetched` and the reservation pointer up to factory scope and every assertion still
   // passed. One factory, two bundles, is the only arrangement in which sharing is even possible.
   {
-    const { first: zero, second: one } = twoBundlesFromOneFactory(CLEAN);
+    // the ledger answers a DIFFERENT identifier than a build here would produce, which is what
+    // makes the per-bundle cross-check observable at all
+    const { first: zero, second: one } = twoBundlesFromOneFactory(CLEAN, {
+      queryAnswer: async (type) => (type === "transferReservation" ? [{ id: LEDGER_RES_ID }] : []) });
     zero.prefetched.identityNonce = 8n;
     ok("a nonce prefetched into one epoch's bundle is not visible in another built from the SAME factory",
       one.prefetched.identityNonce === null);
@@ -555,10 +737,21 @@ const main = async () => {
     ok("the header nonce slot is per bundle as well", one.prefetched.headerContractNonce === null);
     zero.prefetched.contractNonce = 42n;
     zero.deps.buildReservationTransition({ poolId: POOL, accrualId: EP0.rows[0].accrualId, boundTransferHash: "aa".repeat(32) });
-    ok("a reservation built in one bundle leaves the pointer of another from the SAME factory unset", (() => {
-      try { one.deps.reservationDocumentIdOf(); return false; } catch (e) { return /no reservation was built/.test(e.message); }
-    })());
-    ok("and the bundle that built it still has its own id", typeof zero.deps.reservationDocumentIdOf() === "string");
+    // a soundness-review finding CHANGED WHAT ISOLATION LOOKS LIKE HERE, and the case had to change with it. The
+    // identifier now comes from the ledger, so a bundle that built nothing no longer REFUSES,
+    // it accepts what the ledger serves. What stays per bundle is the CROSS-CHECK: the bundle
+    // that built one disagrees with a ledger serving a different id, and the bundle that built
+    // nothing has nothing to disagree with. That is observable only from one factory.
+    ok("the bundle that built a reservation refuses when the ledger serves a DIFFERENT id",
+      await (async () => {
+        const r = await ask(zero.deps, { accrualId: EP0.rows[0].accrualId });
+        return r.found === false && !r.threw && /built here is/.test(r.reason);
+      })());
+    ok("a reservation built in one bundle leaves another from the SAME factory with nothing to cross-check, so it accepts the ledger",
+      await (async () => {
+        const r = await ask(one.deps, { accrualId: EP0.rows[0].accrualId });
+        return r.found === true && r.documentId === LEDGER_RES_ID;
+      })());
     // each bundle answers its own context's figures, from one factory
     ok("two bundles from one factory answer their own epochs' figures",
       zero.deps.epochNumbers().grossCredits === "10000" && one.deps.epochNumbers().grossCredits === "10001");
@@ -689,16 +882,16 @@ const main = async () => {
         try { b.deps.buildTransferTransition({ accrualId: row.accrualId, amountCredits: row.amountCredits }); return "built-twice"; }
         catch (e) { return /identity nonce was not prefetched/.test(e.message) ? "refused" : `other:${e.message}`; }
       }, expect: "refused" },
-    { id: "M13", what: "clearing the reservation pointer stops clearing it, so a later step reads the previous one's id",
-      from: "clearLastReservation: () => { lastReservationDocIdHex = null; } };",
-      to: "clearLastReservation: () => {} };",
+    { id: "M13", what: "the reservation identifier comes from the BUILT id again instead of the ledger's (the a soundness-review finding shape restored)",
+      from: "        try { ledgerId = idHex(found[0].id); }",
+      to: "        try { ledgerId = builtReservationDocIdByAccrual.get(accrualId) || idHex(found[0].id); }",
       probe: async (mod) => {
-        const b = bundleOf(mod, EP0);
+        const b = bundleOf(mod, EP0, new Set(), {
+          queryAnswer: async (type) => (type === "transferReservation" ? [{ id: LEDGER_RES_ID }] : []) });
         b.prefetched.contractNonce = 42n;
         b.deps.buildReservationTransition({ poolId: POOL, accrualId: EP0.rows[0].accrualId, boundTransferHash: "aa".repeat(32) });
-        b.clearLastReservation();
-        try { b.deps.reservationDocumentIdOf(); return "stale-id-returned"; }
-        catch (e) { return /no reservation was built/.test(e.message) ? "refused" : `other:${e.message}`; }
+        const r = await ask(b.deps, { accrualId: EP0.rows[0].accrualId });
+        return r.found === true ? `answered:${r.documentId}` : "refused";
       }, expect: "refused" },
     { id: "M14", what: "the logical binding stops refusing an ambiguous answer",
       from: "if (found.length > 1) throw new Error(`the unique logical binding for ${object} returned ${found.length} documents; refusing`);",
@@ -792,23 +985,25 @@ const main = async () => {
     { id: "M23", what: "the prefetch and the reservation pointer are both hoisted to FACTORY scope, so two bundles share them",
       edits: [
         ["  return (ctx, completedEpochs) => {",
-          "  const HOISTED_PREFETCH = { identityNonce: null, contractNonce: null, headerContractNonce: null };\n  let HOISTED_RESERVATION = null;\n  return (ctx, completedEpochs) => {"],
-        ["    const prefetched = { identityNonce: null, contractNonce: null, headerContractNonce: null };\n    let lastReservationDocIdHex = null;",
+          "  const HOISTED_PREFETCH = { identityNonce: null, contractNonce: null, headerContractNonce: null };\n  const HOISTED_RESERVATION = new Map();\n  return (ctx, completedEpochs) => {"],
+        ["    const prefetched = { identityNonce: null, contractNonce: null, headerContractNonce: null };",
           "    const prefetched = HOISTED_PREFETCH;"],
-        ["lastReservationDocIdHex = idHex(b58);", "HOISTED_RESERVATION = idHex(b58);"],
-        ["        if (!lastReservationDocIdHex) throw new Error(\"no reservation was built in this step\");\n        return lastReservationDocIdHex;",
-          "        if (!HOISTED_RESERVATION) throw new Error(\"no reservation was built in this step\");\n        return HOISTED_RESERVATION;"],
-        ["      clearLastReservation: () => { lastReservationDocIdHex = null; } };",
-          "      clearLastReservation: () => { HOISTED_RESERVATION = null; } };"],
+        ["    const builtReservationDocIdByAccrual = new Map();",
+          "    const builtReservationDocIdByAccrual = HOISTED_RESERVATION;"],
       ],
       probe: async (mod) => {
-        const { first, second } = twoBundlesFromOneFactory(mod);
+        const { first, second } = twoBundlesFromOneFactory(mod, {
+          queryAnswer: async (type) => (type === "transferReservation" ? [{ id: LEDGER_RES_ID }] : []) });
         first.prefetched.identityNonce = 8n;
         const nonceShared = second.prefetched.identityNonce !== null;
         first.prefetched.contractNonce = 42n;
         first.deps.buildReservationTransition({ poolId: POOL, accrualId: EP0.rows[0].accrualId, boundTransferHash: "aa".repeat(32) });
-        let pointerShared = false;
-        try { second.deps.reservationDocumentIdOf(); pointerShared = true; } catch { pointerShared = false; }
+        // SHARING IS NOW VISIBLE THROUGH THE CROSS-CHECK rather than through a refusal to answer:
+        // if the built-id map is shared, the SECOND bundle inherits the first's built id and
+        // therefore disagrees with a ledger serving a different one. Isolated, it has nothing to
+        // compare and accepts the ledger.
+        const r = await ask(second.deps, { accrualId: EP0.rows[0].accrualId });
+        const pointerShared = r.found === false && /built here is/.test(r.reason || "");
         return (nonceShared || pointerShared) ? "shared" : "isolated";
       }, expect: "isolated" },
     { id: "M24", what: "the contract-nonce read rewrites the served protocol version to the pinned one before checking it",

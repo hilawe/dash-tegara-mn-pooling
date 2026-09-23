@@ -1222,10 +1222,19 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
         }
         const rToken = classifyOutcome(resResult, deps._uniqueIdentityForTest);
         if (rToken === TOKENS.SUCCESS) {
+          // THE IDENTIFIER IS ASKED FOR BEFORE THE RECORD IS WRITTEN, and an answer that is not
+          // found stops this accrual with a named condition instead of ending the run (a soundness-review finding).
+          // The wait-only route above builds nothing, so the old call, which read state set at
+          // build time, threw here on every resume and the pool could never settle.
+          const resDocId = await deps.reservationDocumentIdOf({ poolId, epochIndex, accrualId });
+          if (!resDocId || resDocId.found !== true) {
+            return { status: "reservation-unresolved-pending", accrualId,
+              note: `the reservation transition succeeded and its document could not be identified (${(resDocId && resDocId.reason) || "the adapter returned no answer"}); no reservation success is recorded, and a later pass can resume IF the read becomes answerable and this accrual's transfer nonce has not since been consumed by another row` };
+          }
           appendChecked(poolId, dir, { v: 1, kind: K.RESERVATION_SUCCESS, object: "reservation",
             gen, poolId, epochIndex, accrualId, transitionHash: rW.transitionHash,
             boundTransferHash: transferHash,
-            reservationDocumentId: deps.reservationDocumentIdOf(resResult) });
+            reservationDocumentId: resDocId.documentId });
         } else if (rToken === TOKENS.UNIQUE) {
           // a claim already exists; any on-ledger reservation whose success
           // this branch's journal does not contain is NOT its authority
