@@ -47,13 +47,17 @@ const throws = (name, fn, re) => {
   catch (e) { ok(name, re.test((e && e.message) || String(e))); }
 };
 
-const POOL = "ab".repeat(32);
-const OTHER_POOL = "cd".repeat(32);
-const A_HEX = "f0".repeat(32);
-const V11 = "11".repeat(32);
+const sha256hex = (b) => crypto.createHash("sha256").update(b).digest("hex");
+// NON-UNIFORM IDENTIFIERS. These were repeated byte pairs ("ab" x 32 and so on), which read the same
+// reversed, rotated or truncated, so a review's reversal and rotation of the queried pool and
+// accrual passed every case. A value derived from a hash differs at every position.
+const hx = (label) => sha256hex(Buffer.from(`fixture:${label}`));
+const POOL = hx("pool");
+const OTHER_POOL = hx("other-pool");
+const A_HEX = hx("writer");
+const V11 = hx("contract-v11");
 const PIN = "devnet-pin";
 const PROTOCOL_PIN = 12;
-const sha256hex = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const idHex = (v) => (typeof v === "string" ? v : Buffer.from(v).toString("hex"));
 
 // ---- the contexts, carrying only what the factory reads ----
@@ -99,6 +103,7 @@ const mkEnv = (over = {}) => {
   // battery, because nothing looked at the arguments. A fake that throws away what it was asked
   // for cannot answer whether the caller asked for the right thing.
   const createdDocs = [];
+  const docTransitions = [];
   const identityTransitions = [];
   const provedCalls = [];
   const journalRecords = over.journalRecords || [];
@@ -112,7 +117,12 @@ const mkEnv = (over = {}) => {
     sdk: {
       documents: {
         query: async (contractId, type, where) => { queries.push({ contractId, type, where }); return over.queryAnswer ? over.queryAnswer(type, where) : []; },
-        createStateTransition: (doc, action, opts) => mkStt(`doc:${doc && doc.type}:${opts && opts.identityContractNonce}`),
+        // EVERY ARGUMENT IS RECORDED, the action included: a review built a reservation as a delete
+        // rather than a create and every case passed, because this stand-in ignored the action
+        createStateTransition: (doc, action, opts) => {
+          docTransitions.push({ doc, action, opts });
+          return mkStt(`doc:${doc && doc.type}:${action}:${opts && opts.identityContractNonce}`);
+        },
       },
       identities: {
         createStateTransition: (name, opts) => {
@@ -121,7 +131,7 @@ const mkEnv = (over = {}) => {
         },
       },
     },
-    dpp: { IdentifierWASM: class { constructor(v) { this.v = v; } } },
+    dpp: { IdentifierWASM: class { constructor(v) { this.v = v; } }, DocumentWASM: { generateId: genIdStub } },
     createDocument: (contractId, type, fields, owner, _u, id58) => {
       const d = { contractId, type, fields, owner, id58 };
       createdDocs.push(d);
@@ -148,7 +158,7 @@ const mkEnv = (over = {}) => {
     readBalance: async () => ({ balance: 999n, metadata: { chainId: PIN, protocolVersion: PROTOCOL_PIN, height: 555n } }),
     idHex, sha256hex,
   };
-  return { env: { ...base, ...over.env }, queries, createdDocs, identityTransitions, provedCalls,
+  return { env: { ...base, ...over.env }, queries, createdDocs, identityTransitions, provedCalls, docTransitions,
     keyA, transferKey };
 };
 
@@ -167,6 +177,46 @@ const ask = async (deps, key) => {
   try { return key === undefined ? await deps.reservationDocumentIdOf() : await deps.reservationDocumentIdOf(key); }
   catch (e) { return { found: false, threw: true, reason: `THREW: ${(e && e.message) || e}` }; }
 };
+
+// THE WHOLE QUERY, NOT A PART OF IT: exactly these clauses, in order, each on its field, by equality,
+// for its value. Cases that read only the value let a wrong field or a wrong operator through (a
+// review did both). A clause is [field, value, form]: "hex" compares bytes, any other form compares
+// the value itself (a base58 string, a number).
+const clauseIs = (c, [field, value, form = "hex"]) => Array.isArray(c) && c.length === 3 && c[0] === field && c[1] === "=="
+  && (form === "hex" ? (c[2] instanceof Uint8Array && Buffer.from(c[2]).toString("hex") === value) : c[2] === value);
+const whereAre = (where, ...clauses) => Array.isArray(where) && where.length === clauses.length
+  && clauses.every((cl, i) => clauseIs(where[i], cl));
+const whereIs = (where, field, value, form) => whereAre(where, [field, value, form]);
+
+// EVERY WAY A PROVED READ CAN FAIL, one at a time. With one shape per case a review special-cased
+// the shape: a catch that swallowed only a TypeError passed, and so did a guard that accepted every
+// non-list except `{ length: 0 }`. Each entry is what the named read answers, and a read answering
+// any of them must be refused, never taken as an empty answer.
+const READ_FAILURES = [
+  ["throws an Error", () => { throw new Error("read failed"); }],
+  ["throws a TypeError", () => { throw new TypeError("read failed"); }],
+  ["throws a value that is not an Error", () => { throw "read failed"; }], // eslint-disable-line no-throw-literal
+  ["answers an object with a zero length", () => ({ length: 0 })],
+  ["answers an object with a nonzero length", () => ({ length: 1 })],
+  ["answers null", () => null],
+  ["answers nothing", () => undefined],
+  ["answers a string", () => "x"],
+  // a non-list that HOLDS a well-formed document: converting array-likes into lists would read it
+  ["answers an array-like object holding a well-formed document", (doc) => ({ length: 1, 0: doc })],
+];
+const refusedP = async (p) => { try { await p; return false; } catch (_e) { return true; } };
+
+// A BASE58 ENCODER, so the identifier generator's stand-in returns a real, decodable 32-byte id
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const b58enc = (buf) => {
+  let n = BigInt("0x" + Buffer.from(buf).toString("hex")), out = "";
+  while (n > 0n) { out = B58[Number(n % 58n)] + out; n /= 58n; }
+  for (const byte of buf) { if (byte === 0) out = "1" + out; else break; }
+  return out;
+};
+// the generator's stand-in: an identifier that varies with every input, as Platform's does
+const genIdStub = (type, owner, contract, entropy) =>
+  b58enc(crypto.createHash("sha256").update(`${type}|${owner}|${contract}|${Buffer.from(entropy).toString("hex")}`).digest());
 
 const bundleOf = (mod, ctx, completed = new Set(), over = {}) => {
   const e = mkEnv(over);
@@ -323,23 +373,23 @@ const main = async () => {
     // (e) the answer that does match
     {
       const b = bundleOf(CLEAN, EP0, new Set(), { provedAnswer: async () => [hdrDoc(POOL, 0)] });
-      const r = await b.deps.provedHeaderQuery(POOL, 0);
+      // A THROW HERE IS A NAMED FAILURE, not the end of the battery: a variant querying the wrong
+      // pool is refused by the module's own served-key check, and a crash would report nothing
+      const r = await b.deps.provedHeaderQuery(POOL, 0).catch((e) => ({ threw: String((e && e.message) || e) }));
       ok("a proved answer for the key asked for is returned, attesting",
-        r.found === true && r.proved === true && r.fields.epochIndex === 0 && r.fields.poolId === POOL);
+        !r.threw && r.found === true && r.proved === true && r.fields.epochIndex === 0 && r.fields.poolId === POOL);
       // WHAT IT ASKED FOR, not only what it did with the answer. The review made this hook
       // request `epochIndex + 1` and watched the battery pass: with a header present only at
       // epoch 0, asking for epoch 0 returned a clean verified ABSENCE, because the fixture
       // ignored its arguments and the key check then compared the answer to itself.
       const asked = b.provedCalls[b.provedCalls.length - 1];
       ok("the proved read asks the ledger for the pool and epoch it was given",
-        asked.type === "epochHeader"
-          && asked.where[0][0] === "poolId" && asked.where[0][2].toString("hex") === POOL
-          && asked.where[1][0] === "epochIndex" && asked.where[1][2] === 0);
+        asked.type === "epochHeader" && whereAre(asked.where, ["poolId", POOL], ["epochIndex", 0, "num"]));
       const b1 = bundleOf(CLEAN, EP0, new Set(), { provedAnswer: async () => [] });
-      await b1.deps.provedHeaderQuery(OTHER_POOL, 3);
+      await b1.deps.provedHeaderQuery(OTHER_POOL, 3).catch(() => null);
       const asked1 = b1.provedCalls[b1.provedCalls.length - 1];
       ok("a different key is asked for differently, so the request tracks its arguments",
-        asked1.where[0][2].toString("hex") === OTHER_POOL && asked1.where[1][2] === 3);
+        whereAre(asked1.where, ["poolId", OTHER_POOL], ["epochIndex", 3, "num"]));
     }
   }
 
@@ -372,6 +422,97 @@ const main = async () => {
       aboveProto.contractNonce(), /contract-nonce read fails the pins/);
     await rejects("an identity-nonce read ABOVE the pinned protocol version refuses too",
       aboveProto.identityNonce(), /identity-nonce read fails the pins/);
+  }
+
+  // ================= 7b. a soundness-review finding: whether persisted bytes can still execute =================
+  {
+    // the decoder stands in for pshenmic-dpp: batch bytes carry a contract nonce, transfer bytes an
+    // identity nonce, each read back from the hex so a case chooses the nonce by the bytes it passes
+    const dppNonces = { IdentifierWASM: class { constructor(v) { this.v = v; } }, DocumentWASM: { generateId: genIdStub },
+      StateTransitionWASM: { fromBytes: (buf) => ({ hex: Buffer.from(buf).toString("hex"),
+        getIdentityContractNonce: () => BigInt(parseInt(Buffer.from(buf).toString("hex").slice(2), 16)) }) },
+      IdentityCreditTransferWASM: { fromStateTransition: (st) => ({ nonce: BigInt(parseInt(st.hex.slice(2), 16)) }) } };
+    const withReads = (contractRaw, identityRaw, meta = { chainId: PIN, protocolVersion: PROTOCOL_PIN, height: 900 }) =>
+      bundleOf(CLEAN, EP0, new Set(), { env: { dpp: dppNonces,
+        readContractNonce: async () => ({ nonce: contractRaw & 0xFFFFFFFFFFn, raw: contractRaw, metadata: meta }),
+        readIdentityNonce: async () => ({ nonce: identityRaw & 0xFFFFFFFFFFn, raw: identityRaw, metadata: meta }) } });
+    const bytesWith = (nonce) => "0b" + nonce.toString(16).padStart(8, "0");
+    const b = withReads(623n, 134n);
+    const res = await b.deps.transitionNonceState("reservation", bytesWith(480));
+    ok("nonce state: a reservation at contract nonce 480 against a stored 623 can never execute",
+      res.verdict === "never" && res.reason === "too-far-in-past" && res.transitionNonce === 480n && res.observedHeight === "900");
+    const hdr = await b.deps.transitionNonceState("header", bytesWith(624));
+    ok("nonce state: a header one above the stored contract nonce can still execute", hdr.verdict === "executable");
+    const tr = await b.deps.transitionNonceState("transfer", bytesWith(113));
+    ok("nonce state: a transfer is read against the IDENTITY nonce, and 21 below a mask-free tip is used",
+      tr.verdict === "never" && tr.reason === "used" && tr.transitionNonce === 113n);
+    const skippedTr = await withReads(623n, 134n | (1n << (21n - 1n + 40n))).deps.transitionNonceState("transfer", bytesWith(113));
+    ok("nonce state: the same transfer whose nonce the stored mask marks as skipped can still execute",
+      skippedTr.verdict === "executable" && skippedTr.reason === "skipped");
+    const noRaw = bundleOf(CLEAN, EP0, new Set(), { env: { dpp: dppNonces,
+      readContractNonce: async () => ({ nonce: 623n, metadata: { chainId: PIN, protocolVersion: PROTOCOL_PIN, height: 900 } }) } });
+    await rejects("nonce state: a read with no raw stored value refuses rather than classify from the tip alone",
+      noRaw.deps.transitionNonceState("reservation", bytesWith(480)), /no raw stored value/);
+    await rejects("nonce state: a read from an unpinned chain refuses",
+      withReads(623n, 134n, { chainId: "other", protocolVersion: PROTOCOL_PIN, height: 900 }).deps.transitionNonceState("reservation", bytesWith(480)),
+      /fails the pins/);
+    await rejects("nonce state: an object with no nonce rule refuses", b.deps.transitionNonceState("accrual", bytesWith(1)), /no nonce rule/);
+
+    const acc = hx("accrual-absence");
+    const empty = bundleOf(CLEAN, EP0, new Set(), { provedAnswer: () => [] });
+    const none = await empty.deps.provedReservationAbsent(acc);
+    const asked = empty.provedCalls[empty.provedCalls.length - 1];
+    ok("proved absence: an empty proved answer is absent, and the query is EXACTLY one equality on THIS accrual",
+      none.absent === true && asked.type === "transferReservation" && whereIs(asked.where, "accrualId", acc));
+    const one = await bundleOf(CLEAN, EP0, new Set(), { provedAnswer: () => [{ id: "x" }] }).deps.provedReservationAbsent(acc);
+    ok("proved absence: a served reservation is not absent", one.absent === false && one.count === 1);
+    for (const [how, answer] of READ_FAILURES) {
+      ok(`proved absence: a read that ${how} is refused rather than answered absent`,
+        await refusedP(bundleOf(CLEAN, EP0, new Set(), { provedAnswer: () => answer({ id: hx("absence-doc") }) }).deps.provedReservationAbsent(acc)));
+    }
+    await rejects("proved absence: a malformed accrual refuses", empty.deps.provedReservationAbsent("nope"), /malformed/);
+  }
+
+  // ================= 7c. who else claims a transfer's bytes (NONCE_OWNERSHIP.md) =================
+  {
+    const T = hx("transfer-claimed"), OTHER_ACC = hx("other-accrual"), OTHER_POOL = hx("claims-other-pool");
+    // bytes that differ from T only in the LAST character, and only in the FIRST: a comparison of a
+    // prefix, or of one byte, cannot tell either apart from T (a review compared one byte and passed)
+    const T_LAST = T.slice(0, 63) + (T[63] === "0" ? "1" : "0"), T_FIRST = (T[0] === "0" ? "1" : "0") + T.slice(1);
+    const DOC_ID = hx("served-document");
+    const expectId = require("./e2DocId.cjs").reservationIdForTransfer({ generateId: genIdStub, ownerId: "b58-ID-A", contractId: V11, transferHash: T });
+    const docOf = (acc, pool, hash) => ({ id: DOC_ID, getProperties: () => ({ accrualId: Buffer.from(acc, "hex"), poolId: Buffer.from(pool, "hex"), transitionHash: Buffer.from(hash, "hex") }) });
+    const withLedger = (reservations, receipts) => bundleOf(CLEAN, EP0, new Set(), {
+      provedAnswer: (type) => (type === "transferReservation" ? reservations : receipts) });
+    const none = withLedger([], []);
+    const c0 = await none.deps.transferClaims(T);
+    const asked = none.provedCalls.slice(-2);
+    ok("claims: an unclaimed transfer has no claims, and each query is EXACTLY one equality: the reservation at the id DERIVED from the bytes, the receipt on the transition hash",
+      c0.claims.length === 0 && c0.reservationId === expectId.hex && asked.length === 2
+        && asked[0].type === "transferReservation" && whereIs(asked[0].where, "$id", expectId.b58, "b58")
+        && asked[1].type === "transferReceipt" && whereIs(asked[1].where, "transitionHash", T));
+    const byRes = await withLedger([docOf(OTHER_ACC, OTHER_POOL, T)], []).deps.transferClaims(T);
+    const claimIs = (c, kind) => !!c && c.kind === kind && c.accrualId === OTHER_ACC && c.poolId === OTHER_POOL && c.documentId === DOC_ID;
+    ok("claims: another accrual's reservation at the derived id is reported with its kind, accrual, pool and document",
+      byRes.claims.length === 1 && claimIs(byRes.claims[0], "reservation-by-transfer"));
+    const byRec = await withLedger([], [docOf(OTHER_ACC, OTHER_POOL, T)]).deps.transferClaims(T);
+    ok("claims: another accrual's receipt for the hash is reported with its kind, accrual, pool and document, which is how a LEGACY reservation's owner shows",
+      byRec.claims.length === 1 && claimIs(byRec.claims[0], "receipt-by-transition"));
+    // EVERY READ AND EVERY SERVED KIND, one at a time. A case that fails all reads at once, or serves
+    // a mismatch of one kind only, cannot see a path that tolerates the other.
+    for (const type of ["transferReservation", "transferReceipt"]) {
+      for (const [where, other] of [["last", T_LAST], ["first", T_FIRST]]) {
+        const bad = [docOf(OTHER_ACC, OTHER_POOL, other)];
+        await rejects(`claims: a served ${type} binding bytes that differ only in the ${where} character is refused as inconsistent`,
+          withLedger(type === "transferReservation" ? bad : [], type === "transferReceipt" ? bad : []).deps.transferClaims(T),
+          /does not bind these bytes/);
+      }
+      for (const [how, answer] of READ_FAILURES) {
+        ok(`claims: the ${type} read, ALONE, that ${how} is refused rather than answered unclaimed`,
+          await refusedP(bundleOf(CLEAN, EP0, new Set(), { provedAnswer: (t) => (t === type ? answer(docOf(OTHER_ACC, OTHER_POOL, T)) : []) }).deps.transferClaims(T)));
+      }
+    }
+    await rejects("claims: a malformed hash refuses", none.deps.transferClaims("EA".repeat(32)), /missing or malformed/);
   }
 
   // ================= 8. the header build's refusals, and once-only consumption =================
@@ -477,7 +618,9 @@ const main = async () => {
     b.deps.buildReservationTransition({ poolId: POOL, accrualId: row.accrualId, boundTransferHash: t.transitionHash });
     // a build AGREEING with the ledger: the stub now serves exactly what the builder derived,
     // which is the ordinary fresh-payment case. The DISAGREEING case is in section 12.
-    const builtId = sha256hex(Buffer.from(`docid:transferReservation:${row.accrualId}`)); // what docIdFor yields
+    // what the builder derives: the TRANSFER-DERIVED reservation identifier (NONCE_OWNERSHIP.md)
+    const builtId = require("./e2DocId.cjs").reservationIdForTransfer({ generateId: genIdStub, ownerId: "b58-ID-A",
+      contractId: V11, transferHash: t.transitionHash }).hex;
     const bAgree = bundleOf(CLEAN, EP0, new Set(), {
       queryAnswer: async (type) => (type === "transferReservation" ? [{ id: builtId }] : []) });
     bAgree.prefetched.contractNonce = 42n;
@@ -487,6 +630,20 @@ const main = async () => {
         const r = await ask(bAgree.deps, { accrualId: row.accrualId });
         return r.found === true && r.documentId === builtId;
       })());
+    // THE DOCUMENT ITSELF, not only the bookkeeping identifier: the created document carries the
+    // identifier and the entropy the specification derives from the bound transfer, owned by the
+    // writer in v11. Both are recomputed here from the specification, not taken from e2DocId.
+    {
+      const specEntropy = crypto.createHash("sha256").update(`tegara.e2.reservation-by-transfer.v1|${t.transitionHash}`).digest();
+      const specB58 = genIdStub("transferReservation", "b58-ID-A", V11, specEntropy);
+      const doc = bAgree.createdDocs.filter((d) => d.type === "transferReservation").pop();
+      ok("the reservation document is created at the transfer-derived identifier, with that entropy, by the writer, in v11",
+        !!doc && doc.id58 === specB58 && Buffer.from(doc.entropy || []).equals(specEntropy)
+          && doc.owner && doc.owner.v === "b58-ID-A" && doc.contractId && doc.contractId.v === V11);
+      const st = bAgree.docTransitions.filter((x) => x.doc === doc);
+      ok("that document is submitted once, as a CREATE, under the prefetched contract nonce",
+        st.length === 1 && st[0].action === "create" && st[0].opts && st[0].opts.identityContractNonce === 42n);
+    }
     // THE RESERVATION'S NONCE IS CONSUMED ONCE TOO. The transfer builder had this pair and the
     // reservation builder did not, so removing its clear was invisible. Two reservations over
     // one prefetched contract nonce would submit two documents under the same nonce.

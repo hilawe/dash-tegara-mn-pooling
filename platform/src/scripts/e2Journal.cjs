@@ -103,8 +103,15 @@ const ACTIONS = {
   "reservation-refused": ["stop", "rebuild-reservation"],
   "reservation-foreign": ["stop", "observe-foreign"],
   "reservation-unresolved": ["keep-waiting", "stop", "rebroadcast-identical"],
+  // a soundness-review finding: a reservation marked sent whose bytes can NEVER execute, observed on a proved nonce read
+  // (the nonce-unusable observation below). A rebuild is the only way its accrual can be paid, and
+  // the writer performs it only after the ledger proves no reservation exists for the accrual.
+  "reservation-bytes-unusable": ["stop", "rebuild-reservation"],
   "transfer-refused": ["stop"],
   "transfer-unresolved": ["keep-waiting", "rebroadcast-identical"],
+  // NONCE_OWNERSHIP.md: another accrual holds a ledger claim on this transfer's bytes. The writer
+  // performs a replacement only after the ledger proves this accrual holds no reservation.
+  "transfer-owned-elsewhere": ["stop", "rebuild-transfer"],
   "observation-unresolved": ["keep-waiting", "stop"],
   "record-write-refused": ["stop"],
   "record-write-unresolved": ["keep-waiting", "stop"],
@@ -117,8 +124,8 @@ const CONDITION_OBJECT = {
   "header-refused": "header", "header-unresolved": "header", "header-foreign": "header",
   "header-capture-incomplete": "header",
   "reservation-refused": "reservation", "reservation-foreign": "reservation",
-  "reservation-unresolved": "reservation",
-  "transfer-refused": "transfer", "transfer-unresolved": "transfer",
+  "reservation-unresolved": "reservation", "reservation-bytes-unusable": "reservation",
+  "transfer-refused": "transfer", "transfer-unresolved": "transfer", "transfer-owned-elsewhere": "transfer",
   "observation-unresolved": "transfer",
   "record-write-refused": null, "record-write-unresolved": null,
   "receipt-unencodable": "accrual", "transfer-unencodable": "accrual",
@@ -132,7 +139,14 @@ const OBSERVATION_OBJECT = {
   "foreign-claim": "reservation",
   "watch-open": "transfer",
   "receipt-observed": "transfer",
+  // any broadcast object: whether the persisted bytes can still execute (a soundness-review finding)
+  "nonce-unusable": "broadcast",
+  // NONCE_OWNERSHIP.md: another accrual's ledger claim on this transfer's bytes
+  "transfer-owned-elsewhere": "transfer",
 };
+const CLAIM_KINDS = ["reservation-by-transfer", "receipt-by-transition"];
+const NONCE_UNUSABLE_REASONS = ["at-tip", "used", "too-far-in-past"];
+const DEC_STR = /^(0|[1-9][0-9]*)$/;
 
 const requireMembers = (r, members, i) => {
   for (const m of members) if (!(m in r)) refuse(`missing member ${m} for ${r.kind}`, i);
@@ -249,11 +263,14 @@ const validateJournalRecord = (r, i, poolId, isFirstRecord, seenFirstHeaderWA) =
         "foreign-claim": ["targetTransitionHash", "observedBoundTransferHash"],
         "watch-open": ["targetTransitionHash"],
         "receipt-observed": ["observedDocumentId"],
+        "nonce-unusable": ["targetTransitionHash", "transitionNonce", "observedTip", "reason", "observedHeight"],
+        "transfer-owned-elsewhere": ["targetTransitionHash", "claimKind", "claimantAccrualId", "claimantPoolId"],
       };
       const extra = byType[r.observationType];
       if (!extra) refuse(`observationType ${r.observationType} outside the closed set`, i);
-      if (r.object !== OBSERVATION_OBJECT[r.observationType]) {
-        refuse(`observation type ${r.observationType} binds object ${OBSERVATION_OBJECT[r.observationType]}`, i);
+      const wantObservation = OBSERVATION_OBJECT[r.observationType];
+      if (wantObservation === "broadcast" ? !BROADCAST_OBJECTS.includes(r.object) : r.object !== wantObservation) {
+        refuse(`observation type ${r.observationType} binds object ${wantObservation}`, i);
       }
       requireMembers(r, [...base, "observationType", "route", ...extra], i);
       if (typeof r.route !== "string" || r.route.length === 0) refuse("route must be nonempty", i);
@@ -269,6 +286,25 @@ const validateJournalRecord = (r, i, poolId, isFirstRecord, seenFirstHeaderWA) =
       // generation's write-ahead is at hand.
       if ("observedFields" in r && (!r.observedFields || typeof r.observedFields !== "object" || Array.isArray(r.observedFields))) {
         refuse("observedFields must be a non-array object", i);
+      }
+      if (r.observationType === "transfer-owned-elsewhere") {
+        if (!CLAIM_KINDS.includes(r.claimKind)) refuse(`claimKind ${r.claimKind} outside the closed set`, i);
+        if (!hexLen(r.claimantAccrualId, 32) || !hexLen(r.claimantPoolId, 32)) refuse("the claimant's accrual and pool must be 32 bytes hex", i);
+        // a claim by THIS accrual is its own, never a collision
+        if (r.claimantAccrualId === r.accrualId && r.claimantPoolId === r.poolId) {
+          refuse("a transfer-owned-elsewhere observation names this accrual as the claimant", i);
+        }
+      }
+      if (r.observationType === "nonce-unusable") {
+        // the numbers must say what the reason says, under Platform's rule (e2NonceWindow.cjs); the
+        // mask a "used" reason also rests on is not recorded, so that reason is checked for range only
+        for (const m of ["transitionNonce", "observedTip", "observedHeight"]) {
+          if (typeof r[m] !== "string" || !DEC_STR.test(r[m])) refuse(`${m} must be a canonical decimal string`, i);
+        }
+        if (!NONCE_UNUSABLE_REASONS.includes(r.reason)) refuse(`nonce-unusable reason ${r.reason} outside the closed set`, i);
+        const n = BigInt(r.transitionNonce), t = BigInt(r.observedTip);
+        const fits = { "at-tip": n === t, "too-far-in-past": t > n && t - n > 24n, "used": t > n && t - n <= 24n }[r.reason];
+        if (!fits) refuse(`a nonce-unusable observation whose numbers (nonce ${r.transitionNonce}, tip ${r.observedTip}) contradict its reason ${r.reason}`, i);
       }
       break;
     }
@@ -411,6 +447,12 @@ const validateJournal = (poolId, records) => {
   };
   const currentGen = (s) => (s.gens.size === 0 ? 0 : Math.max(...s.gens.keys()));
 
+  // the transfer write-ahead a reservation binds is the transfer's CURRENT generation's, since a
+  // replacement (NONCE_OWNERSHIP.md) opens a new transfer generation and a new reservation binds it
+  const currentTransferW = (tKey) => {
+    const ts = subjects.get(tKey);
+    return ts ? ts.gens.get(currentGen(ts))?.W : undefined;
+  };
   records.forEach((r, i) => {
     validateJournalRecord(r, i, poolId, i === 0, seenFirstHeaderWA);
     const isCapture = r.kind === CAP_HEADER || r.kind === CAP_RECEIPT;
@@ -539,6 +581,9 @@ const validateJournal = (poolId, records) => {
             && ["poolId", "epochIndex", "grossCredits", "feeCredits", "allocationHash",
               "memberCount", "calcVersion"].every((k) => n.observedFields[k] === gg.W.expectedContents[k])),
           "reservation-foreign": gg.nonterminal.some((n) => n.kind === K.OBSERVATION && n.observationType === "foreign-claim"),
+          "transfer-owned-elsewhere": gg.nonterminal.some((n) => n.kind === K.OBSERVATION && n.observationType === "transfer-owned-elsewhere"),
+          "reservation-bytes-unusable": gg.S.length > 0 && !gg.terminal
+            && gg.nonterminal.some((n) => n.kind === K.OBSERVATION && n.observationType === "nonce-unusable"),
         }[r.condition];
         if (!evid) refuse(`surfacing declaration for ${r.condition} without its exact establishing evidence`, i);
         gg.established.add(r.condition);
@@ -566,10 +611,10 @@ const validateJournal = (poolId, records) => {
 
     const gen = r.gen;
     if (r.kind === K.WRITE_AHEAD) {
-      if (["header", "reservation"].includes(r.object)) {
+      if (["header", "reservation", "transfer"].includes(r.object)) {
         if (gen > 1) {
           if (!s.gens.has(gen - 1)) refuse(`generation jump on ${key}`, i);
-          const wanted = r.object === "header" ? "rebuild-corrected" : "rebuild-reservation";
+          const wanted = { header: "rebuild-corrected", reservation: "rebuild-reservation", transfer: "rebuild-transfer" }[r.object];
           const cg = currentGen(s);
           if (gen !== cg + 1) refuse(`a new generation must follow the current one (${cg})`, i);
           const d = s.decisions.find((x) => !x.consumed && !x.superseded
@@ -577,13 +622,13 @@ const validateJournal = (poolId, records) => {
           if (!d) refuse(`a gen-${gen} writeAhead on ${key} has no unconsumed ${wanted} decision at gen ${gen - 1}`, i);
           d.consumed = true;
         }
-      } else if (gen !== 1) refuse("a transfer has exactly one generation in conformance", i);
+      }
       const g = genState(s, gen);
       if (g.W) refuse(`a second writeAhead in one generation on ${key}`, i);
       if (g.terminal) refuse("a writeAhead after the generation's terminal outcome", i);
       if (r.object === "reservation") {
         const tKey = subjectKey({ object: "transfer", poolId: r.poolId, epochIndex: r.epochIndex, accrualId: r.accrualId });
-        const tW = subjects.get(tKey)?.gens.get(1)?.W;
+        const tW = currentTransferW(tKey);
         if (!tW) refuse("a reservation writeAhead precedes its transfer writeAhead", i);
         if (r.boundTransferHash !== tW.transitionHash) refuse("the reservation's boundTransferHash disagrees with the transfer writeAhead", i);
       }
@@ -598,11 +643,14 @@ const validateJournal = (poolId, records) => {
     if (r.kind === K.SENT_MARKER) {
       const g = s.gens.get(gen);
       if (!g || !g.W) refuse(`a sentMarker without its writeAhead on ${key}`, i);
+      // an older generation's bytes are never sent once a newer one exists: after a replacement they
+      // belong to the accrual that claims them (NONCE_OWNERSHIP.md)
+      if (gen !== currentGen(s)) refuse(`a sentMarker on generation ${gen} of ${key}, which is not the current one`, i);
       if (g.terminal) refuse("a sentMarker after the terminal outcome", i);
       if (r.transitionHash !== g.W.transitionHash) refuse("sentMarker hash disagrees with the writeAhead", i);
       if (r.object === "reservation") {
         const tKey = subjectKey({ object: "transfer", poolId: r.poolId, epochIndex: r.epochIndex, accrualId: r.accrualId });
-        const tW = subjects.get(tKey)?.gens.get(1)?.W;
+        const tW = currentTransferW(tKey);
         if (!tW || g.W.boundTransferHash !== tW.transitionHash) {
           refuse("the reservation sentMarker's bound-transfer equality re-check failed", i);
         }
@@ -642,7 +690,7 @@ const validateJournal = (poolId, records) => {
       if (r.transitionHash !== g.W.transitionHash) refuse("J attempt hash disagrees with the writeAhead", i);
       if (r.boundTransferHash !== g.W.boundTransferHash) refuse("J boundTransferHash disagrees with the writeAhead", i);
       const tKey = subjectKey({ object: "transfer", poolId: r.poolId, epochIndex: r.epochIndex, accrualId: r.accrualId });
-      const tW = subjects.get(tKey)?.gens.get(1)?.W;
+      const tW = currentTransferW(tKey);
       if (!tW || r.boundTransferHash !== tW.transitionHash) refuse("J boundTransferHash disagrees with the transfer writeAhead", i);
       g.terminal = r; g.J = r;
       noteRecord();
@@ -681,6 +729,9 @@ const validateJournal = (poolId, records) => {
       if ("targetTransitionHash" in r && r.targetTransitionHash !== g.W.transitionHash) {
         refuse("the observation's targetTransitionHash disagrees with the generation's writeAhead", i);
       }
+      if (r.observationType === "nonce-unusable" && (g.S.length === 0 || g.terminal)) {
+        refuse("a nonce-unusable observation belongs to an attempt marked sent with no outcome", i);
+      }
       if (r.observationType === "foreign-claim"
         && r.observedBoundTransferHash === g.W.boundTransferHash) {
         refuse("a foreign-claim's observed binding must differ from this branch's own boundTransferHash (an equal claim is the wait-only path, never foreign)", i);
@@ -697,7 +748,9 @@ const validateJournal = (poolId, records) => {
         if (s.loopClosed) refuse("a second receipt-observed (the loop is closed)", i);
         if (g.terminal) refuse("receipt-observed after a terminal outcome", i);
         s.loopClosed = true;
-      } else if (g.terminal) {
+      } else if (g.terminal && !(r.observationType === "transfer-owned-elsewhere" && g.terminal.kind === CAP_RECEIPT)) {
+        // the one exception: a capture that the ledger shows belongs to another accrual is NAMED
+        // after the fact (NONCE_OWNERSHIP.md, check 3), without undoing the append-only record
         refuse("an observation after the terminal outcome", i);
       }
       g.nonterminal.push(r);

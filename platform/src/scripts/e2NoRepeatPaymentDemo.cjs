@@ -309,6 +309,10 @@ const mkDeps = (poolId, interruptAt, resolution) => {
     },
     // a soundness-review finding shape: answers { found, documentId } and is keyed by the accrual it is asked
     // about, so a resume that built nothing still gets an answer.
+    // THE CLAIM READ (NONCE_OWNERSHIP.md) answers "no other accrual claims these bytes", which is
+    // TRUE in this harness: one pool, and transfer bytes that differ per accrual. The collision and
+    // failure cases live in e2DistributeTest's two-pool cases over a shared ledger.
+    transferClaims: async () => ({ claims: [] }),
     reservationDocumentIdOf: ({ accrualId }) => ({ found: true, documentId: sha(accrualId) }),
     buildReceiptCapture: ({ epochIndex, accrualId, writeAhead }) => ({ v: 1,
       kind: "tegara.e2.receiptCapture.v1", object: "transfer", gen: 1, poolId, epochIndex,

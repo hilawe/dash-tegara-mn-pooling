@@ -161,4 +161,35 @@ const docIdForIn = (input) => {
   return { b58, hex: d.toString("hex"), entropy };
 };
 
-module.exports = { ENTROPY_DOMAIN, DOCUMENT_TYPES, entropyForIn, docIdForIn };
+/**
+ * reservationIdForTransfer({ generateId, ownerId, contractId, transferHash }) -> { b58, hex, entropy }
+ *
+ * A reservation identifier DERIVED FROM THE TRANSFER IT BINDS (tegara/docs/NONCE_OWNERSHIP.md, the
+ * 2026-09-24 proof of concept). The entropy is sha256 over `tegara.e2.reservation-by-transfer.v1|`
+ * and the transfer hash in lowercase hex, and the identifier comes from the injected Platform
+ * generator exactly as `docIdForIn`'s does. Two reservations binding byte-identical transfers, built
+ * by the same owner in the same contract, therefore get the SAME identifier, and the ledger refuses
+ * the second. Nothing in the contract enforces this derivation, so a writer deriving its entropy any
+ * other way is outside that uniqueness.
+ */
+const RESERVATION_BY_TRANSFER_DOMAIN = "tegara.e2.reservation-by-transfer.v1";
+const reservationEntropyForTransfer = (transferHash) => {
+  if (!isPrimitiveString(transferHash) || !HEX64.test(transferHash)) refuse("the transfer hash must be 64 lowercase hex");
+  return crypto.createHash("sha256").update(`${RESERVATION_BY_TRANSFER_DOMAIN}|${transferHash}`).digest();
+};
+const reservationIdForTransfer = ({ generateId, ownerId, contractId, transferHash } = {}) => {
+  if (typeof generateId !== "function") refuse("generateId must be the injected identifier generator function");
+  if (!isPrimitiveString(ownerId) || ownerId.length === 0) refuse("ownerId must be a non-empty primitive string (the writer identity as the generator takes it)");
+  if (!isPrimitiveString(contractId) || contractId.length === 0) refuse("contractId must be a non-empty primitive string (the contract identifier as the generator takes it)");
+  const entropy = reservationEntropyForTransfer(transferHash);
+  const id = generateId("transferReservation", ownerId, contractId, new Uint8Array(entropy));
+  const b58 = isPrimitiveString(id) ? id
+    : (id !== null && typeof id === "object" && typeof id.base58 === "function" ? id.base58() : null);
+  if (!isPrimitiveString(b58) || b58.length === 0) refuse("the generator returned no base58 identifier (a primitive string or an object with a callable base58 method)");
+  const d = formationCore.toId32(b58);
+  if (!d) refuse("the generator's identifier does not decode to 32 bytes");
+  return { b58, hex: d.toString("hex"), entropy };
+};
+
+module.exports = { ENTROPY_DOMAIN, DOCUMENT_TYPES, entropyForIn, docIdForIn,
+  RESERVATION_BY_TRANSFER_DOMAIN, reservationEntropyForTransfer, reservationIdForTransfer };

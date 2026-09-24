@@ -590,6 +590,40 @@ const resendAndAwait = async (deps, hash, bytes) => {
   return classifyOutcome(sent, deps._uniqueIdentityForTest) === TOKENS.SUCCESS ? sent : deps.awaitResult(hash);
 };
 
+/**
+ * a soundness-review finding: AN UNRESOLVED ATTEMPT WHOSE BYTES CAN NEVER EXECUTE is named as such, so an operator stops
+ * waiting on it. It is asked of the proved nonce read (`transitionNonceState`) and decided by
+ * e2NonceWindow.cjs. Only a "never" verdict from a COMPLETED check is reported. A check that could not
+ * be made names nothing, because an unperformed check never names a condition. The observation is
+ * journaled once per generation as the evidence an operator's rebuild decision rests on. "Never" says
+ * the bytes cannot execute from now on, not that they never did: a transition's own execution uses
+ * its nonce too, which is why a rebuild also needs the ledger's proved absence.
+ */
+const unusableCheck = async ({ poolId, dir, deps, object, epochIndex, accrualId, gen, W }) => {
+  if (typeof deps.transitionNonceState !== "function") return { checked: false, why: "no nonce check is wired" };
+  let st;
+  try { st = await deps.transitionNonceState(object, W.transitionBytes); }
+  catch (e) { return { checked: false, why: String((e && e.message) || e) }; }
+  if (!st || st.verdict !== "never") return { checked: true, unusable: false };
+  const subject = { poolId, epochIndex, ...(object === "header" ? {} : { accrualId }) };
+  const { records } = openValidatedJournal(poolId, dir);
+  const already = records.some((r) => r.kind === K.OBSERVATION && r.observationType === "nonce-unusable"
+    && r.object === object && r.gen === gen && r.epochIndex === epochIndex && (r.accrualId ?? null) === (accrualId ?? null));
+  if (!already) {
+    appendChecked(poolId, dir, { v: 1, kind: K.OBSERVATION, object, gen, ...subject,
+      observationType: "nonce-unusable", route: "proved-nonce", targetTransitionHash: W.transitionHash,
+      transitionNonce: String(st.transitionNonce), observedTip: String(st.tip), reason: st.reason,
+      observedHeight: String(st.observedHeight) });
+  }
+  return { checked: true, unusable: true, st };
+};
+const unusableNote = (object, st) => `the persisted ${object} can never execute: its nonce ${st.transitionNonce} against the signer's ${st.tip} is ${st.reason}` +
+  " (whether it executed earlier is not established by this)" + ({
+    header: "",
+    reservation: "; the operator may authorize a rebuild bound to the same transfer (e2OperatorDecision.cjs rebuild-reservation)",
+    transfer: "; no exit exists for an unusable transfer yet (a soundness-review finding)",
+  }[object]);
+
 const headerRecordsOf = (read, epochIndex, gen) =>
   read.records.filter((r) => r.object === "header" && r.epochIndex === epochIndex && r.gen === gen);
 
@@ -839,8 +873,11 @@ const finishHeaderOutcome = async ({ poolId, dir, deps, epochIndex, gen, W, expe
     return { status: "refused", epochIndex,
       note: "the structured error is journaled; header-refused is the operator condition" };
   }
+  const u = await unusableCheck({ poolId, dir, deps, object: "header", epochIndex, gen, W });
+  if (u.unusable) return { status: "header-bytes-unusable", epochIndex, note: unusableNote("header", u.st) };
   return { status: "unresolved-pending", epochIndex,
-    note: "ambiguous outcome journals nothing; recovery is wait-only on the persisted hash" };
+    note: "ambiguous outcome journals nothing; recovery is wait-only on the persisted hash" +
+      (u.checked ? "" : `; the nonce check could not be made (${u.why})`) };
 };
 
 // the CAPTURE builders may be async (the live capture signer is; the
@@ -1019,6 +1056,44 @@ const unconsumedReservationRebuild = (read, epochIndex, accrualId, gen) => {
     && r.epochIndex === epochIndex && r.accrualId === accrualId && r.gen === gen + 1);
   return decided && !nextOpened;
 };
+const unconsumedTransferRebuild = (read, epochIndex, accrualId, gen) => {
+  const decided = read.records.some((r) => r.kind === K.DECISION && r.object === "transfer"
+    && r.epochIndex === epochIndex && r.accrualId === accrualId && r.gen === gen && r.action === "rebuild-transfer");
+  const nextOpened = read.records.some((r) => r.kind === K.WRITE_AHEAD && r.object === "transfer"
+    && r.epochIndex === epochIndex && r.accrualId === accrualId && r.gen === gen + 1);
+  return decided && !nextOpened;
+};
+const ownedElsewhereOf = (read, epochIndex, accrualId, gen) => read.records.find((r) => r.kind === K.OBSERVATION
+  && r.observationType === "transfer-owned-elsewhere" && r.object === "transfer"
+  && r.epochIndex === epochIndex && r.accrualId === accrualId && r.gen === gen) || null;
+const ownedElsewhereNote = (o) => `another accrual holds a ledger claim on this transfer's bytes (${o.claimKind}, accrual ` +
+  `${o.claimantAccrualId.slice(0, 12)}... of pool ${o.claimantPoolId.slice(0, 12)}...), so its execution is not this accrual's payment`;
+
+/**
+ * THE OWNERSHIP CHECK (tegara/docs/NONCE_OWNERSHIP.md), DETECTION rather than concurrency
+ * protection: whether ANOTHER accrual holds a ledger claim on these transfer bytes, the reservation
+ * at the identifier derived from them or a receipt for their hash. When one does, the collision is
+ * journaled once per transfer generation and reported, INSTEAD of a payment. A check that could not
+ * be made returns unchecked, and every caller then declines to record a payment, because an
+ * unperformed check never produces an affirmative result.
+ */
+const claimCheck = async ({ poolId, dir, deps, epochIndex, accrualId, gen, transferHash }) => {
+  let c;
+  try { c = await deps.transferClaims(transferHash); }
+  catch (e) { return { checked: false, why: String((e && e.message) || e) }; }
+  // a claim is ANOTHER owner's when its accrual or its pool differs from this one
+  const other = ((c && c.claims) || []).find((x) => x.accrualId !== accrualId || x.poolId !== poolId);
+  if (!other) return { checked: true, elsewhere: false };
+  const read = openValidatedJournal(poolId, dir);
+  let obs = ownedElsewhereOf(read, epochIndex, accrualId, gen);
+  if (!obs) {
+    obs = { v: 1, kind: K.OBSERVATION, object: "transfer", gen, poolId, epochIndex, accrualId,
+      observationType: "transfer-owned-elsewhere", route: "proved-query", targetTransitionHash: transferHash,
+      claimKind: other.kind, claimantAccrualId: other.accrualId, claimantPoolId: other.poolId };
+    appendChecked(poolId, dir, obs);
+  }
+  return { checked: true, elsewhere: true, obs };
+};
 
 /**
  * STEP 3 for ONE positive accrual, in the frozen order, with the frozen
@@ -1063,7 +1138,7 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
   await requireGateAdmission(deps, "runTransferStep");
   const need = ["entitlementsForEpoch", "buildTransferTransition", "buildReservationTransition",
     "reservationDocumentIdOf", "buildReceiptCapture", "fetchReservation", "observeReceipt",
-    "broadcastAndAwait", "awaitResult", "receiptPayloads"];
+    "broadcastAndAwait", "awaitResult", "receiptPayloads", "transferClaims"];
   for (const k of need) if (typeof (deps && deps[k]) !== "function") refuse(`runTransferStep needs deps.${k}`);
   if (!Number.isSafeInteger(deps.transferBytesBound) || deps.transferBytesBound < 1) {
     refuse("runTransferStep needs deps.transferBytesBound (the D3 transitionBytes bound)");
@@ -1116,7 +1191,9 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
     };
     try {
       const acc = (read.perEpoch[epochIndex] && read.perEpoch[epochIndex].accruals[accrualId]) || {};
-      const tRecs = accrualRecordsOf(read, epochIndex, accrualId, "transfer");
+      // THE CURRENT TRANSFER GENERATION: 1 unless a replacement opened another (NONCE_OWNERSHIP.md)
+      let tGen = (acc.transfer && acc.transfer.gen) || 1;
+      const tRecs = accrualRecordsOf(read, epochIndex, accrualId, "transfer").filter((r) => r.gen === tGen);
       const tW = tRecs.find((r) => r.kind === K.WRITE_AHEAD);
       const tS = tRecs.some((r) => r.kind === K.SENT_MARKER);
       if ((acc.transfer && acc.transfer.stopped) || (acc.reservation && acc.reservation.stopped)) {
@@ -1147,6 +1224,18 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
       if (acc.receiptCaptured) {
         const cap = read.records.find((r) => r.kind === RECEIPT_KIND
           && r.epochIndex === epochIndex && r.accrualId === accrualId);
+        // CHECK 3: a capture whose bytes another accrual claims is not this accrual's payment, which
+        // is how a capture journaled before this check existed (the a soundness-review finding specimen) is named
+        const named = ownedElsewhereOf(read, epochIndex, accrualId, tGen);
+        if (named) return { status: "transfer-owned-elsewhere", accrualId, note: ownedElsewhereNote(named) };
+        if (cap) {
+          const c = await claimCheck({ poolId, dir, deps, epochIndex, accrualId, gen: tGen, transferHash: cap.transitionHash });
+          if (c.elsewhere) return { status: "transfer-owned-elsewhere", accrualId, note: ownedElsewhereNote(c.obs) };
+          if (!c.checked) {
+            return { status: "documents-pending", accrualId,
+              note: `the ownership check could not be made (${c.why}), so the receipt is not written on an unchecked capture` };
+          }
+        }
         if (cap) {
           advanceFrontierFromCapture({ kind: RECEIPT_KIND, height: BigInt(cap.inclusionHeight),
             identities: deps.identities }, { dir, locks: incomeHandle });
@@ -1191,7 +1280,28 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
         return { status: "unencodable-stopped", accrualId };
       }
       let transferBytes, transferHash;
-      if (tW) {
+      let replacing = false;
+      if (tW && unconsumedTransferRebuild(read, epochIndex, accrualId, tGen)) {
+        // THE REPLACEMENT RULE (NONCE_OWNERSHIP.md). R2 and R3 are in the journal: the collision
+        // observation this decision rests on, and the operator's decision after it. R1 is proved
+        // here, on the ledger: this accrual must hold NO reservation, so its only reservation will
+        // bind the replacement and it can never send anything else. A read that fails, or that
+        // finds a reservation, stops with a named condition and builds nothing.
+        let proof;
+        try {
+          if (typeof deps.provedReservationAbsent !== "function") throw new Error("no proved reservation read is wired");
+          proof = await deps.provedReservationAbsent(accrualId);
+        } catch (e) {
+          return { status: "transfer-owned-elsewhere", accrualId,
+            note: `the authorized replacement waits, because the ledger's proved absence of a reservation could not be read (${String((e && e.message) || e)})` };
+        }
+        if (!proof || proof.absent !== true) {
+          return { status: "transfer-owned-elsewhere", accrualId,
+            note: "no replacement: this accrual holds a reservation on the ledger, which is immutable under contract v11 and binds the old bytes, so a second binding could not be excluded" };
+        }
+        replacing = true;
+      }
+      if (tW && !replacing) {
         transferBytes = tW.transitionBytes; transferHash = tW.transitionHash; // never rebuilt
       } else {
         // ---- the classification preflight (a soundness-review finding): before any
@@ -1230,8 +1340,9 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
             observedLength: byteLen, bound: deps.transferBytesBound });
           return { status: "unencodable-stopped", accrualId };
         }
-        // ---- (b) the transfer write-ahead ----
-        appendChecked(poolId, dir, { v: 1, kind: K.WRITE_AHEAD, object: "transfer", gen: 1,
+        // ---- (b) the transfer write-ahead, at the next generation when replacing ----
+        if (replacing) tGen += 1;
+        appendChecked(poolId, dir, { v: 1, kind: K.WRITE_AHEAD, object: "transfer", gen: tGen,
           poolId, epochIndex, accrualId, transitionBytes: built.transitionBytes,
           transitionHash: built.transitionHash });
         transferBytes = built.transitionBytes; transferHash = built.transitionHash;
@@ -1244,6 +1355,25 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
       if (resState && resState.state === "refused") {
         if (unconsumedReservationRebuild(read, epochIndex, accrualId, gen)) gen += 1;
         else return { status: "reservation-refused", accrualId };
+      } else if (resState && resState.state === "sent" && unconsumedReservationRebuild(read, epochIndex, accrualId, gen)) {
+        // a soundness-review finding: THE OPERATOR'S REBUILD of a reservation whose bytes can never execute. The journal
+        // already holds the proved nonce observation the decision rests on. The LEDGER must now prove
+        // that no reservation exists for this accrual, so the old bytes never executed either. Only
+        // then does a new generation open, bound to the same transfer, which the journal enforces. A
+        // read that fails, or that finds a reservation, stops here with a named condition.
+        let proof;
+        try {
+          if (typeof deps.provedReservationAbsent !== "function") throw new Error("no proved reservation read is wired");
+          proof = await deps.provedReservationAbsent(accrualId);
+        } catch (e) {
+          return { status: "reservation-bytes-unusable", accrualId,
+            note: `the authorized rebuild waits, because the ledger's proved absence of a reservation could not be read (${String((e && e.message) || e)})` };
+        }
+        if (!proof || proof.absent !== true) {
+          return { status: "reservation-on-ledger", accrualId,
+            note: "the authorized rebuild did not run: the ledger holds a reservation for this accrual, so the persisted one executed at some point and a waiting run should find it" };
+        }
+        gen += 1;
       }
       const rRecs = accrualRecordsOf(read, epochIndex, accrualId, "reservation")
         .filter((r) => r.gen === gen);
@@ -1320,23 +1450,31 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
             data: typeof (resResult && resResult.data) === "string" ? resResult.data : "",
             message: String((resResult && resResult.message) || "execution refusal"),
             errorClass: "execution-refusal" });
-          return { status: "reservation-refused", accrualId };
+          // CHECK 1: refused because another accrual already holds a reservation for these very
+          // bytes, at the identifier derived from them? Then name it, so a replacement can follow.
+          const c = await claimCheck({ poolId, dir, deps, epochIndex, accrualId, gen: tGen, transferHash });
+          if (c.elsewhere) return { status: "transfer-owned-elsewhere", accrualId, note: ownedElsewhereNote(c.obs) };
+          return { status: "reservation-refused", accrualId,
+            ...(c.checked ? {} : { note: `the ownership check could not be made (${c.why})` }) };
         } else {
+          const u = await unusableCheck({ poolId, dir, deps, object: "reservation", epochIndex, accrualId, gen, W: rW });
+          if (u.unusable) return { status: "reservation-bytes-unusable", accrualId, note: unusableNote("reservation", u.st) };
           return { status: "reservation-unresolved-pending", accrualId,
-            note: "wait-only on the reservation's persisted hash; reservation-unresolved is the operator condition after patience" };
+            note: "wait-only on the reservation's persisted hash; reservation-unresolved is the operator condition after patience" +
+              (u.checked ? "" : `; the nonce check could not be made (${u.why})`) };
         }
       }
 
       // ---- (d) the transfer send, from a HOLDER branch only ----
       let transferResult;
       if (!tS) {
-        appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "transfer", gen: 1,
+        appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "transfer", gen: tGen,
           poolId, epochIndex, accrualId, transitionHash: transferHash });
         transferResult = await deps.broadcastAndAwait(transferHash, transferBytes);
-      } else if (resendAuthorized(poolId, dir, { object: "transfer", epochIndex, accrualId, gen: 1 })) {
+      } else if (resendAuthorized(poolId, dir, { object: "transfer", epochIndex, accrualId, gen: tGen })) {
         // marker set, no capture, and the operator journaled a resend: THE PERSISTED BYTES again,
         // never rebuilt, which duty D6 makes at-most-once in execution
-        appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "transfer", gen: 1,
+        appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "transfer", gen: tGen,
           poolId, epochIndex, accrualId, transitionHash: transferHash });
         transferResult = await resendAndAwait(deps, transferHash, transferBytes);
       } else {
@@ -1345,7 +1483,7 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
       }
       const tToken = classifyOutcome(transferResult, deps._uniqueIdentityForTest);
       if (tToken === TOKENS.OTHER) {
-        appendChecked(poolId, dir, { v: 1, kind: K.ERROR, object: "transfer", gen: 1, poolId,
+        appendChecked(poolId, dir, { v: 1, kind: K.ERROR, object: "transfer", gen: tGen, poolId,
           epochIndex, accrualId, code: Number.isSafeInteger(transferResult && transferResult.code) ? transferResult.code : 0,
           data: typeof (transferResult && transferResult.data) === "string" ? transferResult.data : "",
           message: String((transferResult && transferResult.message) || "execution refusal"),
@@ -1353,14 +1491,26 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
         return { status: "transfer-refused", accrualId };
       }
       if (tToken !== TOKENS.SUCCESS) {
+        const u = await unusableCheck({ poolId, dir, deps, object: "transfer", epochIndex, accrualId, gen: tGen,
+          W: { transitionHash: transferHash, transitionBytes: transferBytes } });
+        if (u.unusable) return { status: "transfer-bytes-unusable", accrualId, note: unusableNote("transfer", u.st) };
         return { status: "transfer-unresolved-pending", accrualId,
-          note: "wait-only on the persisted hash; transfer-unresolved is the operator condition after patience" };
+          note: "wait-only on the persisted hash; transfer-unresolved is the operator condition after patience" +
+            (u.checked ? "" : `; the nonce check could not be made (${u.why})`) };
       }
 
       // ---- (e) the verified response journaled BEFORE any receipt write,
       // the income frontier advanced, then the explicit lock handoff ----
+      // CHECK 2: a verified result for these bytes is this accrual's payment only if no other accrual
+      // claims them, which covers a duplicate response and a wait after a restart alike
+      const owner = await claimCheck({ poolId, dir, deps, epochIndex, accrualId, gen: tGen, transferHash });
+      if (owner.elsewhere) return { status: "transfer-owned-elsewhere", accrualId, note: ownedElsewhereNote(owner.obs) };
+      if (!owner.checked) {
+        return { status: "transfer-unresolved-pending", accrualId,
+          note: `the transfer's result is not captured on an unchecked ownership (${owner.why}); a later run checks again` };
+      }
       const tWnow = accrualRecordsOf(openValidatedJournal(poolId, dir), epochIndex, accrualId, "transfer")
-        .find((r) => r.kind === K.WRITE_AHEAD);
+        .find((r) => r.kind === K.WRITE_AHEAD && r.gen === tGen);
       const capture = await deps.buildReceiptCapture({ poolId, epochIndex, accrualId,
         writeAhead: tWnow, result: transferResult }); // async-capable, like the header capture builder
       if (!capture || capture.kind !== RECEIPT_KIND) refuse("deps.buildReceiptCapture must return the signed receipt-capture record");

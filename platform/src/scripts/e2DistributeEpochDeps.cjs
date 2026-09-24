@@ -52,6 +52,8 @@
  * class as the extraction this module is, they are NOT addressed here, and they are on the
  * backlog rather than counted as done.
  */
+const { nonceUsability } = require("./e2NonceWindow.cjs");
+const docIdMod = require("./e2DocId.cjs");
 const captureRecord = require("./e2CaptureRecord.cjs");
 const battery = require("./e2CaptureBattery.cjs");
 const rawCapture = require("./e2RawCapture.cjs");
@@ -243,11 +245,17 @@ const makeEpochDepsFactory = (env) => {
       transferMetaByBytes.set(transitionBytes, { recipientB58: row.recipientB58, amountCredits });
       return { transitionBytes, transitionHash: sha256hex(Buffer.from(transitionBytes, "hex")) };
     };
+    const reservationIdFor = (transferHash) => docIdMod.reservationIdForTransfer({
+      generateId: (...a) => dpp.DocumentWASM.generateId(...a), ownerId: ID_A, contractId: V11, transferHash });
     const buildReservationTransition = ({ poolId, accrualId, boundTransferHash }) => {
       if (prefetched.contractNonce === null) throw new Error("the contract nonce was not prefetched for this accrual");
       const nonce = prefetched.contractNonce; prefetched.contractNonce = null; // consumed once
-      const { b58, entropy } = docIdOfObject("reservation", { accrualId });
-      builtReservationDocIdByAccrual.set(accrualId, idHex(b58));
+      // THE IDENTIFIER IS DERIVED FROM THE BOUND TRANSFER (tegara/docs/NONCE_OWNERSHIP.md), so two
+      // pools of this writer holding byte-identical transfers build the SAME reservation identifier
+      // and the ledger refuses the second. Reservations built before this keep accrual-derived
+      // identifiers; every reader fetches a reservation by its accrual, so both read alike.
+      const { b58, hex, entropy } = reservationIdFor(boundTransferHash);
+      builtReservationDocIdByAccrual.set(accrualId, hex);
       const doc = mkDoc("transferReservation",
         { poolId, accrualId, transitionHash: boundTransferHash }, b58, entropy);
       const stt = sdk.documents.createStateTransition(doc, "create", { identityContractNonce: nonce });
@@ -257,9 +265,9 @@ const makeEpochDepsFactory = (env) => {
     };
 
     // ---- captures (the battery's construction) ----
-    const mkCapture = async ({ kind, object, extra, rec, transitionHex }) => {
+    const mkCapture = async ({ kind, object, extra, rec, transitionHex, gen = 1 }) => {
       const record = {
-        v: 1, kind, object, gen: 1, poolId: POOL, epochIndex: ctx.epochIndex,
+        v: 1, kind, object, gen, poolId: POOL, epochIndex: ctx.epochIndex,
         transitionBytes: transitionHex,
         transitionHash: sha256hex(Buffer.from(transitionHex, "hex")),
         proofMsg: rec.proofMsg, metadataMsg: rec.metadataMsg,
@@ -477,6 +485,35 @@ const makeEpochDepsFactory = (env) => {
       // THE ARGUMENT IS NORMALIZED rather than destructured, because `null` is not `undefined`
       // and a default parameter does not cover it: `({ x } = {})` still throws on an explicit
       // null. A review found that hole.
+      // a soundness-review finding: WHETHER A PERSISTED TRANSITION CAN STILL EXECUTE, from the nonce inside its own bytes
+      // and the signer's RAW stored nonce on the proved route, under the same pin check as the nonce
+      // reads above, decided by e2NonceWindow.cjs. Any read or decode that fails THROWS, and the
+      // writer then claims nothing about the bytes. The transfer's signer is read as the writer
+      // identity, which is the income identity in the bootstrap shape this runner serves.
+      transitionNonceState: async (object, bytesHex) => {
+        if (!["header", "reservation", "transfer"].includes(object)) throw new Error(`no nonce rule for ${object}`);
+        const stt = dpp.StateTransitionWASM.fromBytes(Buffer.from(bytesHex, "hex"));
+        const transitionNonce = object === "transfer"
+          ? BigInt(dpp.IdentityCreditTransferWASM.fromStateTransition(stt).nonce)
+          : BigInt(stt.getIdentityContractNonce());
+        const r = object === "transfer" ? await readIdentityNonce() : await readContractNonce();
+        if (r.metadata.chainId !== pin || Number(r.metadata.protocolVersion) !== PROTOCOL_PIN) {
+          throw new Error(`the proved nonce read fails the pins (chain ${r.metadata.chainId}, protocol ${r.metadata.protocolVersion})`);
+        }
+        if (typeof r.raw !== "bigint") throw new Error("the proved nonce read carries no raw stored value, so a nonce below the tip cannot be classified");
+        return { ...nonceUsability({ transitionNonce, rawExisting: r.raw }), transitionNonce,
+          observedHeight: String(r.metadata.height) };
+      },
+      // a soundness-review finding: the PROVED absence of any reservation for an accrual, the ledger's half of the evidence
+      // that a reservation whose bytes can never execute never executed either. A read that fails
+      // throws, so the writer never rebuilds on an unperformed check.
+      provedReservationAbsent: async (accrualId) => {
+        if (typeof accrualId !== "string" || !/^[0-9a-f]{64}$/.test(accrualId)) throw new Error("the accrual identifier is missing or malformed");
+        const found = await provedQuery("transferReservation", [["accrualId", "==", Buffer.from(accrualId, "hex")]],
+          `provedReservationAbsent(${accrualId.slice(0, 12)}...)`);
+        if (!Array.isArray(found)) throw new Error("the proved reservation read answered something that is not a list");
+        return { absent: found.length === 0, count: found.length };
+      },
       reservationDocumentIdOf: async (key) => {
         const accrualId = (key && typeof key === "object") ? key.accrualId : undefined;
         if (typeof accrualId !== "string" || !/^[0-9a-f]{64}$/.test(accrualId)) {
@@ -533,9 +570,31 @@ const makeEpochDepsFactory = (env) => {
         if (found.length !== 1) return { found: false };
         return { found: true, documentId: idHex(found[0].id) };
       },
+      // the capture carries its transfer's GENERATION, which a replacement makes greater than 1
       buildReceiptCapture: ({ accrualId, writeAhead, result }) =>
-        mkCapture({ kind: captureRecord.RECEIPT_KIND, object: "transfer",
+        mkCapture({ kind: captureRecord.RECEIPT_KIND, object: "transfer", gen: writeAhead.gen || 1,
           extra: { accrualId }, rec: result, transitionHex: writeAhead.transitionBytes }),
+      // WHO ELSE CLAIMS THESE TRANSFER BYTES, on the proved route (tegara/docs/NONCE_OWNERSHIP.md).
+      // Two claims can exist, each unique on the ledger: the reservation at the identifier derived
+      // from the bytes, and a receipt for their hash. A LEGACY reservation of another accrual is not
+      // findable here, since reservations have no transfer-hash index, and the result says nothing
+      // about one. Any read that fails throws, so a caller never takes an unperformed check as
+      // "unclaimed". A served document that does not bind these bytes is refused as inconsistent.
+      transferClaims: async (transferHash) => {
+        if (typeof transferHash !== "string" || !/^[0-9a-f]{64}$/.test(transferHash)) throw new Error("the transfer hash is missing or malformed");
+        const rid = reservationIdFor(transferHash);
+        const label = `transferClaims(${transferHash.slice(0, 12)}...)`;
+        const reservations = await provedQuery("transferReservation", [["$id", "==", rid.b58]], label);
+        const receipts = await provedQuery("transferReceipt", [["transitionHash", "==", Buffer.from(transferHash, "hex")]], label);
+        if (!Array.isArray(reservations) || !Array.isArray(receipts)) throw new Error(`${label}: a proved read answered something that is not a list`);
+        const claimsOf = (kind, docs) => docs.map((d) => {
+          const f = norm(typeof d.getProperties === "function" ? d.getProperties() : d.properties);
+          if (f.transitionHash !== transferHash) throw new Error(`${label}: a served ${kind} does not bind these bytes`);
+          return { kind, accrualId: f.accrualId, poolId: f.poolId, documentId: idHex(d.id) };
+        });
+        return { reservationId: rid.hex,
+          claims: [...claimsOf("reservation-by-transfer", reservations), ...claimsOf("receipt-by-transition", receipts)] };
+      },
       receiptPayloads: (epochIndex, accrualId) => {
         const j = openJournal(POOL);
         const cap = j.records.find((r) => r.kind === captureRecord.RECEIPT_KIND
