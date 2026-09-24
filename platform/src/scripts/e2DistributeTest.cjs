@@ -107,7 +107,8 @@ const mkCapture = ({ poolId, epochIndex, gen, writeAhead }) => ({ v: 1, kind: HE
   heightRoute: "tenderdash-tx", signerIdentity: h32("f0"), signerKeyId: 2, sig: "00".repeat(65) });
 
 const mkDeps = (poolId, dir, over = {}) => {
-  const calls = { broadcast: [], await: [], build: [], proved: [], fetch: [], docWrites: [], resDocId: [] };
+  // seq: every send and wait IN ORDER, so a case can check a wait FOLLOWED a send and named its hash
+  const calls = { broadcast: [], await: [], build: [], proved: [], fetch: [], docWrites: [], resDocId: [], seq: [] };
   const ledger = over.ledger || new Map();
   const docKey = (object, key) => [object, key.epochIndex, key.accrualId ?? "", key.partIndex ?? ""].join("|");
   const depsLedger = { ledger, docKey };
@@ -162,6 +163,7 @@ const mkDeps = (poolId, dir, over = {}) => {
     },
     broadcastAndAwait: async (hash, bytes) => {
       calls.broadcast.push({ hash, bytes });
+      calls.seq.push(`broadcast:${hash}`);
       // the broadcast is inside the operation's lock window: both identity
       // lock directories AND the per-pool run lock must be held on disk
       // (the step is serialized against startRun and set-start throughout)
@@ -189,6 +191,7 @@ const mkDeps = (poolId, dir, over = {}) => {
     },
     awaitResult: async (hash) => {
       calls.await.push(hash);
+      calls.seq.push(`await:${hash}`);
       // wait-only recovery is the same outstanding operation: both locks held
       for (const id of [W, I]) {
         if (!fs.existsSync(path.join(STATE_DIR, `oplock-${identityLockName(id)}`))) {
@@ -1196,6 +1199,282 @@ const openEpoch = async (pool, dir, over = {}) => {
     ok("and a later answer still completes it, with no resend",
       (await runTransferStep({ poolId: pool, dir, deps: later, run, epochIndex: 5, accrualId: A1 })).status === "completed"
       && later._calls.broadcast.length === 0);
+  }
+}
+
+// ---- THE OPERATOR'S RESEND (`e2OperatorDecision.cjs`): one journaled decision licenses exactly one
+// resend of the PERSISTED bytes, and without one nothing marked sent is ever sent again ----
+{
+  const { authorizeRebroadcast } = require("./e2OperatorDecision.cjs");
+  const tryAuth = (args) => { try { return authorizeRebroadcast(args); } catch (e) { return { refused: String(e && e.message) }; } };
+  const markers = (pool, dir, object) => openValidatedJournal(pool, dir).records
+    .filter((r) => r.object === object && r.kind === K.SENT_MARKER).length;
+  const ambiguousFor = (prefix) => (hash, bytes) => (bytes.startsWith(prefix) ? AMBIGUOUS_RESULT : SUCCESS_RESULT);
+  // the resend's wait must FOLLOW the resend and name the SAME persisted hash, never another
+  const waitedAfterResend = (d, prefix) => {
+    const b = d._calls.broadcast.find((x) => prefix === "" || x.bytes.startsWith(prefix));
+    if (!b) return false;
+    const i = d._calls.seq.indexOf(`broadcast:${b.hash}`), j = d._calls.seq.indexOf(`await:${b.hash}`);
+    return i >= 0 && j > i && d._calls.await.length === 1 && d._calls.await[0] === b.hash;
+  };
+
+  { // THE TRANSFER, where a resend could move money twice
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    const first = mkDeps(pool, dir, { outcome: ambiguousFor("0a0b") });
+    await runTransferStep({ poolId: pool, dir, deps: first, run, epochIndex: 5, accrualId: A1 });
+    const sent = first._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b"));
+    const waiting = mkDeps(pool, dir, { awaitOutcome: () => AMBIGUOUS_RESULT });
+    await runTransferStep({ poolId: pool, dir, deps: waiting, run, epochIndex: 5, accrualId: A1 });
+    ok("resend: WITHOUT a decision an unresolved transfer is only waited on, never sent again",
+      sent.length === 1 && waiting._calls.broadcast.length === 0 && waiting._calls.await.length === 1);
+    const auth = tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "no answer after patience", dir });
+    ok("resend: the operator can authorize a resend of an unresolved transfer, on duty D6's basis",
+      auth.gen === 1 && /D6/.test(auth.basis || ""));
+    ok("resend: a second authorization before the first is used is refused",
+      /already authorized/.test(tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "again", dir }).refused || ""));
+    const decision = openValidatedJournal(pool, dir).records.filter((r) => r.kind === K.DECISION).pop();
+    const { BASIS } = require("./e2OperatorDecision.cjs");
+    ok("resend: the decision records D6's state and the transfer's own basis beside the operator's reasoning",
+      decision && decision.d6Status === "closed" && decision.reasoning === `no answer after patience | basis: ${BASIS.transfer}`
+        && /duty D6/.test(BASIS.transfer));
+    const resend = mkDeps(pool, dir, { outcome: () => SUCCESS_RESULT });
+    const r = await runTransferStep({ poolId: pool, dir, deps: resend, run, epochIndex: 5, accrualId: A1 });
+    ok("resend: the next run sends the IDENTICAL persisted bytes once, builds nothing, and completes",
+      r.status === "completed" && resend._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b")).length === 1
+        && resend._calls.broadcast.find((b) => b.bytes.startsWith("0a0b")).bytes === sent[0].bytes
+        && resend._calls.build.length === 0);
+    ok("resend: the journal holds two markers for the one transfer", markers(pool, dir, "transfer") === 2);
+    ok("resend: a completed transfer cannot be authorized again",
+      /only one marked sent/.test(tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "x", dir }).refused || ""));
+  }
+  { // ONE DECISION, ONE RESEND: a resend whose answer is lost again needs a new decision
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: ambiguousFor("0a0b") }), run, epochIndex: 5, accrualId: A1 });
+    tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "no answer", dir });
+    const lost = mkDeps(pool, dir, { outcome: ambiguousFor("0a0b"), awaitOutcome: () => AMBIGUOUS_RESULT });
+    const r1 = await runTransferStep({ poolId: pool, dir, deps: lost, run, epochIndex: 5, accrualId: A1 });
+    const after = mkDeps(pool, dir, { awaitOutcome: () => AMBIGUOUS_RESULT });
+    await runTransferStep({ poolId: pool, dir, deps: after, run, epochIndex: 5, accrualId: A1 });
+    ok("resend: a resend whose send and wait are both lost leaves the transfer unresolved",
+      r1.status === "transfer-unresolved-pending" && lost._calls.broadcast.length === 1 && lost._calls.await.length === 1);
+    ok("resend: and the NEXT run only waits, because the decision was used by that one resend",
+      after._calls.broadcast.length === 0 && after._calls.await.length === 1);
+  }
+  { // A RESEND OF A TRANSFER THAT HAD ALREADY EXECUTED: the node answers the duplicate ambiguously,
+    // and the same run waits on the persisted hash and reads the original execution's result
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: ambiguousFor("0a0b") }), run, epochIndex: 5, accrualId: A1 });
+    tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "answer lost", dir });
+    const dup = mkDeps(pool, dir, { outcome: ambiguousFor("0a0b"), awaitOutcome: () => SUCCESS_RESULT });
+    const r = await runTransferStep({ poolId: pool, dir, deps: dup, run, epochIndex: 5, accrualId: A1 });
+    ok("resend: a duplicate answered ambiguously is followed by a wait in the same run, which completes it",
+      r.status === "completed" && dup._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b")).length === 1
+        && waitedAfterResend(dup, "0a0b") && dup._calls.build.length === 0);
+  }
+  // A RESEND REFUSED BECAUSE THE ORIGINAL SUCCEEDED, the case a review executed against the first
+  // version, which recorded the resend's refusal as the transition's outcome. For each object the
+  // resend is answered with a consensus refusal while the wait on the hash shows the original's
+  // success; the transition must complete, never be recorded refused.
+  const resendRefusedCases = [
+    ["transfer", "0a0b", async (pool, dir, run, deps) => runTransferStep({ poolId: pool, dir, deps, run, epochIndex: 5, accrualId: A1 }), "completed"],
+    ["reservation", "0c0d", async (pool, dir, run, deps) => runTransferStep({ poolId: pool, dir, deps, run, epochIndex: 5, accrualId: A1 }), "completed"],
+  ];
+  for (const [object, prefix, step, done] of resendRefusedCases) {
+    for (const [waitAnswer, expect, what] of [[SUCCESS_RESULT, done, "the original's success"], [AMBIGUOUS_RESULT, `${object}-unresolved-pending`, "no answer"]]) {
+      const pool = freshPool(); const dir = caseDir();
+      const { run } = await openEpoch(pool, dir);
+      await step(pool, dir, run, mkDeps(pool, dir, { outcome: ambiguousFor(prefix) }));
+      tryAuth({ poolId: pool, object, epochIndex: 5, accrualId: A1, reasoning: "answer lost", dir });
+      const d = mkDeps(pool, dir, { outcome: (h, b) => (b.startsWith(prefix) ? REFUSAL_RESULT : SUCCESS_RESULT), awaitOutcome: () => waitAnswer });
+      const r = await step(pool, dir, run, d);
+      const errors = openValidatedJournal(pool, dir).records.filter((x) => x.kind === K.ERROR).length;
+      ok(`resend: a ${object} resend REFUSED, with the wait showing ${what}, ends ${expect} with no refusal recorded`,
+        r.status === expect && errors === 0 && waitedAfterResend(d, prefix));
+    }
+  }
+  { // the header, the same case
+    for (const [waitAnswer, expect, what] of [[SUCCESS_RESULT, "captured", "the original's success"], [AMBIGUOUS_RESULT, "unresolved-pending", "no answer"]]) {
+      const pool = freshPool(); const dir = caseDir();
+      setStart(pool, "5", { dir });
+      const first = mkDeps(pool, dir, { outcome: () => AMBIGUOUS_RESULT });
+      const run = await startRun({ poolId: pool, dir, deps: first });
+      await runHeaderStep({ poolId: pool, dir, deps: first, run });
+      tryAuth({ poolId: pool, object: "header", epochIndex: 5, reasoning: "answer lost", dir });
+      const d = mkDeps(pool, dir, { outcome: () => REFUSAL_RESULT, awaitOutcome: () => waitAnswer });
+      const r = await runHeaderStep({ poolId: pool, dir, deps: d, run });
+      const errors = openValidatedJournal(pool, dir).records.filter((x) => x.kind === K.ERROR).length;
+      ok(`resend: a header resend REFUSED, with the wait showing ${what}, ends ${expect} with no refusal recorded`,
+        r.status === expect && errors === 0 && waitedAfterResend(d, ""));
+    }
+  }
+  { // a refusal the WAIT returns is the ledger's answer about the bytes, and is recorded
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: ambiguousFor("0a0b") }), run, epochIndex: 5, accrualId: A1 });
+    tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "answer lost", dir });
+    const d = mkDeps(pool, dir, { outcome: ambiguousFor("0a0b"), awaitOutcome: () => REFUSAL_RESULT });
+    const r = await runTransferStep({ poolId: pool, dir, deps: d, run, epochIndex: 5, accrualId: A1 });
+    const jr = openValidatedJournal(pool, dir);
+    ok("resend: a refusal returned by the WAIT on the hash is recorded as the transfer's refusal, durably",
+      r.status === "transfer-refused" && jr.perEpoch[5].accruals[A1].transfer.state === "refused"
+        && jr.records.filter((x) => x.kind === K.ERROR && x.object === "transfer").length === 1 && waitedAfterResend(d, "0a0b"));
+  }
+  // THE SAME-RUN WAIT on every object: an ambiguous resend followed by the original's result
+  for (const [object, prefix] of [["reservation", "0c0d"]]) {
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: ambiguousFor(prefix) }), run, epochIndex: 5, accrualId: A1 });
+    tryAuth({ poolId: pool, object, epochIndex: 5, accrualId: A1, reasoning: "answer lost", dir });
+    const d = mkDeps(pool, dir, { outcome: ambiguousFor(prefix), awaitOutcome: () => SUCCESS_RESULT });
+    const r = await runTransferStep({ poolId: pool, dir, deps: d, run, epochIndex: 5, accrualId: A1 });
+    ok(`resend: an ambiguous ${object} resend is followed by a wait in the same run, which completes it`,
+      r.status === "completed" && waitedAfterResend(d, prefix));
+  }
+  {
+    const pool = freshPool(); const dir = caseDir();
+    setStart(pool, "5", { dir });
+    const first = mkDeps(pool, dir, { outcome: () => AMBIGUOUS_RESULT });
+    const run = await startRun({ poolId: pool, dir, deps: first });
+    await runHeaderStep({ poolId: pool, dir, deps: first, run });
+    tryAuth({ poolId: pool, object: "header", epochIndex: 5, reasoning: "answer lost", dir });
+    const d = mkDeps(pool, dir, { outcome: () => AMBIGUOUS_RESULT, awaitOutcome: () => SUCCESS_RESULT });
+    const r = await runHeaderStep({ poolId: pool, dir, deps: d, run });
+    ok("resend: an ambiguous header resend is followed by a wait in the same run, which captures it",
+      r.status === "captured" && waitedAfterResend(d, ""));
+  }
+  { // A NEW RUN between the decision and the resend, as in production: its own pool record must not
+    // hide the license, because the license is the SUBJECT's last record, not the journal's
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: ambiguousFor("0a0b") }), run, epochIndex: 5, accrualId: A1 });
+    tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "answer lost", dir });
+    const d = mkDeps(pool, dir, { outcome: () => SUCCESS_RESULT });
+    const before = openValidatedJournal(pool, dir).records.length;
+    const run2 = await startRun({ poolId: pool, dir, deps: d });
+    const between = openValidatedJournal(pool, dir).records.length - before;
+    const r = await runTransferStep({ poolId: pool, dir, deps: d, run: run2, epochIndex: 5, accrualId: A1 });
+    ok("resend: a new run's own record between the decision and the step does not hide the license",
+      between >= 1 && r.status === "completed" && d._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b")).length === 1);
+  }
+  { // THE RESERVATION, the state a live run produced with Platform's gateway stopped
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    const first = mkDeps(pool, dir, { outcome: ambiguousFor("0c0d") });
+    const r0 = await runTransferStep({ poolId: pool, dir, deps: first, run, epochIndex: 5, accrualId: A1 });
+    const resBytes = first._calls.broadcast.find((b) => b.bytes.startsWith("0c0d")).bytes;
+    const auth = tryAuth({ poolId: pool, object: "reservation", epochIndex: 5, accrualId: A1, reasoning: "never delivered", dir });
+    ok("resend: an unresolved reservation can be authorized, on the unique index's basis",
+      r0.status === "reservation-unresolved-pending" && auth.gen === 1 && /byAccrual/.test(auth.basis || ""));
+    const resend = mkDeps(pool, dir, { outcome: () => SUCCESS_RESULT });
+    const r = await runTransferStep({ poolId: pool, dir, deps: resend, run, epochIndex: 5, accrualId: A1 });
+    ok("resend: the next run resends the reservation's identical bytes, then pays, and completes, rebuilding nothing",
+      r.status === "completed" && resend._calls.broadcast.filter((b) => b.bytes.startsWith("0c0d")).length === 1
+        && resend._calls.broadcast.find((b) => b.bytes.startsWith("0c0d")).bytes === resBytes
+        && resend._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b")).length === 1 && resend._calls.build.length === 0);
+    ok("resend: the reservation holds two markers", markers(pool, dir, "reservation") === 2);
+  }
+  { // THE HEADER
+    const pool = freshPool(); const dir = caseDir();
+    setStart(pool, "5", { dir });
+    const first = mkDeps(pool, dir, { outcome: () => AMBIGUOUS_RESULT });
+    const run = await startRun({ poolId: pool, dir, deps: first });
+    await runHeaderStep({ poolId: pool, dir, deps: first, run });
+    const headerBytes = first._calls.broadcast[0].bytes;
+    const auth = tryAuth({ poolId: pool, object: "header", epochIndex: 5, reasoning: "never delivered", dir });
+    ok("resend: an unresolved header can be authorized, on the unique index's basis", auth.gen === 1 && /byPoolEpoch/.test(auth.basis || ""));
+    const resend = mkDeps(pool, dir);
+    const r = await runHeaderStep({ poolId: pool, dir, deps: resend, run });
+    ok("resend: the next run resends the header's identical bytes once and captures it",
+      r.status === "captured" && resend._calls.broadcast.length === 1 && resend._calls.broadcast[0].bytes === headerBytes
+        && resend._calls.build.length === 0);
+  }
+  { // THE LISTING an operator reads to find what can be resent
+    const { unresolvedSubjects } = require("./e2OperatorDecision.cjs");
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    ok("resend listing: a pool with nothing marked sent lists nothing", unresolvedSubjects(openValidatedJournal(pool, dir)).length === 0);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: ambiguousFor("0a0b") }), run, epochIndex: 5, accrualId: A1 });
+    const u = unresolvedSubjects(openValidatedJournal(pool, dir));
+    ok("resend listing: an unresolved transfer is listed with its epoch, accrual and generation",
+      u.length === 1 && u[0].object === "transfer" && u[0].epochIndex === 5 && u[0].accrualId === A1 && u[0].gen === 1);
+    const pool3 = freshPool(); const dir3 = caseDir();
+    setStart(pool3, "5", { dir: dir3 });
+    const d3 = mkDeps(pool3, dir3, { outcome: () => AMBIGUOUS_RESULT });
+    await runHeaderStep({ poolId: pool3, dir: dir3, deps: d3, run: await startRun({ poolId: pool3, dir: dir3, deps: d3 }) });
+    const uh = unresolvedSubjects(openValidatedJournal(pool3, dir3));
+    ok("resend listing: an unresolved header is listed with no accrual", uh.length === 1 && uh[0].object === "header" && uh[0].accrualId === undefined);
+    const { listUnresolved } = require("./e2OperatorDecision.cjs");
+    ok("resend listing: the locked listing agrees with the read", listUnresolved(pool, dir).length === 1);
+    envStore.acquireOpLock(poolRunLockName(pool));
+    let listedWhileHeld = "none";
+    try { try { listUnresolved(pool, dir); listedWhileHeld = "listed"; } catch (e) { listedWhileHeld = "refused"; } }
+    finally { envStore.releaseOpLock(poolRunLockName(pool)); }
+    ok("resend listing: refused while a run holds the pool's lock, since opening can truncate", listedWhileHeld === "refused");
+  }
+  { // REFUSALS: nothing is written unless the subject is marked sent with no outcome
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    const before = openValidatedJournal(pool, dir).records.length;
+    const cases = [
+      [{ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "x", dir }, /holds no transfer/, "a subject with no records"],
+      [{ poolId: pool, object: "header", epochIndex: 5, reasoning: "x", dir }, /only one marked sent/, "a captured header"],
+      [{ poolId: pool, object: "accrual", epochIndex: 5, accrualId: A1, reasoning: "x", dir }, /header, reservation or transfer/, "an object that is never broadcast"],
+      [{ poolId: pool, object: "transfer", epochIndex: 5, reasoning: "x", dir }, /accrual identifier/, "a transfer with no accrual"],
+      [{ poolId: pool, object: "header", epochIndex: 5, accrualId: A1, reasoning: "x", dir }, /names no accrual/, "a header with an accrual"],
+      [{ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "  ", dir }, /reasoning is required/, "no reasoning"],
+    ];
+    for (const [args, re, what] of cases) ok(`resend refused: ${what}`, re.test(tryAuth(args).refused || ""));
+    ok("resend refused: and none of them wrote anything", openValidatedJournal(pool, dir).records.length === before);
+    // a transfer the ledger REFUSED is terminal, never resent
+    const refused = mkDeps(pool, dir, { outcome: (h, b) => (b.startsWith("0a0b") ? REFUSAL_RESULT : SUCCESS_RESULT) });
+    await runTransferStep({ poolId: pool, dir, deps: refused, run, epochIndex: 5, accrualId: A1 });
+    ok("resend refused: a transfer the ledger refused",
+      /only one marked sent/.test(tryAuth({ poolId: pool, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "x", dir }).refused || ""));
+    // a run holding the pool's lock blocks the decision
+    const pool2 = freshPool(); const dir2 = caseDir();
+    const e2 = await openEpoch(pool2, dir2);
+    await runTransferStep({ poolId: pool2, dir: dir2, deps: mkDeps(pool2, dir2, { outcome: ambiguousFor("0a0b") }), run: e2.run, epochIndex: 5, accrualId: A1 });
+    envStore.acquireOpLock(poolRunLockName(pool2));
+    let held;
+    try { held = tryAuth({ poolId: pool2, object: "transfer", epochIndex: 5, accrualId: A1, reasoning: "x", dir: dir2 }); }
+    finally { envStore.releaseOpLock(poolRunLockName(pool2)); }
+    ok("resend refused: while a run holds the pool's lock", typeof held.refused === "string" && held.gen === undefined);
+  }
+  { // THE JOURNAL ITSELF refuses a repeated marker with no decision, on every broadcast object
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: ambiguousFor("0c0d") }), run, epochIndex: 5, accrualId: A1 });
+    const resW = openValidatedJournal(pool, dir).records.find((r) => r.object === "reservation" && r.kind === K.WRITE_AHEAD);
+    let threw = "";
+    try { appendChecked(pool, dir, { v: 1, kind: K.SENT_MARKER, object: "reservation", gen: 1, poolId: pool, epochIndex: 5, accrualId: A1, transitionHash: resW.transitionHash }); }
+    catch (e) { threw = String(e && e.message); }
+    ok("resend: the journal refuses a second reservation marker with no decision before it",
+      /must immediately follow its consumed rebroadcast-identical decision/.test(threw));
+    // ADJACENCY within the subject: a decision followed by another record ON THE SAME RESERVATION
+    // no longer licenses a marker
+    tryAuth({ poolId: pool, object: "reservation", epochIndex: 5, accrualId: A1, reasoning: "answer lost", dir });
+    appendChecked(pool, dir, { v: 1, kind: K.DECLARATION, object: "reservation", gen: 1, poolId: pool, epochIndex: 5,
+      accrualId: A1, condition: "reservation-unresolved", reasoning: "a later surfacing on the same subject" });
+    let threw2 = "";
+    try { appendChecked(pool, dir, { v: 1, kind: K.SENT_MARKER, object: "reservation", gen: 1, poolId: pool, epochIndex: 5, accrualId: A1, transitionHash: resW.transitionHash }); }
+    catch (e) { threw2 = String(e && e.message); }
+    ok("resend: a decision followed by another record on the same reservation no longer licenses a marker",
+      /must immediately follow its consumed rebroadcast-identical decision/.test(threw2));
+  }
+  { // THE HEADER, the same rule
+    const pool = freshPool(); const dir = caseDir();
+    setStart(pool, "5", { dir });
+    const d = mkDeps(pool, dir, { outcome: () => AMBIGUOUS_RESULT });
+    await runHeaderStep({ poolId: pool, dir, deps: d, run: await startRun({ poolId: pool, dir, deps: d }) });
+    const hW = openValidatedJournal(pool, dir).records.find((r) => r.object === "header" && r.kind === K.WRITE_AHEAD);
+    let threw = "";
+    try { appendChecked(pool, dir, { v: 1, kind: K.SENT_MARKER, object: "header", gen: 1, poolId: pool, epochIndex: 5, transitionHash: hW.transitionHash }); }
+    catch (e) { threw = String(e && e.message); }
+    ok("resend: the journal refuses a second header marker with no decision before it",
+      /must immediately follow its consumed rebroadcast-identical decision/.test(threw));
   }
 }
 

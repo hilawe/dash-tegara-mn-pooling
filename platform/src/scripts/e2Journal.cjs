@@ -20,8 +20,9 @@
  * identifier and the canonical expected contents, whose poolId and epoch
  * equal the subject's). Decisions act on their subject's current generation,
  * on evidence of the EXACT class their condition's trigger row names, in
- * that generation; a repeated transfer marker consumes its authorizing
- * rebroadcast decision as the subject's IMMEDIATELY PRECEDING record. Stop
+ * that generation; a repeated marker on ANY broadcast object consumes its
+ * authorizing rebroadcast decision as the subject's IMMEDIATELY PRECEDING
+ * record (widened from transfers alone on 2026-09-23, see the sentMarker case). Stop
  * is terminal and unsupersedable. Pool, epoch, accrual, part and receipt
  * subjects are generation 1 only, and a transfer unique-index error class is
  * refused as not applicable. a soundness-review finding binding holds three ways.
@@ -96,12 +97,12 @@ const subjectKey = (r) => [r.object, r.poolId, r.epochIndex ?? "", r.accrualId ?
 
 const ACTIONS = {
   "header-refused": ["stop", "rebuild-corrected"],
-  "header-unresolved": ["keep-waiting", "stop"],
+  "header-unresolved": ["keep-waiting", "stop", "rebroadcast-identical"],
   "header-foreign": ["stop"],
   "header-capture-incomplete": ["continue-degraded", "keep-waiting"],
   "reservation-refused": ["stop", "rebuild-reservation"],
   "reservation-foreign": ["stop", "observe-foreign"],
-  "reservation-unresolved": ["keep-waiting", "stop"],
+  "reservation-unresolved": ["keep-waiting", "stop", "rebroadcast-identical"],
   "transfer-refused": ["stop"],
   "transfer-unresolved": ["keep-waiting", "rebroadcast-identical"],
   "observation-unresolved": ["keep-waiting", "stop"],
@@ -613,16 +614,23 @@ const validateJournal = (poolId, records) => {
         const chainOk = rg && rg.W && rg.S.length > 0 && rg.J
           && rg.J.boundTransferHash === g.W.transitionHash;
         if (!chainOk) refuse("a transfer sentMarker without the reservation's valid W-S-J holder chain (authority minting)", i);
-        if (g.S.length > 0) {
-          // the authorizing decision must be the subject's IMMEDIATELY
-          // PRECEDING record (checker finding 3, the adjacency rule)
-          const last = s.lastRecord;
-          const d = s.decisions.find((x) => !x.consumed && !x.superseded
-            && x.record.action === "rebroadcast-identical" && x.record === last);
-          if (!d) refuse("a repeated transfer sentMarker must immediately follow its consumed rebroadcast-identical decision", i);
-          d.consumed = true;
-        }
-      } else if (g.S.length > 0) refuse(`a repeated sentMarker on ${key}`, i);
+      }
+      // A REPEATED MARKER, on any broadcast object, is a resend of the SAME persisted bytes (the hash
+      // check above binds it to the write-ahead), and it is licensed only by an operator's
+      // rebroadcast-identical decision that is the subject's IMMEDIATELY PRECEDING record, which it
+      // consumes, so one decision licenses one resend (checker finding 3, the adjacency rule). This
+      // was transfers alone until 2026-09-23, when a live run showed a reservation or header marked
+      // sent that Platform never received has no other exit. The safety basis differs by object and
+      // is stated where the decision is written (`e2OperatorDecision.cjs`): for a transfer, duty D6's
+      // at-most-once execution of identical bytes; for a reservation or header, the ledger's unique
+      // index, which admits one such document however many times its bytes are submitted.
+      if (g.S.length > 0) {
+        const last = s.lastRecord;
+        const d = s.decisions.find((x) => !x.consumed && !x.superseded
+          && x.record.action === "rebroadcast-identical" && x.record === last);
+        if (!d) refuse(`a repeated sentMarker on ${key} must immediately follow its consumed rebroadcast-identical decision`, i);
+        d.consumed = true;
+      }
       g.S.push(r);
       noteRecord();
       return;

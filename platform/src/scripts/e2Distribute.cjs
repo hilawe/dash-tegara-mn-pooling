@@ -548,6 +548,48 @@ const pickNextEpoch = (universe, deps) => {
   return null;
 };
 
+/**
+ * THE OPERATOR'S RESEND, the only way a transition already marked sent is ever sent again. It is
+ * licensed exactly when the subject's LAST journal record is a rebroadcast-identical decision in
+ * the current generation, which is the journal's own adjacency rule (`e2Journal.cjs`, the
+ * sentMarker case). The repeated marker appended next consumes the decision, so the validator
+ * refuses a second resend on it, and one decision licenses one resend. The journal is re-read
+ * here rather than trusted from earlier in the step, since the answer must describe the journal
+ * as it stands when the marker is written. The decision itself is written by
+ * `e2OperatorDecision.cjs`, never by this module.
+ */
+const resendAuthorized = (poolId, dir, { object, epochIndex, accrualId, gen }) => {
+  const { records } = openValidatedJournal(poolId, dir);
+  const same = (r) => r.object === object && r.epochIndex === epochIndex
+    && (r.accrualId ?? null) === (accrualId ?? null) && (r.partIndex ?? null) === null;
+  let last = null;
+  for (const r of records) if (same(r)) last = r;
+  return last !== null && last.kind === K.DECISION && last.action === "rebroadcast-identical"
+    && last.condition === `${object}-unresolved` && last.gen === gen;
+};
+
+/**
+ * THE RESEND ITSELF: the persisted bytes once, then the transition's outcome read from its HASH.
+ *
+ * ONLY A VERIFIED SUCCESS IS TAKEN FROM THE RESEND'S OWN ANSWER. Any other answer describes the
+ * resend, not the transition. Identical bytes may already have executed, and duty D6 bounds their
+ * execution at one without saying which submission ran, so a resend can be refused precisely
+ * because the original succeeded: its nonce is used, or its document already exists. A review
+ * showed the first version recorded such a refusal as the transition's outcome. So every answer
+ * short of success is replaced by a WAIT on the persisted hash, which names the original and the
+ * resend alike. A node answers bytes it already holds with a duplicate-in-cache refusal (duty D6's
+ * double-send run), and the wait then reads the original's result, so a resend of a transition that
+ * had executed settles in one run WHEN the wait returns that verified result; an unavailable answer
+ * leaves it unresolved. A refusal the WAIT returns is recorded as the ledger's answer about those
+ * bytes. STATED ASSUMPTION: the wait reports the outcome of the submission that EXECUTED, which holds
+ * for a gateway that answers from the transaction included in a block, since a duplicate refused
+ * before inclusion produces no result of its own. The wait never sends anything.
+ */
+const resendAndAwait = async (deps, hash, bytes) => {
+  const sent = await deps.broadcastAndAwait(hash, bytes);
+  return classifyOutcome(sent, deps._uniqueIdentityForTest) === TOKENS.SUCCESS ? sent : deps.awaitResult(hash);
+};
+
 const headerRecordsOf = (read, epochIndex, gen) =>
   read.records.filter((r) => r.object === "header" && r.epochIndex === epochIndex && r.gen === gen);
 
@@ -680,10 +722,16 @@ const runHeaderStep = async ({ poolId, dir, deps, run }) => {
         const result = await deps.broadcastAndAwait(W.transitionHash, W.transitionBytes);
         return await finishHeaderOutcome({ poolId, dir, deps, epochIndex, gen, W, expectedContents, result, locks });
       }
-      // marker set: WAIT-ONLY on the persisted hash, never a resend; the
-      // recovered result goes through the SAME outcome table as an
-      // initial await (a refusal journals its error, a duplicate refusal
-      // runs the proved-equality gate, ambiguity stays wait-only)
+      // marker set: the operator's journaled resend of THE PERSISTED BYTES if one is licensed,
+      // otherwise WAIT-ONLY on the persisted hash; either result goes through the SAME outcome
+      // table as an initial await (a refusal journals its error, a duplicate refusal runs the
+      // proved-equality gate, ambiguity stays wait-only)
+      if (resendAuthorized(poolId, dir, { object: "header", epochIndex, gen })) {
+        appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "header", gen, poolId,
+          epochIndex, transitionHash: W.transitionHash });
+        const resent = await resendAndAwait(deps, W.transitionHash, W.transitionBytes);
+        return await finishHeaderOutcome({ poolId, dir, deps, epochIndex, gen, W, expectedContents, result: resent, locks });
+      }
       const result = await deps.awaitResult(W.transitionHash);
       return await finishHeaderOutcome({ poolId, dir, deps, epochIndex, gen, W, expectedContents, result, locks });
     } finally { locks.release(); }
@@ -1204,7 +1252,12 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
         let rW = rRecs.find((r) => r.kind === K.WRITE_AHEAD);
         const rS = rRecs.some((r) => r.kind === K.SENT_MARKER);
         let resResult;
-        if (rW && rS) {
+        if (rW && rS && resendAuthorized(poolId, dir, { object: "reservation", epochIndex, accrualId, gen })) {
+          // the operator's journaled resend of the reservation's PERSISTED bytes
+          appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "reservation", gen,
+            poolId, epochIndex, accrualId, transitionHash: rW.transitionHash });
+          resResult = await resendAndAwait(deps, rW.transitionHash, rW.transitionBytes);
+        } else if (rW && rS) {
           // ambiguous reservation outcome: wait-only on ITS persisted hash
           resResult = await deps.awaitResult(rW.transitionHash);
         } else {
@@ -1280,9 +1333,14 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
         appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "transfer", gen: 1,
           poolId, epochIndex, accrualId, transitionHash: transferHash });
         transferResult = await deps.broadcastAndAwait(transferHash, transferBytes);
+      } else if (resendAuthorized(poolId, dir, { object: "transfer", epochIndex, accrualId, gen: 1 })) {
+        // marker set, no capture, and the operator journaled a resend: THE PERSISTED BYTES again,
+        // never rebuilt, which duty D6 makes at-most-once in execution
+        appendChecked(poolId, dir, { v: 1, kind: K.SENT_MARKER, object: "transfer", gen: 1,
+          poolId, epochIndex, accrualId, transitionHash: transferHash });
+        transferResult = await resendAndAwait(deps, transferHash, transferBytes);
       } else {
-        // marker set, no capture: wait-only on the persisted hash, never a
-        // resend (the rebroadcast needs the operator's journaled decision)
+        // marker set, no capture, no licensed resend: wait-only on the persisted hash
         transferResult = await deps.awaitResult(transferHash);
       }
       const tToken = classifyOutcome(transferResult, deps._uniqueIdentityForTest);
