@@ -250,7 +250,7 @@ const makeEpochDepsFactory = (env) => {
     const buildReservationTransition = ({ poolId, accrualId, boundTransferHash }) => {
       if (prefetched.contractNonce === null) throw new Error("the contract nonce was not prefetched for this accrual");
       const nonce = prefetched.contractNonce; prefetched.contractNonce = null; // consumed once
-      // THE IDENTIFIER IS DERIVED FROM THE BOUND TRANSFER (tegara/docs/NONCE_OWNERSHIP.md), so two
+      // THE IDENTIFIER IS DERIVED FROM THE BOUND TRANSFER (docs/NONCE_OWNERSHIP.md), so two
       // pools of this writer holding byte-identical transfers build the SAME reservation identifier
       // and the ledger refuses the second. Reservations built before this keep accrual-derived
       // identifiers; every reader fetches a reservation by its accrual, so both read alike.
@@ -574,7 +574,7 @@ const makeEpochDepsFactory = (env) => {
       buildReceiptCapture: ({ accrualId, writeAhead, result }) =>
         mkCapture({ kind: captureRecord.RECEIPT_KIND, object: "transfer", gen: writeAhead.gen || 1,
           extra: { accrualId }, rec: result, transitionHex: writeAhead.transitionBytes }),
-      // WHO ELSE CLAIMS THESE TRANSFER BYTES, on the proved route (tegara/docs/NONCE_OWNERSHIP.md).
+      // WHO ELSE CLAIMS THESE TRANSFER BYTES, on the proved route (docs/NONCE_OWNERSHIP.md).
       // Two claims can exist, each unique on the ledger: the reservation at the identifier derived
       // from the bytes, and a receipt for their hash. A LEGACY reservation of another accrual is not
       // findable here, since reservations have no transfer-hash index, and the result says nothing

@@ -1070,7 +1070,7 @@ const ownedElsewhereNote = (o) => `another accrual holds a ledger claim on this 
   `${o.claimantAccrualId.slice(0, 12)}... of pool ${o.claimantPoolId.slice(0, 12)}...), so its execution is not this accrual's payment`;
 
 /**
- * THE OWNERSHIP CHECK (tegara/docs/NONCE_OWNERSHIP.md), DETECTION rather than concurrency
+ * THE OWNERSHIP CHECK (docs/NONCE_OWNERSHIP.md), DETECTION rather than concurrency
  * protection: whether ANOTHER accrual holds a ledger claim on these transfer bytes, the reservation
  * at the identifier derived from them or a receipt for their hash. When one does, the collision is
  * journaled once per transfer generation and reported, INSTEAD of a payment. A check that could not
