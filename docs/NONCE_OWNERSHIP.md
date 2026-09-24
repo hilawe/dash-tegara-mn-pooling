@@ -74,8 +74,9 @@ The protection has a stated scope:
   the writer identity that creates the reservation;
 - only among writers that derive the entropy this way, since the contract does not enforce the
   derivation, and nothing is claimed for a writer that does otherwise;
-- not for pools with different writer identities paying from one sending identity, which would need
-  a reservation unique by transfer hash, a contract change.
+- not for pools with different writer identities paying from one sending identity. Every document
+  type in this contract is created by the contract's owner only, so different writers are
+  necessarily in different contracts, and no index relates two contracts.
 
 Reservations created before this change keep their accrual-derived identifiers. Every reader fetches
 a reservation by its accrual, so both kinds read the same way.
@@ -116,8 +117,8 @@ bound to its own bytes.
 
 An accrual that already holds a reservation cannot be given a replacement. Its reservation is
 immutable and binds the old bytes, so the ledger could not exclude a second binding. For such an
-accrual the writer corrects the record by naming the collision, and paying the member needs a
-contract change.
+accrual the writer corrects the record by naming the collision. Paying its member would need a new
+document type added to the contract, as the last section describes.
 
 ## Nonces that can no longer execute
 
@@ -128,15 +129,32 @@ its high 24 bits mark skipped nonces below that, and the window is 24. A reserva
 never execute can be rebuilt, bound to the same transfer, once the ledger proves that no reservation
 exists for its accrual.
 
+## What production must carry
+
+Two requirements follow from the limits above, and neither is met by the current contract alone.
+
+1. One contract per sending identity. Each sending identity's transfers are recorded in exactly one
+   contract. No index can relate two contracts, and the ownership check reads one, so this is a
+   deployment rule. A runner can enforce it on one host by refusing a sending identity already bound
+   to another contract. Beyond one host it is an operational assumption. A migration between
+   contracts must either finish one sending identity's pools on the old contract before paying from
+   the new one, or check claims in both.
+2. A reservation unique by transfer hash. An index on the transfer hash, in addition to the one on
+   the accrual, would make one reservation per transfer bytes a ledger property whatever a writer's
+   version, where the derived identifier makes it a convention among writers. A registered document
+   type's indices cannot change (rs-dpp `IndexLevel::validate_update`), so this belongs to the next
+   contract version.
+
 ## What remains open
 
 - Two pools whose transfers share a nonce but differ in bytes produce no false record, since only one
   can execute. If the other pool's reservation already bound its transfer before that transfer
-  became unusable, its accrual has no replacement path under the current contract.
-- Writers with different identities that share a sending identity, and writers that derive the
-  identifier another way, are outside the protection.
-- An accrual whose reservation binds bytes another accrual executed can be recorded correctly, but
-  its member cannot be paid without a contract change.
+  became unusable, its accrual has no replacement path under the current contract, and no document
+  can prove that bytes never executed.
+- An accrual whose reservation binds bytes another accrual executed can be recorded correctly, but its
+  member cannot be paid under the current contract. A document type added to the contract by update
+  could authorize one replacement on proof of the other accrual's receipt. None is built, because
+  the state no longer arises for reservations identified by their transfer.
 
 ## Evidence
 
