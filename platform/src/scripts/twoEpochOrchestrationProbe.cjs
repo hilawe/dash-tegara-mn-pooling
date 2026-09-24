@@ -303,6 +303,10 @@ const buildDeps = (platform, calc, contexts, snapshotRef, opts = {}) => {
       const bytes = "0c0d" + String(epochIndex).padStart(4, "0") + accrualId.slice(0, 4);
       return { transitionBytes: bytes, transitionHash: shaBytes(bytes) };
     },
+    // THE CLAIM READ (NONCE_OWNERSHIP.md) answers "no other accrual claims these bytes", which is
+    // TRUE in this harness: one pool, and transfer bytes that differ per accrual. The collision and
+    // failure cases live in e2DistributeTest's two-pool cases over a shared ledger.
+    transferClaims: async () => ({ claims: [] }),
     reservationDocumentIdOf: () => ({ found: true, documentId: h32("d1") }),
     buildHeaderCapture: ({ poolId, epochIndex, gen, writeAhead }) => ({ v: 1,
       kind: "tegara.e2.headerCapture.v1", object: "header", gen, poolId, epochIndex,

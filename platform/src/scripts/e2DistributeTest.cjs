@@ -108,7 +108,8 @@ const mkCapture = ({ poolId, epochIndex, gen, writeAhead }) => ({ v: 1, kind: HE
 
 const mkDeps = (poolId, dir, over = {}) => {
   // seq: every send and wait IN ORDER, so a case can check a wait FOLLOWED a send and named its hash
-  const calls = { broadcast: [], await: [], build: [], proved: [], fetch: [], docWrites: [], resDocId: [], seq: [] };
+  const calls = { broadcast: [], await: [], build: [], proved: [], fetch: [], docWrites: [], resDocId: [], seq: [],
+    nonceState: [], absence: [], boundTransfers: [], claims: [] };
   const ledger = over.ledger || new Map();
   const docKey = (object, key) => [object, key.epochIndex, key.accrualId ?? "", key.partIndex ?? ""].join("|");
   const depsLedger = { ledger, docKey };
@@ -209,29 +210,49 @@ const mkDeps = (poolId, dir, over = {}) => {
     transferBytesBound: over.transferBytesBound ?? 100,
     buildTransferTransition: ({ epochIndex, accrualId }) => {
       calls.build.push(`t:${epochIndex}:${accrualId.slice(0, 4)}`);
-      const bytes = over.transferBytesLong
+      // a case can make two pools build the SAME transfer bytes, as two pools paying one member the
+      // same amount from one tip do, and a replacement build different ones (NONCE_OWNERSHIP.md)
+      const nth = calls.build.filter((b) => typeof b === "string" && b.startsWith("t:")).length;
+      const bytes = over.transferBytes ? over.transferBytes(epochIndex, accrualId, nth) : over.transferBytesLong
         ? "0a".repeat((over.transferBytesBound ?? 100) + 1)
         : over.transferBytesAt
           ? "0a".repeat(over.transferBytesBound ?? 100)
           : "0a0b" + String(epochIndex).padStart(4, "0") + accrualId.slice(0, 4);
       return { transitionBytes: bytes, transitionHash: sha(bytes) };
     },
-    buildReservationTransition: ({ epochIndex, accrualId }) => {
+    buildReservationTransition: ({ epochIndex, accrualId, boundTransferHash }) => {
       calls.build.push(`r:${epochIndex}:${accrualId.slice(0, 4)}`);
-      const bytes = "0c0d" + String(epochIndex).padStart(4, "0") + accrualId.slice(0, 4);
+      calls.boundTransfers.push(boundTransferHash);
+      // a REBUILT reservation signs a fresh nonce, so its bytes differ; a case supplies them
+      const bytes = over.reservationBytes ? over.reservationBytes(epochIndex, accrualId, boundTransferHash)
+        : "0c0d" + String(epochIndex).padStart(4, "0") + accrualId.slice(0, 4);
       return { transitionBytes: bytes, transitionHash: sha(bytes) };
     },
+    // a soundness-review finding two reads. Absent unless a case supplies them, and a supplied one can answer, refuse
+    // or throw, so the writer's handling of each is reachable (a double that only answers could not
+    // show that an unperformed check names nothing)
+    ...(over.nonceState ? { transitionNonceState: async (object, bytes) => {
+      calls.nonceState.push(object); return over.nonceState(object, bytes); } } : {}),
+    ...(over.reservationAbsent ? { provedReservationAbsent: async (accrualId) => {
+      calls.absence.push(accrualId); return over.reservationAbsent(accrualId); } } : {}),
     // OVERRIDABLE, which it was not before, and that omission is why no offline case caught
     // a soundness-review finding. The real adapter could fail to answer (it read state only a building process
     // held); this double answered unconditionally, so the composition case below drove the
     // wait-only resume route and saw a success the production path could never produce. A
     // double without the subject's failure mode cannot exercise the subject's recovery.
+    // THE CLAIM READ (NONCE_OWNERSHIP.md), overridable so a case can answer with another accrual's
+    // claim, with none, or with a failure, since a double that only answers "unclaimed" could not
+    // show what the writer does with a collision or with an unperformed check
+    transferClaims: async (hash) => {
+      calls.claims.push(hash);
+      return (over.transferClaims || (() => ({ claims: [] })))(hash);
+    },
     reservationDocumentIdOf: async (arg) => {
       calls.resDocId.push(arg && arg.accrualId);
       return (over.reservationDocumentId || (() => ({ found: true, documentId: h32("d1") })))(arg);
     },
     buildReceiptCapture: ({ poolId: p2, epochIndex, accrualId, writeAhead }) => ({ v: 1,
-      kind: "tegara.e2.receiptCapture.v1", object: "transfer", gen: 1, poolId: p2, epochIndex,
+      kind: "tegara.e2.receiptCapture.v1", object: "transfer", gen: writeAhead.gen || 1, poolId: p2, epochIndex,
       accrualId, transitionHash: writeAhead.transitionHash, transitionBytes: writeAhead.transitionBytes,
       proofMsg: "cc".repeat(20), metadataMsg: "dd".repeat(10), inclusionHeight: "1600",
       heightRoute: "tenderdash-tx", signerIdentity: h32("f0"), signerKeyId: 2, sig: "00".repeat(65) }),
@@ -1475,6 +1496,477 @@ const openEpoch = async (pool, dir, over = {}) => {
     catch (e) { threw = String(e && e.message); }
     ok("resend: the journal refuses a second header marker with no decision before it",
       /must immediately follow its consumed rebroadcast-identical decision/.test(threw));
+  }
+}
+
+// ---- a soundness-review finding: BYTES THAT CAN NEVER EXECUTE are named, and an unusable reservation can be rebuilt ----
+{
+  const { authorizeRebuildReservation } = require("./e2OperatorDecision.cjs");
+  const tryRebuild = (args) => { try { return authorizeRebuildReservation(args); } catch (e) { return { refused: String(e && e.message) }; } };
+  const NEVER = { verdict: "never", reason: "too-far-in-past", tip: 623n, transitionNonce: 480n, observedHeight: "900" };
+  const LIVE = { verdict: "executable", reason: "above-tip", tip: 479n, transitionNonce: 480n, observedHeight: "900" };
+  const observations = (pool, dir, object) => openValidatedJournal(pool, dir).records
+    .filter((r) => r.kind === K.OBSERVATION && r.observationType === "nonce-unusable" && r.object === object);
+  const stuckReservation = async (over = {}) => {
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: (h, b) => (b.startsWith("0c0d") ? AMBIGUOUS_RESULT : SUCCESS_RESULT) }),
+      run, epochIndex: 5, accrualId: A1 });
+    const d = mkDeps(pool, dir, { awaitOutcome: () => AMBIGUOUS_RESULT, ...over });
+    const r = await runTransferStep({ poolId: pool, dir, deps: d, run, epochIndex: 5, accrualId: A1 });
+    return { pool, dir, run, r, d };
+  };
+
+  // ITEM 1, the named status, and its contrary controls
+  const dead = await stuckReservation({ nonceState: () => NEVER });
+  const obs = observations(dead.pool, dead.dir, "reservation");
+  ok("unusable: a stuck reservation whose bytes can never execute is named reservation-bytes-unusable",
+    dead.r.status === "reservation-bytes-unusable" && /nonce 480 against the signer's 623 is too-far-in-past/.test(dead.r.note));
+  ok("unusable: and the proved observation is journaled with its numbers",
+    obs.length === 1 && obs[0].transitionNonce === "480" && obs[0].observedTip === "623" && obs[0].reason === "too-far-in-past"
+      && obs[0].observedHeight === "900" && dead.d._calls.nonceState[0] === "reservation");
+  await runTransferStep({ poolId: dead.pool, dir: dead.dir, deps: mkDeps(dead.pool, dead.dir, { awaitOutcome: () => AMBIGUOUS_RESULT, nonceState: () => NEVER }),
+    run: dead.run, epochIndex: 5, accrualId: A1 });
+  ok("unusable: a second run journals no second observation", observations(dead.pool, dead.dir, "reservation").length === 1);
+  const live = await stuckReservation({ nonceState: () => LIVE });
+  ok("unusable: bytes that can still execute stay unresolved, with nothing journaled",
+    live.r.status === "reservation-unresolved-pending" && observations(live.pool, live.dir, "reservation").length === 0);
+  const ahead = await stuckReservation({ nonceState: () => ({ verdict: "not-yet", reason: "too-far-in-future", tip: 400n, transitionNonce: 480n, observedHeight: "900" }) });
+  ok("unusable: bytes too far AHEAD of the signer are not yet executable, which is temporary, so they stay unresolved",
+    ahead.r.status === "reservation-unresolved-pending" && observations(ahead.pool, ahead.dir, "reservation").length === 0);
+  const blind = await stuckReservation({ nonceState: () => { throw new Error("no raw stored value"); } });
+  ok("unusable: a nonce check that fails names nothing and says why",
+    blind.r.status === "reservation-unresolved-pending" && /nonce check could not be made \(no raw stored value\)/.test(blind.r.note)
+      && observations(blind.pool, blind.dir, "reservation").length === 0);
+  { // the transfer and the header are named the same way
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    const r = await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: (h, b) => (b.startsWith("0a0b") ? AMBIGUOUS_RESULT : SUCCESS_RESULT),
+      nonceState: (object) => (object === "transfer" ? { ...NEVER, reason: "used", tip: 134n, transitionNonce: 113n } : LIVE) }), run, epochIndex: 5, accrualId: A1 });
+    ok("unusable: a transfer whose nonce was used is named transfer-bytes-unusable, and says it has no exit yet",
+      r.status === "transfer-bytes-unusable" && /no exit exists for an unusable transfer/.test(r.note) && observations(pool, dir, "transfer").length === 1);
+    const pool2 = freshPool(); const dir2 = caseDir();
+    setStart(pool2, "5", { dir: dir2 });
+    const d2 = mkDeps(pool2, dir2, { outcome: () => AMBIGUOUS_RESULT, nonceState: () => ({ ...NEVER, reason: "at-tip", tip: 480n }) });
+    const h = await runHeaderStep({ poolId: pool2, dir: dir2, deps: d2, run: await startRun({ poolId: pool2, dir: dir2, deps: d2 }) });
+    ok("unusable: a header at the signer's tip is named header-bytes-unusable", h.status === "header-bytes-unusable" && observations(pool2, dir2, "header").length === 1);
+  }
+  { // the journal refuses an observation whose numbers contradict its reason
+    const W = openValidatedJournal(live.pool, live.dir).records.find((r) => r.object === "reservation" && r.kind === K.WRITE_AHEAD);
+    let threw = "";
+    try { appendChecked(live.pool, live.dir, { v: 1, kind: K.OBSERVATION, object: "reservation", gen: 1, poolId: live.pool, epochIndex: 5, accrualId: A1,
+      observationType: "nonce-unusable", route: "proved-nonce", targetTransitionHash: W.transitionHash,
+      transitionNonce: "480", observedTip: "485", reason: "too-far-in-past", observedHeight: "900" }); }
+    catch (e) { threw = String(e && e.message); }
+    ok("unusable: the journal refuses an observation claiming too-far-in-past for a gap of 5", /contradict its reason/.test(threw));
+    let threw2 = "";
+    try { appendChecked(live.pool, live.dir, { v: 1, kind: K.DECLARATION, object: "reservation", gen: 1, poolId: live.pool, epochIndex: 5,
+      accrualId: A1, condition: "reservation-bytes-unusable", reasoning: "no observation behind this" }); }
+    catch (e) { threw2 = String(e && e.message); }
+    ok("unusable: the journal refuses the unusable condition with no observation behind it, whatever the operator tool checks",
+      /without its exact establishing evidence/.test(threw2));
+  }
+
+  // ITEM 2, the rebuild, and its contrary controls
+  ok("rebuild refused: without the proved observation in the journal",
+    /no proved observation/.test(tryRebuild({ poolId: live.pool, epochIndex: 5, accrualId: A1, reasoning: "x", dir: live.dir }).refused || ""));
+  const auth = tryRebuild({ poolId: dead.pool, epochIndex: 5, accrualId: A1, reasoning: "bytes expired during an outage", dir: dead.dir });
+  ok("rebuild: an unusable reservation's rebuild can be authorized", auth.gen === 1 && /binds the same transfer/.test(auth.basis || ""));
+  ok("rebuild refused: a second authorization for the same generation",
+    /already authorized/.test(tryRebuild({ poolId: dead.pool, epochIndex: 5, accrualId: A1, reasoning: "x", dir: dead.dir }).refused || ""));
+  const transferW = openValidatedJournal(dead.pool, dead.dir).records.find((r) => r.object === "transfer" && r.kind === K.WRITE_AHEAD);
+  { // the ledger shows a reservation: no rebuild
+    const pool = freshPool(); const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    await runTransferStep({ poolId: pool, dir, deps: mkDeps(pool, dir, { outcome: (h, b) => (b.startsWith("0c0d") ? AMBIGUOUS_RESULT : SUCCESS_RESULT), nonceState: () => NEVER }),
+      run, epochIndex: 5, accrualId: A1 });
+    tryRebuild({ poolId: pool, epochIndex: 5, accrualId: A1, reasoning: "x", dir });
+    const present = mkDeps(pool, dir, { reservationAbsent: () => ({ absent: false, count: 1 }) });
+    const r = await runTransferStep({ poolId: pool, dir, deps: present, run, epochIndex: 5, accrualId: A1 });
+    ok("rebuild withheld: a reservation on the ledger stops it as reservation-on-ledger, building nothing",
+      r.status === "reservation-on-ledger" && present._calls.build.length === 0 && openValidatedJournal(pool, dir).perEpoch[5].accruals[A1].reservation.gen === 1);
+    const unread = mkDeps(pool, dir, { reservationAbsent: () => { throw new Error("proved read failed"); } });
+    const r2 = await runTransferStep({ poolId: pool, dir, deps: unread, run, epochIndex: 5, accrualId: A1 });
+    ok("rebuild withheld: a proved read that fails names the wait and builds nothing",
+      r2.status === "reservation-bytes-unusable" && /could not be read \(proved read failed\)/.test(r2.note) && unread._calls.build.length === 0);
+    const unwired = mkDeps(pool, dir);
+    const r3 = await runTransferStep({ poolId: pool, dir, deps: unwired, run, epochIndex: 5, accrualId: A1 });
+    ok("rebuild withheld: with no proved read wired it builds nothing", r3.status === "reservation-bytes-unusable" && unwired._calls.build.length === 0);
+  }
+  // the proved absence: a new generation, bound to the SAME transfer, and the member paid
+  const rebuilt = mkDeps(dead.pool, dead.dir, { reservationAbsent: () => ({ absent: true, count: 0 }),
+    reservationBytes: (e, a) => "0c0d" + String(e).padStart(4, "0") + a.slice(0, 4) + "02" });
+  const rr = await runTransferStep({ poolId: dead.pool, dir: dead.dir, deps: rebuilt, run: dead.run, epochIndex: 5, accrualId: A1 });
+  const after = openValidatedJournal(dead.pool, dead.dir);
+  ok("rebuild: with the ledger's proved absence a generation-2 reservation is built and the accrual completes",
+    rr.status === "completed" && after.perEpoch[5].accruals[A1].reservation.gen === 2 && rebuilt._calls.absence[0] === A1);
+  ok("rebuild: the new reservation binds the SAME transfer, which is sent with its original bytes and never rebuilt",
+    rebuilt._calls.boundTransfers.length === 1 && rebuilt._calls.boundTransfers[0] === transferW.transitionHash
+      && rebuilt._calls.build.filter((b) => b.startsWith("t:")).length === 0
+      && rebuilt._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b")).length === 1
+      && rebuilt._calls.broadcast.find((b) => b.bytes.startsWith("0a0b")).bytes === transferW.transitionBytes);
+  ok("rebuild: and only the new reservation's bytes were sent for the reservation",
+    rebuilt._calls.broadcast.filter((b) => b.bytes.startsWith("0c0d")).every((b) => b.bytes.endsWith("02")));
+}
+
+// ---- NONCE_OWNERSHIP.md: TWO POOLS OF ONE SENDING IDENTITY over ONE ledger stand-in ----
+// The stand-in enforces what the ledger does: a reservation identifier derived from the transfer
+// bytes admits one reservation per bytes (a LEGACY reservation is keyed by its accrual instead), a
+// transfer hash executes once, a second send of executed bytes gets the node's duplicate answer, and
+// receipts are unique by transfer hash. Every case below has a second pool paying from the same
+// sender, by the durable rule that ownership failures live between pools.
+{
+  const { authorizeTransferReplacement, D6_STATUS, REPLACE_BASIS } = require("./e2OperatorDecision.cjs");
+  const tryReplace = (args) => { try { return authorizeTransferReplacement(args); } catch (e) { return { refused: String(e && e.message) }; } };
+  const SAME = "0a0b0005" + "5a5a";                        // two pools, one member, one amount, one tip
+  const REFUSED_PRESENT = { outcome: "execution-refusal", code: 40100, data: "00", message: "document already present" };
+  // A CLAIM RECORDS ITS REAL ACCRUAL AND POOL. The first version recorded accrual A1 for every
+  // reservation, so no case could tell "another accrual of this pool" from "this accrual", and a
+  // review removed the writer's accrual comparison with every case still passing.
+  const mkLedger = () => ({ resByBytes: new Map(), resByAccrual: new Map(), resOwner: new Map(), executed: new Set(), receipts: new Map(), builds: new Map() });
+  // pool deps over the shared ledger; legacy=true builds reservations keyed by accrual, as before
+  const onLedger = (L, pool, dir, { legacy = false, over = {} } = {}) => mkDeps(pool, dir, {
+    // counted PER POOL AND ACCRUAL across runs: each accrual's first transfer is the shared one, and
+    // any later build, a replacement at a fresh nonce, has bytes of its own
+    transferBytes: (e, a) => { const k = `${pool}:${a}`; const n = (L.builds.get(k) || 0) + 1; L.builds.set(k, n);
+      return n === 1 ? SAME : SAME + "0" + n + pool.slice(0, 4) + a.slice(0, 4); },
+    reservationBytes: (e, a, bound) => {
+      const b = "0c0d" + bound.slice(0, 8) + pool.slice(0, 4) + a.slice(0, 4);
+      L.resOwner.set(b, { accrualId: a, poolId: pool }); return b; },
+    outcome: (hash, bytes) => {
+      if (bytes.startsWith("0c0d")) {
+        const owner = L.resOwner.get(bytes);
+        const key = legacy ? `acc:${pool}:${owner.accrualId}` : `bytes:${bytes.slice(4, 12)}`;
+        const accKey = `${pool}:${owner.accrualId}`;
+        if (L.resByBytes.has(key) || L.resByAccrual.has(accKey)) return REFUSED_PRESENT;
+        L.resByBytes.set(key, { ...owner, legacy });
+        L.resByAccrual.set(accKey, bytes.slice(4, 12));
+        return SUCCESS_RESULT;
+      }
+      if (bytes.startsWith("0a0b")) {
+        if (L.executed.has(hash)) return AMBIGUOUS_RESULT;  // the node's duplicate-in-cache answer
+        L.executed.add(hash); return SUCCESS_RESULT;
+      }
+      return SUCCESS_RESULT;
+    },
+    awaitOutcome: (hash) => (L.executed.has(hash) ? SUCCESS_RESULT : AMBIGUOUS_RESULT),
+    // the claim read: a NEW-style reservation at the bytes-derived identifier, and a receipt for the hash
+    transferClaims: (hash) => ({ claims: [
+      ...[...L.resByBytes.entries()].filter(([k, v]) => !v.legacy && k === `bytes:${hash.slice(0, 8)}`)
+        .map(([, v]) => ({ kind: "reservation-by-transfer", accrualId: v.accrualId, poolId: v.poolId })),
+      ...(L.receipts.has(hash) ? [{ kind: "receipt-by-transition", ...L.receipts.get(hash) }] : []),
+    ] }),
+    reservationAbsent: (a) => { const held = L.resByAccrual.has(`${pool}:${a}`); return { absent: !held, count: held ? 1 : 0 }; },
+    ...over });
+  const capturesOf = (pool, dir) => openValidatedJournal(pool, dir).records.filter((r) => r.kind === K.RECEIPT_CAPTURE || /receiptCapture/.test(r.kind));
+  const sentTransfers = (pool, dir) => new Set(openValidatedJournal(pool, dir).records
+    .filter((r) => r.object === "transfer" && r.kind === K.SENT_MARKER).map((r) => r.transitionHash));
+
+  { // THE TWO-STORE RACE, new style: both pools built the SAME transfer bytes from one tip
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX), eY = await openEpoch(Y, dY);
+    const y1 = await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY), run: eY.run, epochIndex: 5, accrualId: A1 });
+    L.receipts.set(sha(SAME), { accrualId: A1, poolId: Y });   // Y's receipt, as the ledger now holds it
+    const dx = onLedger(L, X, dX);
+    const x1 = await runTransferStep({ poolId: X, dir: dX, deps: dx, run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("race: the first pool pays with the shared bytes", y1.status === "completed" && L.executed.has(sha(SAME)));
+    ok("race: the second pool's reservation for the SAME bytes is refused by the ledger, and it is named, sending nothing",
+      x1.status === "transfer-owned-elsewhere" && /reservation-by-transfer/.test(x1.note)
+        && dx._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b")).length === 0);
+    const auth = tryReplace({ poolId: X, epochIndex: 5, accrualId: A1, reasoning: "bytes claimed by another pool", dir: dX });
+    ok("race: the operator authorizes a replacement, with the refused reservation's rebuild", auth.gen === 1 && auth.alsoReservation === true);
+    const dx2 = onLedger(L, X, dX);
+    const x2 = await runTransferStep({ poolId: X, dir: dX, deps: dx2, run: eX.run, epochIndex: 5, accrualId: A1 });
+    const after = openValidatedJournal(X, dX);
+    ok("race: with the ledger proving no reservation, a generation-2 transfer is built, bound, sent and captured",
+      x2.status === "completed" && after.perEpoch[5].accruals[A1].transfer.gen === 2 && after.perEpoch[5].accruals[A1].reservation.gen === 2);
+    const xSent = sentTransfers(X, dX);
+    ok("race: the replaced pool SENT only its replacement, never the other pool's bytes",
+      xSent.size === 1 && !xSent.has(sha(SAME)));
+    ok("race: two distinct transfers executed, one per accrual, so the member is paid once for each",
+      L.executed.size === 2 && L.executed.has(sha(SAME)) && [...xSent].every((h) => L.executed.has(h)));
+    ok("race: each pool's one capture names its own transfer",
+      capturesOf(X, dX).length === 1 && capturesOf(X, dX)[0].transitionHash !== sha(SAME) && capturesOf(Y, dY).length === 1
+        && capturesOf(Y, dY)[0].transitionHash === sha(SAME));
+  }
+  { // THE a soundness-review finding SHAPE, legacy reservations: the second pool's reservation is accepted, its send
+    // meets the node's duplicate answer, and the wait returns the other pool's execution
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX), eY = await openEpoch(Y, dY);
+    await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY, { legacy: true }), run: eY.run, epochIndex: 5, accrualId: A1 });
+    L.receipts.set(sha(SAME), { accrualId: A1, poolId: Y });
+    const dx = onLedger(L, X, dX, { legacy: true });
+    const x0 = await runTransferStep({ poolId: X, dir: dX, deps: dx, run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("legacy: a first send of bytes already executed gets only the node's duplicate answer, and stays unresolved",
+      x0.status === "transfer-unresolved-pending" && capturesOf(X, dX).length === 0);
+    const dxr = onLedger(L, X, dX, { legacy: true });
+    const x1 = await runTransferStep({ poolId: X, dir: dX, deps: dxr, run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("legacy: the next run's WAIT returns the other pool's execution, and its receipt names the collision, capturing nothing",
+      x1.status === "transfer-owned-elsewhere" && /receipt-by-transition/.test(x1.note) && dxr._calls.await.length === 1 && capturesOf(X, dX).length === 0);
+    ok("legacy: the replacement is refused, because the accrual's reservation succeeded and is immutable under v11",
+      /immutable under contract v11/.test(tryReplace({ poolId: X, epochIndex: 5, accrualId: A1, reasoning: "x", dir: dX }).refused || ""));
+    ok("legacy: only one transfer ever executed, so the member was paid once and no pool records a second payment",
+      L.executed.size === 1 && capturesOf(Y, dY).length === 1);
+  }
+  { // CHECK 3, AFTER A RESTART: a capture journaled before the check existed is named on resume
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir();
+    const eX = await openEpoch(X, dX);
+    // an older writer captured without a check: the claim read answered nothing then
+    await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { legacy: true, over: { transferClaims: () => ({ claims: [] }),
+      documents: undefined } }), run: eX.run, epochIndex: 5, accrualId: A1 });
+    const Y = freshPool();
+    L.receipts.set(sha(SAME), { accrualId: A1, poolId: Y });   // the ledger shows ANOTHER pool's receipt for the hash
+    const r = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { legacy: true }), run: eX.run, epochIndex: 5, accrualId: A1 });
+    const obs = openValidatedJournal(X, dX).records.filter((x) => x.observationType === "transfer-owned-elsewhere");
+    ok("restart: a resume names a capture whose bytes another pool's receipt claims, after the capture",
+      r.status === "transfer-owned-elsewhere" && obs.length === 1 && obs[0].claimantPoolId === Y);
+    const again = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { legacy: true }), run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("restart: and a later run reports it again without a second observation",
+      again.status === "transfer-owned-elsewhere" && openValidatedJournal(X, dX).records.filter((x) => x.observationType === "transfer-owned-elsewhere").length === 1);
+  }
+  { // AN UNPERFORMED CHECK records no payment, and a later run with the check captures
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX); await openEpoch(Y, dY);
+    const r1 = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { over: { transferClaims: () => { throw new Error("proved read failed"); } } }),
+      run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("unchecked: a claim read that fails captures nothing and says so",
+      r1.status === "transfer-unresolved-pending" && /unchecked ownership \(proved read failed\)/.test(r1.note) && capturesOf(X, dX).length === 0);
+    const r2 = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("unchecked: the next run, with the read working and only this pool's own claim, captures", r2.status === "completed" && capturesOf(X, dX).length === 1);
+  }
+  { // R1 ON THE LEDGER: an authorized replacement does not run while the accrual holds a reservation
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX), eY = await openEpoch(Y, dY);
+    await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY), run: eY.run, epochIndex: 5, accrualId: A1 });
+    await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run: eX.run, epochIndex: 5, accrualId: A1 });
+    tryReplace({ poolId: X, epochIndex: 5, accrualId: A1, reasoning: "bytes claimed", dir: dX });
+    const held = onLedger(L, X, dX, { over: { reservationAbsent: () => ({ absent: false, count: 1 }) } });
+    const r = await runTransferStep({ poolId: X, dir: dX, deps: held, run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("R1: with a reservation on the ledger the replacement builds nothing and says why",
+      r.status === "transfer-owned-elsewhere" && /no replacement/.test(r.note) && held._calls.build.filter((b) => typeof b === "string" && b.startsWith("t:")).length === 0);
+    const failed = onLedger(L, X, dX, { over: { reservationAbsent: () => { throw new Error("proved read failed"); } } });
+    const r2 = await runTransferStep({ poolId: X, dir: dX, deps: failed, run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("R1: a proved read that fails builds nothing", r2.status === "transfer-owned-elsewhere" && /could not be read/.test(r2.note)
+      && failed._calls.build.filter((b) => typeof b === "string" && b.startsWith("t:")).length === 0);
+  }
+  { // THE JOURNAL'S OWN RULES for replacements
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX), eY = await openEpoch(Y, dY);
+    await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY), run: eY.run, epochIndex: 5, accrualId: A1 });
+    await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run: eX.run, epochIndex: 5, accrualId: A1 });
+    const tryAppend = (rec) => { try { appendChecked(X, dX, rec); return ""; } catch (e) { return String(e && e.message); } };
+    ok("journal: a generation-2 transfer write-ahead with no replacement decision is refused",
+      /no unconsumed rebuild-transfer decision/.test(tryAppend({ v: 1, kind: K.WRITE_AHEAD, object: "transfer", gen: 2, poolId: X, epochIndex: 5, accrualId: A1,
+        transitionBytes: "0a0b00059999", transitionHash: sha("0a0b00059999") })));
+    ok("journal: an observation naming THIS accrual and pool as the claimant is refused",
+      /names this accrual as the claimant/.test(tryAppend({ v: 1, kind: K.OBSERVATION, object: "transfer", gen: 1, poolId: X, epochIndex: 5, accrualId: A1,
+        observationType: "transfer-owned-elsewhere", route: "proved-query", targetTransitionHash: sha(SAME),
+        claimKind: "receipt-by-transition", claimantAccrualId: A1, claimantPoolId: X })));
+    tryReplace({ poolId: X, epochIndex: 5, accrualId: A1, reasoning: "bytes claimed", dir: dX });
+    await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("journal: after a replacement, a sent marker on the OLD generation is refused",
+      /not the current one/.test(tryAppend({ v: 1, kind: K.SENT_MARKER, object: "transfer", gen: 1, poolId: X, epochIndex: 5, accrualId: A1, transitionHash: sha(SAME) })));
+  }
+  { // THE SAME POOL, ANOTHER ACCRUAL. Ownership is by accrual AND pool, so a claim held by another
+    // accrual of THIS pool is a collision as much as one held by another pool. The two accruals'
+    // identifiers differ ONLY IN THEIR LAST CHARACTER, so a comparison of a prefix cannot pass (a
+    // review compared the first eight characters, and the earlier pair differed within them).
+    const L = mkLedger();
+    const A1_LAST = A1.slice(0, 63) + (A1[63] === "0" ? "1" : "0");
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    // each row needs its own owner; the ledger stand-in builds the same bytes for both, as two
+    // transfers of one amount to one member from one tip would be. Every deps of X carries the rows.
+    const rowsFor = () => [{ accrualId: A1, amountCredits: "1000000", recipientId: h32("71") },
+      { accrualId: A1_LAST, amountCredits: "1000000", recipientId: h32("72") }];
+    const eX = await openEpoch(X, dX, { rowsFor }), eY = await openEpoch(Y, dY);
+    // the other pool of this sender pays first, with bytes of its own, so its claim concerns nothing here
+    await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY, { over: { transferBytes: () => "0a0b0005" + "7b7b" } }),
+      run: eY.run, epochIndex: 5, accrualId: A1 });
+    const x1 = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { over: { rowsFor } }), run: eX.run, epochIndex: 5, accrualId: A1 });
+    L.receipts.set(sha(SAME), { accrualId: A1, poolId: X });
+    const dx2 = onLedger(L, X, dX, { over: { rowsFor } });
+    const x2 = await runTransferStep({ poolId: X, dir: dX, deps: dx2, run: eX.run, epochIndex: 5, accrualId: A1_LAST });
+    const obs = openValidatedJournal(X, dX).records.filter((r) => r.observationType === "transfer-owned-elsewhere");
+    ok("same pool: the first accrual pays with the shared bytes", x1.status === "completed");
+    ok("same pool: a second accrual of the SAME pool, its identifier differing only in the last character, is named as a collision with the first, sending nothing",
+      x2.status === "transfer-owned-elsewhere" && obs.length === 1 && obs[0].accrualId === A1_LAST
+        && obs[0].claimantAccrualId === A1 && obs[0].claimantPoolId === X
+        && dx2._calls.broadcast.filter((b) => b.bytes.startsWith("0a0b")).length === 0);
+  }
+  { // A MIXED LEDGER, WHERE THE FIRST CLAIM IS THIS ACCRUAL'S OWN. The other pool is a legacy writer,
+    // so its reservation did not take the identifier derived from the bytes, and this pool's
+    // new-style reservation for the same bytes is accepted. The claim read then lists this accrual's
+    // own reservation FIRST and the other pool's receipt second, so only a search of every claim
+    // finds the collision (a review searched the first only and every case passed).
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX), eY = await openEpoch(Y, dY);
+    await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY, { legacy: true }), run: eY.run, epochIndex: 5, accrualId: A1 });
+    L.receipts.set(sha(SAME), { accrualId: A1, poolId: Y });
+    const x0 = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run: eX.run, epochIndex: 5, accrualId: A1 });
+    const seen = [];
+    const dx = onLedger(L, X, dX);
+    const inner = dx.transferClaims;
+    dx.transferClaims = async (h) => { const c = await inner(h); seen.push(c.claims.map((x) => `${x.kind}:${x.poolId === X ? "own" : "other"}`)); return c; };
+    const x1 = await runTransferStep({ poolId: X, dir: dX, deps: dx, run: eX.run, epochIndex: 5, accrualId: A1 });
+    const obs = openValidatedJournal(X, dX).records.filter((r) => r.observationType === "transfer-owned-elsewhere");
+    ok("mixed ledger: this pool's own reservation for the shared bytes is accepted, and its send of executed bytes stays unresolved",
+      x0.status === "transfer-unresolved-pending" && L.resByBytes.has(`bytes:${sha(SAME).slice(0, 8)}`));
+    ok("mixed ledger: the claim read lists this accrual's own reservation first and the other pool's receipt second",
+      seen.length >= 1 && seen[seen.length - 1].join() === "reservation-by-transfer:own,receipt-by-transition:other");
+    ok("mixed ledger: the collision is named through the second claim, and nothing is captured",
+      x1.status === "transfer-owned-elsewhere" && obs.length === 1 && obs[0].claimKind === "receipt-by-transition"
+        && obs[0].claimantPoolId === Y && capturesOf(X, dX).length === 0);
+  }
+  // ---- LATER GENERATIONS. Every replacement case above stopped at generation 2, so a review could
+  // exempt generation 2 onward from the resume check, or generation 3 from the grammar's decision
+  // and binding rules, and every case passed. The helper drives an accrual to any generation, each
+  // earlier one lost to a collision at its reservation: another pool of this sender already holds
+  // the reservation derived from that generation's bytes. ----
+  const bytesAt = (pool, acc, g) => (g === 1 ? SAME : SAME + "0" + g + pool.slice(0, 4) + acc.slice(0, 4));
+  const claimReservationAt = (L, pool, acc, g, Z) =>
+    L.resByBytes.set(`bytes:${sha(bytesAt(pool, acc, g)).slice(0, 8)}`, { accrualId: A1, poolId: Z, legacy: false });
+  // runs generations 1 .. g-1 into collisions and authorizes each replacement; generation g is next.
+  // It REPORTS rather than throws, so a variant that breaks the path is a named failure, not a crash.
+  const toGeneration = async (L, X, dX, run, g, Z) => {
+    for (let k = 1; k < g; k++) {
+      claimReservationAt(L, X, A1, k, Z);
+      let r;
+      try { r = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run, epochIndex: 5, accrualId: A1 }); }
+      catch (e) { return `generation ${k} threw: ${(e && e.message) || e}`; }
+      if (r.status !== "transfer-owned-elsewhere") return `generation ${k} ended ${r.status}`;
+      const a = tryReplace({ poolId: X, epochIndex: 5, accrualId: A1, reasoning: `generation ${k} claimed elsewhere`, dir: dX });
+      if (a.refused || a.gen !== k) return `the replacement of generation ${k} was not authorized: ${a.refused || a.gen}`;
+    }
+    return "";
+  };
+  { // THE RESUME CHECK, as a matrix: generations 1 and 2, crossed with another pool's claim, another
+    // accrual of THIS pool's claim, and a claim read that fails
+    const A1_LAST = A1.slice(0, 63) + (A1[63] === "0" ? "1" : "0");
+    for (const g of [1, 2]) {
+      for (const who of ["another pool", "another accrual of this pool", "a failed read"]) {
+        const L = mkLedger();
+        const X = freshPool(), dX = caseDir(), Z = freshPool();
+        const eX = await openEpoch(X, dX);
+        const reached = await toGeneration(L, X, dX, eX.run, g, Z);
+        ok(`resume check, generation ${g}, ${who}: the accrual reaches generation ${g}${reached ? ` (${reached})` : ""}`, reached === "");
+        if (reached) continue;
+        const stall = onLedger(L, X, dX, { over: { docBehavior: (object, key) => (object === "part" && key.partIndex === 2) ? "ambiguous" : "ok" } });
+        const r0 = await runTransferStep({ poolId: X, dir: dX, deps: stall, run: eX.run, epochIndex: 5, accrualId: A1 });
+        const hash = sha(bytesAt(X, A1, g));
+        const captured = r0.status === "documents-pending" && capturesOf(X, dX).length === 1 && capturesOf(X, dX)[0].transitionHash === hash;
+        let over = { ledger: stall._ledger.ledger };
+        if (who === "another pool") L.receipts.set(hash, { accrualId: A1, poolId: Z });
+        if (who === "another accrual of this pool") L.receipts.set(hash, { accrualId: A1_LAST, poolId: X });
+        if (who === "a failed read") over = { ...over, transferClaims: () => { throw new Error("proved read failed"); } };
+        const resumed = onLedger(L, X, dX, { over });
+        const r1 = await runTransferStep({ poolId: X, dir: dX, deps: resumed, run: eX.run, epochIndex: 5, accrualId: A1 });
+        const noReceipt = !resumed._calls.docWrites.some((w) => w.object === "receipt");
+        if (who === "a failed read") {
+          ok(`resume check, generation ${g}: a capture resumed with a failed claim read writes no receipt`,
+            captured && r1.status === "documents-pending" && /ownership check could not be made/.test(r1.note) && noReceipt);
+        } else {
+          const obs = openValidatedJournal(X, dX).records.filter((x) => x.observationType === "transfer-owned-elsewhere" && x.gen === g);
+          ok(`resume check, generation ${g}: a capture whose bytes ${who} claims is named, and no receipt is written`,
+            captured && r1.status === "transfer-owned-elsewhere" && obs.length === 1 && obs[0].targetTransitionHash === hash
+              && obs[0].claimantPoolId === (who === "another pool" ? Z : X)
+              && obs[0].claimantAccrualId === (who === "another pool" ? A1 : A1_LAST) && noReceipt);
+        }
+      }
+    }
+  }
+  { // THE THIRD GENERATION, through the writer: two collisions, two decisions, one payment
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Z = freshPool();
+    const eX = await openEpoch(X, dX);
+    const reached = await toGeneration(L, X, dX, eX.run, 3, Z);
+    const r = reached ? { status: `not reached: ${reached}` } : await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run: eX.run, epochIndex: 5, accrualId: A1 });
+    const j = openValidatedJournal(X, dX);
+    const sent = [...sentTransfers(X, dX)];
+    ok("third generation: after two collisions the accrual pays once, sending only its third generation's bytes",
+      r.status === "completed" && j.perEpoch[5].accruals[A1].transfer.gen === 3 && sent.length === 1
+        && sent[0] === sha(bytesAt(X, A1, 3)) && L.executed.has(sent[0]));
+  }
+  { // THE GRAMMAR AT THE THIRD GENERATION: a write-ahead needs its own decision, and a send needs a
+    // reservation bound to its own bytes. The generation-2 reservation here SUCCEEDS and binds the
+    // generation-2 bytes, which another pool had already executed, so the collision is named through
+    // that pool's receipt; the grammar is then driven directly, one generation later than the
+    // generation-2 binding case above.
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Z = freshPool();
+    const eX = await openEpoch(X, dX);
+    const reached = await toGeneration(L, X, dX, eX.run, 2, Z);
+    const h2 = sha(bytesAt(X, A1, 2));
+    L.executed.add(h2); L.receipts.set(h2, { accrualId: A1, poolId: Z });
+    const run2 = async () => (reached ? { status: `not reached: ${reached}` }
+      : runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX), run: eX.run, epochIndex: 5, accrualId: A1 }));
+    await run2();                                   // the send of executed bytes stays unresolved
+    const r2 = await run2();                        // the wait finds the execution; the receipt names Z
+    const tryAppend = (rec) => { try { appendChecked(X, dX, rec); return ""; } catch (e) { return String(e && e.message); } };
+    const subject = { poolId: X, epochIndex: 5, accrualId: A1 };
+    const REPL3 = "0a0b0005" + "3c3c";
+    const w3 = { v: 1, kind: K.WRITE_AHEAD, object: "transfer", gen: 3, ...subject, transitionBytes: REPL3, transitionHash: sha(REPL3) };
+    const acc2 = reached ? null : openValidatedJournal(X, dX).perEpoch[5].accruals[A1];
+    ok("grammar, generation 3: the second collision is named at generation 2, with the generation-2 reservation held",
+      r2.status === "transfer-owned-elsewhere" && !!acc2 && acc2.transfer.gen === 2 && acc2.reservation.gen === 2);
+    ok("grammar, generation 3: a third-generation write-ahead with no decision after the second collision is refused",
+      /no unconsumed rebuild-transfer decision/.test(tryAppend(w3)));
+    // the decision the operator command refuses for a held reservation, appended directly
+    const decided = tryAppend({ v: 1, kind: K.DECLARATION, object: "transfer", gen: 2, ...subject, condition: "transfer-owned-elsewhere", reasoning: "direct" })
+      + tryAppend({ v: 1, kind: K.DECISION, object: "transfer", gen: 2, ...subject, condition: "transfer-owned-elsewhere", action: "rebuild-transfer",
+        d6Status: D6_STATUS, reasoning: `direct | basis: ${REPLACE_BASIS}` });
+    ok("grammar, generation 3: with the decision journaled, the write-ahead is admitted", decided === "" && tryAppend(w3) === "");
+    ok("grammar, generation 3: its sent marker is refused while the accrual's reservation binds the generation-2 bytes",
+      /reservation's valid W-S-J holder chain/.test(tryAppend({ v: 1, kind: K.SENT_MARKER, object: "transfer", gen: 3, ...subject, transitionHash: sha(REPL3) })));
+  }
+  { // CHECK 3 WITH THE READ FAILING, on a capture whose documents are unfinished: no receipt is
+    // written on an unchecked capture. The only failing-read case before this one was the check
+    // before capture, so removing this path's refusal left every case passing.
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX), eY = await openEpoch(Y, dY);
+    await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY, { over: { transferBytes: () => "0a0b0005" + "7b7b" } }),
+      run: eY.run, epochIndex: 5, accrualId: A1 });
+    const stall = onLedger(L, X, dX, { over: { docBehavior: (object, key) => (object === "part" && key.partIndex === 2) ? "ambiguous" : "ok" } });
+    const r0 = await runTransferStep({ poolId: X, dir: dX, deps: stall, run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("check 3 unread: the transfer is captured and its documents are left unfinished", r0.status === "documents-pending" && capturesOf(X, dX).length === 1);
+    const unread = onLedger(L, X, dX, { over: { ledger: stall._ledger.ledger, transferClaims: () => { throw new Error("proved read failed"); } } });
+    const r1 = await runTransferStep({ poolId: X, dir: dX, deps: unread, run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("check 3 unread: a resume whose claim read fails writes no receipt and says the check could not be made",
+      r1.status === "documents-pending" && /ownership check could not be made/.test(r1.note)
+        && !unread._calls.docWrites.some((w) => w.object === "receipt"));
+    const r2 = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { over: { ledger: stall._ledger.ledger } }),
+      run: eX.run, epochIndex: 5, accrualId: A1 });
+    ok("check 3 unread: with the read working and no other claim, the documents complete", r2.status === "completed");
+  }
+  { // THE JOURNAL BINDS A REPLACEMENT'S SEND TO ITS OWN RESERVATION. The writer's R1 check keeps it
+    // from building this sequence, so the grammar's rule is exercised here directly: a generation-2
+    // transfer whose accrual's current reservation binds the generation-1 bytes cannot be marked sent.
+    const L = mkLedger();
+    const X = freshPool(), dX = caseDir(), Y = freshPool(), dY = caseDir();
+    const eX = await openEpoch(X, dX), eY = await openEpoch(Y, dY);
+    await runTransferStep({ poolId: Y, dir: dY, deps: onLedger(L, Y, dY, { legacy: true }), run: eY.run, epochIndex: 5, accrualId: A1 });
+    L.receipts.set(sha(SAME), { accrualId: A1, poolId: Y });
+    await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { legacy: true }), run: eX.run, epochIndex: 5, accrualId: A1 });
+    const named = await runTransferStep({ poolId: X, dir: dX, deps: onLedger(L, X, dX, { legacy: true }), run: eX.run, epochIndex: 5, accrualId: A1 });
+    const tryAppend = (rec) => { try { appendChecked(X, dX, rec); return ""; } catch (e) { return String(e && e.message); } };
+    const subject = { poolId: X, epochIndex: 5, accrualId: A1 };
+    // the decision the operator command refuses for a held reservation, appended directly
+    const decided = tryAppend({ v: 1, kind: K.DECLARATION, object: "transfer", gen: 1, ...subject, condition: "transfer-owned-elsewhere", reasoning: "direct" })
+      + tryAppend({ v: 1, kind: K.DECISION, object: "transfer", gen: 1, ...subject, condition: "transfer-owned-elsewhere", action: "rebuild-transfer",
+        d6Status: D6_STATUS, reasoning: `direct | basis: ${REPLACE_BASIS}` });
+    const REPL = "0a0b0005" + "6c6c";
+    const w2 = tryAppend({ v: 1, kind: K.WRITE_AHEAD, object: "transfer", gen: 2, ...subject, transitionBytes: REPL, transitionHash: sha(REPL) });
+    ok("binding: the collision is named, the reservation is held, and a replacement write-ahead is admitted by the grammar",
+      named.status === "transfer-owned-elsewhere" && decided === "" && w2 === "");
+    ok("binding: a generation-2 sent marker is refused while the accrual's reservation binds the generation-1 bytes",
+      /reservation's valid W-S-J holder chain/.test(tryAppend({ v: 1, kind: K.SENT_MARKER, object: "transfer", gen: 2, ...subject, transitionHash: sha(REPL) })));
   }
 }
 

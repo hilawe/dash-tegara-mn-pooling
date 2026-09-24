@@ -34,6 +34,24 @@
  *     lists every header, reservation and transfer marked sent with no outcome, one per line
  *   TEGARA_ENV_PATH=<abs path to .env.X> node src/scripts/e2OperatorDecision.cjs \
  *     rebroadcast <poolId> <header|reservation|transfer> <epochIndex> [<accrualId>] --reason "<text>"
+ *   TEGARA_ENV_PATH=<abs path to .env.X> node src/scripts/e2OperatorDecision.cjs \
+ *     rebuild-reservation <poolId> <epochIndex> <accrualId> --reason "<text>"
+ *   TEGARA_ENV_PATH=<abs path to .env.X> node src/scripts/e2OperatorDecision.cjs \
+ *     rebuild-transfer <poolId> <epochIndex> <accrualId> --reason "<text>"
+ *
+ * THE REPLACEMENT (tegara/docs/NONCE_OWNERSHIP.md, the replacement rule). A new transfer generation is
+ * authorized only when the journal holds the collision observation for the current one (R2) and
+ * the accrual's reservation has not succeeded; the writer then proves on the ledger that the accrual
+ * holds no reservation (R1) before building anything. When the accrual's reservation create was
+ * refused, the matching reservation rebuild is journaled too, so the new transfer can be bound.
+ *
+ * THE REBUILD (a soundness-review finding). A resend helps only while the bytes can still execute. Once the signer's nonce
+ * has moved past them for good, identical bytes are refused forever, and a reservation's accrual can
+ * be paid only through a NEW reservation bound to the same transfer. The decision is accepted only
+ * when the journal already holds the proved observation that the reservation's bytes can never
+ * execute, which a distribution run journals when it finds so. The writer then rebuilds only after
+ * the ledger proves that no reservation exists for the accrual, so the old bytes never executed
+ * either. A transfer has no such exit: its reservation fixes the accrual to that transfer's hash.
  */
 const envStore = require("./envStore.cjs");
 const { openValidatedJournal, K } = require("./e2Journal.cjs");
@@ -137,7 +155,101 @@ const authorizeRebroadcast = ({ poolId, object, epochIndex, accrualId, reasoning
   }
 };
 
-module.exports = { authorizeRebroadcast, unresolvedSubjects, listUnresolved, BASIS, D6_STATUS };
+const REBUILD_BASIS = "the persisted reservation can never execute (a proved nonce observation), the writer rebuilds only " +
+  "after the ledger proves no reservation exists for the accrual, and the rebuilt reservation binds the same transfer";
+
+/**
+ * authorizeRebuildReservation({ poolId, epochIndex, accrualId, reasoning, dir })
+ *   -> { poolId, epochIndex, accrualId, gen, basis }
+ */
+const authorizeRebuildReservation = ({ poolId, epochIndex, accrualId, reasoning, dir } = {}) => {
+  if (typeof poolId !== "string" || !HEX32.test(poolId)) refuse("the pool identifier must be 64 lowercase hex");
+  if (!Number.isSafeInteger(epochIndex) || epochIndex < 0 || epochIndex > 0xffffffff) refuse("the epoch index must be a u32 integer");
+  if (typeof accrualId !== "string" || !HEX32.test(accrualId)) refuse("a reservation decision needs the accrual identifier as 64 lowercase hex");
+  if (typeof reasoning !== "string" || reasoning.trim().length === 0) refuse("the operator's reasoning is required");
+  envStore.acquireOpLock(poolRunLockName(poolId));
+  try {
+    const read = openValidatedJournal(poolId, dir);
+    const view = viewOf(read, "reservation", epochIndex, accrualId);
+    if (!view) refuse("the journal holds no reservation for this subject");
+    if (view.state !== "sent") {
+      refuse(`the reservation is ${JSON.stringify(view.state)}, and only one marked sent with no outcome can be rebuilt this way`);
+    }
+    const gen = view.gen;
+    const mine = (r) => r.object === "reservation" && r.epochIndex === epochIndex && r.accrualId === accrualId && r.gen === gen;
+    if (!read.records.some((r) => mine(r) && r.kind === K.OBSERVATION && r.observationType === "nonce-unusable")) {
+      refuse("the journal holds no proved observation that this reservation's bytes can never execute; run the distribution, which checks and records it");
+    }
+    if (read.records.some((r) => mine(r) && r.kind === K.DECISION && r.action === "rebuild-reservation")) {
+      refuse("a rebuild is already authorized for this generation; run the distribution to act on it");
+    }
+    const subject = { poolId, epochIndex, accrualId };
+    appendChecked(poolId, dir, { v: 1, kind: K.DECLARATION, object: "reservation", gen, ...subject,
+      condition: "reservation-bytes-unusable", reasoning: reasoning.trim() });
+    appendChecked(poolId, dir, { v: 1, kind: K.DECISION, object: "reservation", gen, ...subject,
+      condition: "reservation-bytes-unusable", action: "rebuild-reservation", d6Status: D6_STATUS,
+      reasoning: `${reasoning.trim()} | basis: ${REBUILD_BASIS}` });
+    return { poolId, epochIndex, accrualId, gen, basis: REBUILD_BASIS };
+  } finally {
+    envStore.releaseOpLock(poolRunLockName(poolId));
+  }
+};
+
+const REPLACE_BASIS = "another accrual holds a ledger claim on the current transfer's bytes (a journaled collision " +
+  "observation); the writer replaces only after the ledger proves this accrual holds no reservation, so its only " +
+  "reservation binds the replacement and one payment per accrual holds";
+
+/**
+ * authorizeTransferReplacement({ poolId, epochIndex, accrualId, reasoning, dir })
+ *   -> { poolId, epochIndex, accrualId, gen, alsoReservation, basis }
+ */
+const authorizeTransferReplacement = ({ poolId, epochIndex, accrualId, reasoning, dir } = {}) => {
+  if (typeof poolId !== "string" || !HEX32.test(poolId)) refuse("the pool identifier must be 64 lowercase hex");
+  if (!Number.isSafeInteger(epochIndex) || epochIndex < 0 || epochIndex > 0xffffffff) refuse("the epoch index must be a u32 integer");
+  if (typeof accrualId !== "string" || !HEX32.test(accrualId)) refuse("a transfer decision needs the accrual identifier as 64 lowercase hex");
+  if (typeof reasoning !== "string" || reasoning.trim().length === 0) refuse("the operator's reasoning is required");
+  envStore.acquireOpLock(poolRunLockName(poolId));
+  try {
+    const read = openValidatedJournal(poolId, dir);
+    const t = viewOf(read, "transfer", epochIndex, accrualId);
+    if (!t) refuse("the journal holds no transfer for this subject");
+    const gen = t.gen;
+    const mine = (object, g) => (r) => r.object === object && r.epochIndex === epochIndex && r.accrualId === accrualId && r.gen === g;
+    if (!read.records.some((r) => mine("transfer", gen)(r) && r.kind === K.OBSERVATION && r.observationType === "transfer-owned-elsewhere")) {
+      refuse("the journal holds no observation that another accrual claims this transfer's bytes; run the distribution, which checks and records it");
+    }
+    if (read.records.some((r) => mine("transfer", gen)(r) && r.kind === K.DECISION && r.action === "rebuild-transfer")) {
+      refuse("a replacement is already authorized for this generation; run the distribution to act on it");
+    }
+    const res = viewOf(read, "reservation", epochIndex, accrualId);
+    if (res && res.state === "held") {
+      refuse("this accrual's reservation succeeded and binds the current bytes; it is immutable under contract v11, so no replacement could be excluded by the ledger");
+    }
+    const subject = { poolId, epochIndex, accrualId };
+    appendChecked(poolId, dir, { v: 1, kind: K.DECLARATION, object: "transfer", gen, ...subject,
+      condition: "transfer-owned-elsewhere", reasoning: reasoning.trim() });
+    appendChecked(poolId, dir, { v: 1, kind: K.DECISION, object: "transfer", gen, ...subject,
+      condition: "transfer-owned-elsewhere", action: "rebuild-transfer", d6Status: D6_STATUS,
+      reasoning: `${reasoning.trim()} | basis: ${REPLACE_BASIS}` });
+    // the refused reservation must open a new generation too, bound to the replacement
+    let alsoReservation = false;
+    if (res && res.state === "refused"
+      && !read.records.some((r) => mine("reservation", res.gen)(r) && r.kind === K.DECISION && r.action === "rebuild-reservation")) {
+      appendChecked(poolId, dir, { v: 1, kind: K.DECLARATION, object: "reservation", gen: res.gen, ...subject,
+        condition: "reservation-refused", reasoning: `${reasoning.trim()} (the transfer it bound belongs to another accrual)` });
+      appendChecked(poolId, dir, { v: 1, kind: K.DECISION, object: "reservation", gen: res.gen, ...subject,
+        condition: "reservation-refused", action: "rebuild-reservation", d6Status: D6_STATUS,
+        reasoning: `${reasoning.trim()} | basis: the new reservation binds the replacement transfer` });
+      alsoReservation = true;
+    }
+    return { poolId, epochIndex, accrualId, gen, alsoReservation, basis: REPLACE_BASIS };
+  } finally {
+    envStore.releaseOpLock(poolRunLockName(poolId));
+  }
+};
+
+module.exports = { authorizeRebroadcast, authorizeRebuildReservation, authorizeTransferReplacement,
+  unresolvedSubjects, listUnresolved, BASIS, REBUILD_BASIS, REPLACE_BASIS, D6_STATUS };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
@@ -150,6 +262,26 @@ if (require.main === module) {
       for (const u of listUnresolved(poolId)) {
         console.log([u.object, u.epochIndex, u.accrualId || "-", u.gen].join(" "));
       }
+      return;
+    }
+    if (mode === "rebuild-transfer") {
+      const [, pid, ep, acc] = pos;
+      if (!/^[0-9]+$/.test(ep || "")) refuse("the epoch index must be a decimal integer");
+      const r = authorizeTransferReplacement({ poolId: pid, epochIndex: Number(ep), accrualId: acc, reasoning });
+      console.log(`replacement AUTHORIZED for the transfer of pool ${r.poolId.slice(0, 12)}..., epoch ${r.epochIndex}, accrual ${r.accrualId.slice(0, 12)}..., generation ${r.gen}` +
+        (r.alsoReservation ? ", with the refused reservation's rebuild" : "") + ".");
+      console.log(`basis: ${r.basis}`);
+      console.log("the next distribution run proves the accrual holds no reservation, then builds a new transfer and binds it");
+      return;
+    }
+    if (mode === "rebuild-reservation") {
+      // positions shift by one: no object argument for this mode
+      const [, pid, ep, acc] = pos;
+      if (!/^[0-9]+$/.test(ep || "")) refuse("the epoch index must be a decimal integer");
+      const r = authorizeRebuildReservation({ poolId: pid, epochIndex: Number(ep), accrualId: acc, reasoning });
+      console.log(`rebuild AUTHORIZED for the reservation of pool ${r.poolId.slice(0, 12)}..., epoch ${r.epochIndex}, accrual ${r.accrualId.slice(0, 12)}..., generation ${r.gen}.`);
+      console.log(`basis: ${r.basis}`);
+      console.log("the next distribution run checks the ledger for no reservation, then builds a new one bound to the same transfer");
       return;
     }
     if (mode !== "rebroadcast") refuse("usage: rebroadcast <poolId> <header|reservation|transfer> <epochIndex> [<accrualId>] --reason \"<text>\"");

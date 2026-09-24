@@ -153,6 +153,73 @@ const main = async () => {
       && seen[0][4] === D.entropyForIn(rc).toString("hex") && r.b58 === OWNER && r.hex === formationCore.toId32(OWNER).toString("hex"));
   }
 
+  // ---- the TRANSFER-DERIVED reservation identifier (tegara/docs/NONCE_OWNERSHIP.md) ----
+  {
+    const T1 = "ea".repeat(32), T2 = "eb".repeat(32);
+    const idFor = (transferHash, ownerId = OWNER, contractId = CONTRACT) =>
+      D.reservationIdForTransfer({ generateId, ownerId, contractId, transferHash });
+    const expectEntropy = crypto.createHash("sha256").update(`tegara.e2.reservation-by-transfer.v1|${T1}`).digest();
+    ok("by-transfer: the entropy is sha256 over the domain and the transfer hash, recomputed here",
+      D.reservationEntropyForTransfer(T1).equals(expectEntropy) && idFor(T1).entropy.equals(expectEntropy));
+    // PLATFORM'S DERIVATION, recomputed independently: double SHA-256 of contract, owner, type and
+    // entropy (rs-dpp generate_document_id_v0 at the pin). The generator must agree with it.
+    const buf = Buffer.concat([formationCore.toId32(CONTRACT), formationCore.toId32(OWNER), Buffer.from("transferReservation"), expectEntropy]);
+    const dbl = crypto.createHash("sha256").update(crypto.createHash("sha256").update(buf).digest()).digest("hex");
+    ok("by-transfer: the installed generator's identifier equals Platform's derivation recomputed here", idFor(T1).hex === dbl);
+    ok("by-transfer: byte-identical transfers from one owner in one contract get the SAME identifier", idFor(T1).hex === idFor(T1).hex);
+    ok("by-transfer: different transfers get different identifiers", idFor(T1).hex !== idFor(T2).hex);
+    ok("by-transfer: the SCOPE is one owner, so another owner's reservation for the same bytes differs",
+      idFor(T1).hex !== idFor(T1, CONTRACT).hex);
+    ok("by-transfer: and one contract, so the same owner in another contract differs", idFor(T1).hex !== idFor(T1, OWNER, OWNER).hex);
+    const legacy = D.docIdForIn({ generateId, ownerId: OWNER, contractId: CONTRACT, poolId: "ab".repeat(32), epochIndex: 0,
+      type: "transferReservation", subject: "cd".repeat(32) });
+    ok("by-transfer: the new identifier differs from a legacy accrual-derived one", legacy.hex !== idFor(T1).hex);
+    const refused = (fn) => { try { fn(); return false; } catch (e) { return /e2DocId/.test(e.message); } };
+    ok("by-transfer: an uppercase or short transfer hash is refused",
+      refused(() => idFor("EA".repeat(32))) && refused(() => idFor("ea".repeat(31))));
+    ok("by-transfer: no generator is refused", refused(() => D.reservationIdForTransfer({ ownerId: OWNER, contractId: CONTRACT, transferHash: T1 })));
+
+    // THE LEDGER'S OWN VECTOR, from the live two-store race of 2026-09-24
+    // (tegara/evidence/live-cuts/2026-09-24/poc/race): Platform accepted pool X's reservation at this
+    // identifier and refused pool Y's create at the same one, so the expectation comes from the
+    // ledger, not from this module. The inputs are non-uniform, unlike T1 and T2 above, which
+    // could not tell a derivation that reads the whole hash from one that reads a prefix.
+    const LIVE_T = "4df89eb2f2e6695efc2fee9d9ba9b6ded8978f888f9bc1173b5c5a118bc9f391";
+    const LIVE_OWNER = "9Tb35cURXFnSSYvvVfDQVVZLnVbkXMPi1euoMKiGARmX"; // 7dad14b6..., the writer identity
+    const LIVE_CONTRACT = "3sr56CXBDYGAGNM6T5WXeS6wE2zBpyRXwWzLUoravuwS"; // the bench's contract v11
+    const live = idFor(LIVE_T, LIVE_OWNER, LIVE_CONTRACT);
+    ok("by-transfer: the live race's transfer, writer and contract give the identifier the ledger held",
+      live.hex === "740fee44ca82709795b9ed78bbfd5c179c82b140c205547e912f73cb1e7cb821"
+      && live.b58 === "8p4PAbysGiFV1cG9EsEV5t2qoRxTcruDPPaULfBq5uXe"
+      && live.entropy.toString("hex") === "fb5fe834f571f46d22debcb4fbe446679dd29afabcbd05a026ce7255e9196f20");
+    // every byte of the hash is read: changing only the last character, or only the first, changes it
+    const lastChanged = `${LIVE_T.slice(0, 63)}0`, firstChanged = `0${LIVE_T.slice(1)}`;
+    ok("by-transfer: hashes that differ only in their last or only in their first character get different identifiers",
+      new Set([live.hex, idFor(lastChanged, LIVE_OWNER, LIVE_CONTRACT).hex, idFor(firstChanged, LIVE_OWNER, LIVE_CONTRACT).hex]).size === 3);
+
+    // THE SPECIFICATION OVER RANDOM INPUTS, fresh each run. A fixed vector cannot see a derivation
+    // that permutes bytes the vector happens to hold equal (a review swapped two bytes of the live
+    // hash that are both 0x8f and every case passed). Each transfer hash below is random, the owner
+    // and contract alternate between two fixed pairs, and the entropy and identifier are recomputed
+    // from the specification, not from this module.
+    const spec = (transferHash, owner32, contract32) => {
+      const ent = crypto.createHash("sha256").update(`tegara.e2.reservation-by-transfer.v1|${transferHash}`).digest();
+      const inner = crypto.createHash("sha256").update(Buffer.concat([contract32, owner32, Buffer.from("transferReservation"), ent])).digest();
+      return { entropy: ent.toString("hex"), id: crypto.createHash("sha256").update(inner).digest("hex") };
+    };
+    let agree = 0, cases = 0;
+    for (let i = 0; i < 32; i++) {
+      const h = crypto.randomBytes(32).toString("hex");
+      const owner = i % 4 === 0 ? LIVE_OWNER : OWNER, contract = i % 4 === 1 ? LIVE_CONTRACT : CONTRACT;
+      const got = idFor(h, owner, contract), want = spec(h, formationCore.toId32(owner), formationCore.toId32(contract));
+      cases++;
+      if (got.hex === want.id && got.entropy.toString("hex") === want.entropy
+        && D.reservationEntropyForTransfer(h).toString("hex") === want.entropy) agree++;
+    }
+    ok("by-transfer: for 32 random transfer hashes the entropy and identifier equal the specification's, recomputed here",
+      cases === 32 && agree === 32);
+  }
+
   console.log(`\ne2DocIdTest: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exitCode = 1;
 };
