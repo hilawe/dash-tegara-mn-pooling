@@ -164,7 +164,7 @@ const docIdForIn = (input) => {
 /**
  * reservationIdForTransfer({ generateId, ownerId, contractId, transferHash }) -> { b58, hex, entropy }
  *
- * A reservation identifier DERIVED FROM THE TRANSFER IT BINDS (tegara/docs/NONCE_OWNERSHIP.md, the
+ * A reservation identifier DERIVED FROM THE TRANSFER IT BINDS (docs/NONCE_OWNERSHIP.md, the
  * 2026-09-24 proof of concept). The entropy is sha256 over `tegara.e2.reservation-by-transfer.v1|`
  * and the transfer hash in lowercase hex, and the identifier comes from the injected Platform
  * generator exactly as `docIdForIn`'s does. Two reservations binding byte-identical transfers, built

@@ -39,7 +39,7 @@
  *   TEGARA_ENV_PATH=<abs path to .env.X> node src/scripts/e2OperatorDecision.cjs \
  *     rebuild-transfer <poolId> <epochIndex> <accrualId> --reason "<text>"
  *
- * THE REPLACEMENT (tegara/docs/NONCE_OWNERSHIP.md, the replacement rule). A new transfer generation is
+ * THE REPLACEMENT (docs/NONCE_OWNERSHIP.md, the replacement rule). A new transfer generation is
  * authorized only when the journal holds the collision observation for the current one (R2) and
  * the accrual's reservation has not succeeded; the writer then proves on the ledger that the accrual
  * holds no reservation (R1) before building anything. When the accrual's reservation create was

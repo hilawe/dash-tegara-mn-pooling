@@ -153,7 +153,7 @@ const main = async () => {
       && seen[0][4] === D.entropyForIn(rc).toString("hex") && r.b58 === OWNER && r.hex === formationCore.toId32(OWNER).toString("hex"));
   }
 
-  // ---- the TRANSFER-DERIVED reservation identifier (tegara/docs/NONCE_OWNERSHIP.md) ----
+  // ---- the TRANSFER-DERIVED reservation identifier (docs/NONCE_OWNERSHIP.md) ----
   {
     const T1 = "ea".repeat(32), T2 = "eb".repeat(32);
     const idFor = (transferHash, ownerId = OWNER, contractId = CONTRACT) =>
