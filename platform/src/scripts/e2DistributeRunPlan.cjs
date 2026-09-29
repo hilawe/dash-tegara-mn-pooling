@@ -105,8 +105,8 @@ const coveragePerEpoch = ({ runEpochs, positiveIdsFor, outcomes, settled = SETTL
  * because the epochs above it were never worked and an unworked epoch is not a settled one.
  *
  * The exit codes are the driver's existing contract, unchanged: 0 is every accrual settled with
- * no open deferral, 3 is every accrual terminal with deferrals awaiting the carry layer, and 1 is
- * anything less. THE EXIT NEVER CLAIMS GREEN OVER AN UNCONSUMED DEFERRAL.
+ * no open deferral, 3 is every accrual terminal with at least one classified as a carried deferral
+ * when it was worked (which this exit does not show was later paid), and 1 is anything less. THE EXIT NEVER CLAIMS GREEN OVER AN UNCONSUMED DEFERRAL.
  */
 const runVerdict = ({ perEpoch, outcomes, stoppedEarly = null, settled = SETTLED_STATUSES }) => {
   if (!Array.isArray(perEpoch)) refuse("runVerdict needs the per-epoch coverage");

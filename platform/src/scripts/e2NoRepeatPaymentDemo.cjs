@@ -183,6 +183,8 @@ const runEpoch = () => ({ number: EPOCH,
 const resolvePoolForDemo = async () => {
   const rows = allocationRows();
   const resolve = poolResolution.makeResolveProvedPool({
+    // the demonstration's contract stand-in defines no final-epoch type, so no record can exist
+    contractDefinesFinalEpochType: () => false,
     provedQuery: async (type) => [type === "pool"
       ? mkDoc(POOL, I, { nodeType: "evo" })
       : mkDoc(h32("99"), RECEIPT_OWNER, { allocationRows: rows,
@@ -239,8 +241,11 @@ const mkDeps = (poolId, interruptAt, resolution) => {
     entitlementsForEpoch: rowsFor,
     epochNumbers: () => EPOCH_NUMBERS,
     resolvePool: () => resolution,
+    // this demonstration's pool records no final epoch, so the re-check confirms (it is exercised
+    // in e2DistributeTest and e2DistributeEpochDepsTest)
+    confirmFinalEpochs: async () => {},
     fetchBalanceWithMetadata: async () => ({ balance: "999999999999",
-      metadata: { chainId: CHAIN, protocolVersion: 12, height: "1000" } }),
+      metadata: { chainId: CHAIN, protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN, height: "1000" } }),
     buildHeaderTransition: ({ epochIndex }) => {
       const bytes = "0102" + String(epochIndex).padStart(4, "0") + "01";
       return { transitionBytes: bytes, transitionHash: sha(bytes), expectedDocumentId: h32("dd") };

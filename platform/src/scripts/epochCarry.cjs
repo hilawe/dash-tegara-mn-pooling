@@ -16,6 +16,28 @@
  *     carryIn_i(N+1)  = carryOut_i(N)    when epoch N encodes
  *                     = carryIn_i(N)     when epoch N is ENCODING-REFUSED
  *
+ * THE FINAL-EPOCH TERM (tegara/docs/FINAL_EPOCH_DESIGN.md, a marked correction to the carry
+ * layer decided 2026-09-24). At member i's final epoch F_i, the sum above is RAISED TO THE
+ * MINIMUM when it is positive, below the minimum, and i is not the income identity; the raise
+ * is the DECLARED TOP-UP. Everywhere else the effective amount is the plain sum:
+ *
+ *     sum_i(N)        = owed_i(N) + carryIn_i(N)
+ *     effective_i(N)  = MIN               when N = F_i, 0 < sum_i(N) < MIN, and owner_i is not
+ *                                         the income identity
+ *                     = sum_i(N)          otherwise
+ *     topUp_i(N)      = effective_i(N) - sum_i(N)
+ *
+ * The carry-out rule needs no new branch: a raised effective amount is AT the minimum, so it
+ * carries nothing, and a zero one carries nothing either. A member present in an epoch AFTER its
+ * final epoch is refused, since nothing may be paid or carried for it past the end.
+ *
+ * THE ONE CASE THE FINAL EPOCH CANNOT SETTLE (the step 4 review's third finding). An
+ * ENCODING-REFUSED final epoch pays nothing, and the pass-through keeps every deferral rather than
+ * dropping it, so a final member's carried amount survives its final epoch. Settling it is
+ * impossible there and dropping it would lose value, so the rule is fail-closed: the claim stays
+ * carried, and the next epoch refuses that member by name, stating the amount. Reaching it needs
+ * an epoch whose owed or effective amount exceeds the schema ceiling of 2^53 - 1 credits.
+ *
  * WHAT THIS MODULE OWNS: the arithmetic, the three-way outcome of an epoch step, and
  * the pass-through rule for a refused epoch. It is pure, does no I/O, and never mutates
  * an argument.
@@ -157,6 +179,34 @@ const assertMembers = (members, owedRefused) => {
  * input can reach, which reads as protection while testing nothing. If either
  * validation is ever relaxed, this reasoning is what has to be redone.
  */
+/**
+ * The final-epoch inputs. `finalEpochOf` maps a member key to that member's final epoch, from
+ * the ledger's memberFinalEpoch records, and is REQUIRED even when empty: an omitted map would
+ * read as "no member is final", which silently leaves a final carry unpaid.
+ */
+const assertFinalEpochs = (epochIndex, finalEpochOf, members, carryIn) => {
+  if (!Number.isSafeInteger(epochIndex) || epochIndex < 0) {
+    refuse("epochIndex is required and must be a safe non-negative integer (the final-epoch term compares against it)");
+  }
+  if (!(finalEpochOf instanceof Map)) {
+    refuse("finalEpochOf is required and must be a Map, empty when no member is final (an omitted answer would silently leave a final carry unpaid)");
+  }
+  for (const [k, f] of finalEpochOf) {
+    if (typeof k !== "string" || k.length === 0) refuse(`finalEpochOf holds a non-string member key ${JSON.stringify(k)}`);
+    if (!Number.isSafeInteger(f) || f < 0) refuse(`finalEpochOf holds a final epoch ${JSON.stringify(f)} for ${k.slice(0, 8)}... that is not a safe non-negative integer`);
+  }
+  for (const m of members) {
+    const f = finalEpochOf.get(m.key);
+    if (f !== undefined && f < epochIndex) {
+      // A CARRY STILL HELD HERE is the one case the final epoch could not settle: an
+      // encoding-refused final epoch pays nothing and passes the member's deferral through (the
+      // pass-through below keeps value rather than dropping it), so it is named, not lost
+      const held = carryIn.get(m.key);
+      refuse(`member ${m.key.slice(0, 8)}... is present in epoch ${epochIndex}, after its final epoch ${f}; nothing may be paid or carried for it past the end${held ? `, and it still carries ${held} credits that its final epoch could not settle because that epoch was encoding-refused` : ""}`);
+    }
+  }
+};
+
 const carryOutOf = (effective, isSelfShare) => {
   if (isSelfShare) return 0n;
   if (effective < MIN_TRANSFER_AMOUNT_CREDITS) return effective;
@@ -176,6 +226,10 @@ const carryOutOf = (effective, isSelfShare) => {
  *                     is that the encoding refusal runs over the EFFECTIVE amount, so
  *                     the check belongs to this step and not to the owed calculation
  *                     that precedes it
+ *   epochIndex      : REQUIRED. This epoch's number, which the final-epoch term compares
+ *                     against each member's final epoch
+ *   finalEpochOf    : REQUIRED, a Map from member key to final epoch, empty when none is
+ *                     final (see assertFinalEpochs)
  *   owedRefused     : REQUIRED. True when the owed calculation ALREADY refused this
  *                     epoch (its G, fee or an owed amount exceeded the ceiling); the
  *                     epoch then has no encodable owed values at all and takes the
@@ -187,11 +241,13 @@ const carryOutOf = (effective, isSelfShare) => {
  * field each one carries is listed, so a caller never reads an absent member as a value:
  *
  *   { kind: "encoded", refusedBy: null, effective: [BigInt], carryOut: Map,
- *     payable: [boolean] }
+ *     payable: [boolean], topUp: [BigInt], final: [boolean] }
  *       `effective` and `payable` are indexed to `members`. A member is payable when it
  *       is not the self-share AND its effective amount reaches the pinned minimum, which
  *       is the layer's own partition: a payable member's carry-out is zero, and a
  *       non-payable one is either the self-share (settled where it sits) or a deferral.
+ *       `topUp` is each member's declared raise (zero unless the final-epoch term raised it)
+ *       and `final` says whether this epoch is the member's final one.
  *
  *   { kind: "encoding-refused", refusedBy: "owed", effective: null, carryOut: Map }
  *       no `refusedValue`: the refusing value belongs to the owed calculation, which
@@ -207,12 +263,13 @@ const carryOutOf = (effective, isSelfShare) => {
  * `carryOut` equals `carryIn` there. Returning the state on every path is what stops a
  * caller from implementing that rule itself and getting it wrong in one branch.
  */
-const advanceEpoch = ({ carryIn, members, encodingCeiling, owedRefused }) => {
+const advanceEpoch = ({ carryIn, members, encodingCeiling, owedRefused, epochIndex, finalEpochOf }) => {
   if (typeof owedRefused !== "boolean") {
     refuse("owedRefused is required and must be a boolean: an omitted answer would read as an epoch whose owed calculation did not refuse");
   }
   assertCarryState(carryIn, "carryIn");
   assertMembers(members, owedRefused);
+  assertFinalEpochs(epochIndex, finalEpochOf, members, carryIn);
   if (!isBig(encodingCeiling) || encodingCeiling <= 0n) {
     refuse("encodingCeiling must be a positive BigInt (the schema's amountCredits ceiling)");
   }
@@ -239,7 +296,14 @@ const advanceEpoch = ({ carryIn, members, encodingCeiling, owedRefused }) => {
     return { kind: "encoding-refused", refusedBy: "owed", effective: null, carryOut: passThrough() };
   }
 
-  const effective = members.map((m) => m.owedCredits + (carryIn.get(m.key) || 0n));
+  // THE FINAL-EPOCH TERM: at a member's final epoch a positive sum below the minimum is raised to
+  // it, and the raise is the declared top-up; the self-share is never raised, since it settles
+  // where it sits at any amount
+  const isFinal = members.map((m) => finalEpochOf.get(m.key) === epochIndex);
+  const sums = members.map((m) => m.owedCredits + (carryIn.get(m.key) || 0n));
+  const effective = sums.map((sum, i) => (isFinal[i] && !members[i].isSelfShare
+    && sum > 0n && sum < MIN_TRANSFER_AMOUNT_CREDITS) ? MIN_TRANSFER_AMOUNT_CREDITS : sum);
+  const topUp = effective.map((e, i) => e - sums[i]);
   const over = effective.find((v) => v > encodingCeiling);
   if (over !== undefined) {
     return { kind: "encoding-refused", refusedBy: "effective", effective: null,
@@ -259,12 +323,16 @@ const advanceEpoch = ({ carryIn, members, encodingCeiling, owedRefused }) => {
     if (out !== 0n && members[i].isSelfShare) {
       refuse(`computed a nonzero carry-out for the self-share member ${i} (the income identity's rows never carry)`);
     }
+    // NOTHING CARRIES PAST A FINAL EPOCH, asserted rather than assumed from the raise above
+    if (out !== 0n && isFinal[i]) {
+      refuse(`computed a nonzero carry-out for member ${i} at its final epoch`);
+    }
     // ONLY A REAL DEFERRAL IS STORED (see the carry-state note above)
     if (out !== 0n) carryOut.set(members[i].key, out);
     payable.push(!members[i].isSelfShare && effective[i] >= MIN_TRANSFER_AMOUNT_CREDITS);
   }
 
-  return { kind: "encoded", refusedBy: null, effective, carryOut, payable };
+  return { kind: "encoded", refusedBy: null, effective, carryOut, payable, topUp, final: isFinal };
 };
 
 // the surface is TWO functions on purpose. The pinned minimum is not re-exported: it is

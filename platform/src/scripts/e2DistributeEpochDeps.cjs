@@ -58,6 +58,7 @@ const captureRecord = require("./e2CaptureRecord.cjs");
 const battery = require("./e2CaptureBattery.cjs");
 const rawCapture = require("./e2RawCapture.cjs");
 const balanceCheckMod = require("./e2BalanceCheck.cjs");
+const finalEpoch = require("./e2FinalEpoch.cjs");
 
 const refuse = (m) => { throw new Error(`e2DistributeEpochDeps: ${m}`); };
 const msgOf = (e) => (e && e.message) || String(e);
@@ -96,7 +97,7 @@ const REQUIRED_ENV = [
   "runEpochs", "contextFor", "sdk", "dpp", "createDocument", "keyA", "transferKey", "submitSigned",
   "waitOnly", "rehydrate", "rememberStt", "transferMetaByBytes", "verifyGateCapture", "resolvePool",
   "provedQuery", "openJournal", "readContractNonce", "readIdentityNonce", "readBalance",
-  "idHex", "sha256hex",
+  "idHex", "sha256hex", "runFinalEpochs", "contractDefinesFinalEpochType",
 ];
 
 /**
@@ -120,7 +121,10 @@ const makeEpochDepsFactory = (env) => {
     protocolPin: PROTOCOL_PIN, bootstrap: BOOTSTRAP, runEpochs: RUN_EPOCHS, contextFor, sdk, dpp,
     createDocument, keyA, transferKey, submitSigned, waitOnly, rehydrate, rememberStt,
     transferMetaByBytes, verifyGateCapture, resolvePool, provedQuery, openJournal,
-    readContractNonce, readIdentityNonce, readBalance, idHex, sha256hex } = env;
+    readContractNonce, readIdentityNonce, readBalance, idHex, sha256hex,
+    runFinalEpochs, contractDefinesFinalEpochType } = env;
+  if (!(runFinalEpochs instanceof Map)) refuse("makeEpochDepsFactory needs env.runFinalEpochs as the Map of effective final epochs the run's rows were built from");
+  if (typeof contractDefinesFinalEpochType !== "function") refuse("makeEpochDepsFactory needs env.contractDefinesFinalEpochType, the proved contract's answer");
 
   return (ctx, completedEpochs) => {
     // the completed record is REQUIRED rather than defaulted: a bundle built without one would
@@ -349,6 +353,14 @@ const makeEpochDepsFactory = (env) => {
       // specimen's wedged epoch), and probe-debris journals answer at the
       // stated journal-writer width, loudly
       resolvePool,
+      // THE HEADER STEP'S RE-CHECK of the pool's final epochs (e2FinalEpoch.assertSameFinalEpochs):
+      // read by proof through the one shared composition, a late record refusing as at the run's
+      // start, and compared with the set this run's rows were built from
+      confirmFinalEpochs: async () => {
+        const now = await finalEpoch.readEffectiveFinalEpochs({ poolId: POOL, lateIs: "refused",
+          ...finalEpoch.makeFinalEpochReads({ poolId: POOL, provedQuery, idHex, contractDefinesType: contractDefinesFinalEpochType }) });
+        finalEpoch.assertSameFinalEpochs(runFinalEpochs, now.finalEpochs);
+      },
       fetchBalanceWithMetadata: async () => {
         const r = await readBalance();
         return { balance: String(r.balance), metadata: { chainId: r.metadata.chainId,

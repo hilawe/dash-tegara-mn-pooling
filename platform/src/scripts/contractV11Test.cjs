@@ -11,7 +11,7 @@
 const path = require("path");
 const { pathToFileURL } = require("url");
 const { buildV9 } = require("./contractV9.cjs");
-const { buildV11, E2_TYPES } = require("./contractV11.cjs");
+const { buildV11, E2_TYPES, buildV11WithFinalEpoch, expectedV11Payload, selectExpectedPayload, FINAL_EPOCH_TYPE } = require("./contractV11.cjs");
 
 let passed = 0, failed = 0;
 const ok = (name, cond) => {
@@ -177,6 +177,58 @@ const EXPECTED = {
   ok("transferReservation unique spine is exactly byAccrual(accrualId) (a soundness-review finding)",
     eq(uniqIndices("transferReservation"),
       [{ name: "byAccrual", properties: [{ accrualId: "asc" }], unique: true }]));
+
+  // ---- v11's FIRST UPDATE: the member's final epoch (tegara/docs/FINAL_EPOCH_DESIGN.md). A contract
+  // update may add a type and never change or remove one, so the update must be EXACTLY v11 plus one
+  // key, and the added type is pinned whole, because once registered it can never change. ----
+  const upd = buildV11WithFinalEpoch(poolLedgerContract);
+  ok("the update is v11's keys plus exactly memberFinalEpoch",
+    eq(Object.keys(upd).sort(), [...Object.keys(v11), FINAL_EPOCH_TYPE].sort()) && FINAL_EPOCH_TYPE === "memberFinalEpoch");
+  ok("every v11 type is deeply unchanged by the update", Object.keys(v11).every((t) => eq(upd[t], v11[t])));
+  ok("the update does not alter the v11 builder's own output", eq(buildV11(poolLedgerContract), v11));
+  ok("memberFinalEpoch is pinned whole: owner-only, immutable, non-deletable, three properties, unique by pool and member only",
+    eq(upd.memberFinalEpoch, {
+      type: "object",
+      documentsMutable: false, canBeDeleted: false, creationRestrictionMode: 1,
+      properties: {
+        poolId: { ...HASH32, position: 0 },
+        funderId: { ...HASH32, position: 1 },
+        finalEpochIndex: { type: "integer", minimum: 0, maximum: 4294967295, position: 2 },
+      },
+      required: ["poolId", "funderId", "finalEpochIndex", "$createdAt"],
+      additionalProperties: false,
+      indices: [{ name: "byPoolFunder", properties: [{ poolId: "asc" }, { funderId: "asc" }], unique: true }],
+    }));
+  ok("the final-epoch bounds match the header's epochIndex bounds",
+    upd.memberFinalEpoch.properties.finalEpochIndex.minimum === v11.epochHeader.properties.epochIndex.minimum
+      && upd.memberFinalEpoch.properties.finalEpochIndex.maximum === v11.epochHeader.properties.epochIndex.maximum);
+  ok("each build returns a fresh copy, so a caller's change cannot reach the next build",
+    (() => { const a = buildV11WithFinalEpoch(poolLedgerContract); a.memberFinalEpoch.indices.push({}); return eq(buildV11WithFinalEpoch(poolLedgerContract).memberFinalEpoch.indices.length, 1); })());
+
+  // the payload the audit expects, keyed by the proved contract version (2026-09-27)
+  ok("version 1 expects the published payload, without the final-epoch type",
+    eq(expectedV11Payload(poolLedgerContract, 1), buildV11(poolLedgerContract))
+    && !Object.prototype.hasOwnProperty.call(expectedV11Payload(poolLedgerContract, 1), FINAL_EPOCH_TYPE));
+  ok("version 2 expects the updated payload, with the final-epoch type",
+    eq(expectedV11Payload(poolLedgerContract, 2), buildV11WithFinalEpoch(poolLedgerContract))
+    && Object.prototype.hasOwnProperty.call(expectedV11Payload(poolLedgerContract, 2), FINAL_EPOCH_TYPE));
+  for (const v of [0, 3, "2", 2.5, null]) {
+    ok(`contract version ${JSON.stringify(v)} has no expected payload and refuses`,
+      (() => { try { expectedV11Payload(poolLedgerContract, v); return false; } catch (e) { return /no expected payload/.test(e.message); } })());
+  }
+
+  // the audit's seam takes only the version, so fetched content cannot become the expectation
+  {
+    const got = await selectExpectedPayload({ readVersion: async () => 2, poolLedgerContract });
+    ok("the seam returns the updated source build for version 2", eq(got, buildV11WithFinalEpoch(poolLedgerContract)));
+    const divergent = { version: 1, schemas: { pool: { type: "object" } } };
+    let refusedObject = false;
+    try { await selectExpectedPayload({ readVersion: async () => divergent, poolLedgerContract }); } catch (e) { refusedObject = /must be an integer/.test(e.message); }
+    ok("an answer carrying fetched schemas instead of a version refuses", refusedObject);
+    let refused3 = false;
+    try { await selectExpectedPayload({ readVersion: async () => 3, poolLedgerContract }); } catch (e) { refused3 = /no expected payload/.test(e.message); }
+    ok("the seam refuses version 3", refused3);
+  }
 
   console.log(`contractV11Test: ${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;

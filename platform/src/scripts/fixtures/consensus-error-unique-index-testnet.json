@@ -1,0 +1,28 @@
+{
+  "source": "Read-only from our testnet evonode's Tenderdash block results (/block_results and /block), queried on 2026-09-29 (UTC). Each is the refusal of a duplicate approval document at (owner, pool, termsRevision) on the approval contract TuqDThp5QNNJGUBJiGfRvuYr82TUn6T4USGDbPgfZgL, written by identity A on 2026-09-28 (tegara/evidence/approval-contract/2026-09-28/ab-demo/). The transaction hash is the SHA-256 of the transaction bytes in the block. serializedErrorHex is data.serializedError from the CBOR in the result info, the bytes the gateway serves as the refusal data.",
+  "platformChainId": "dash-testnet-51",
+  "captures": [
+    {
+      "platformHeight": 604557,
+      "blockTime": "2026-09-28T15:41:09.932Z",
+      "txIndex": 0,
+      "txHashHex": "b509d23987b0f1c8bbd1173e4487838aa2335c6abab3e2fdfdf63c980160b5e0",
+      "txBytes": 1492,
+      "code": 40105,
+      "infoBase64": "oWRkYXRhoW9zZXJpYWxpemVkRXJyb3KYQQIOGKMYxhjpGOcY5BhsGBwYRhggGOwYqRiAGHUYthj1GGIYvBizGOYY9RiWGG8Y5hj+GJUY0wANGK8YiBisGHwDCBgkGG8YdxhuGGUYchhJGGQGGHAYbxhvGGwYSRhkDRh0GGUYchhtGHMYUhhlGHYYaRhzGGkYbxhu",
+      "serializedErrorHex": "020ea3c6e9e7e46c1c4620eca98075b6f562bcb3e6f5966fe6fe95d3000daf88ac7c0308246f776e6572496406706f6f6c49640d7465726d735265766973696f6e"
+    },
+    {
+      "platformHeight": 604561,
+      "blockTime": "2026-09-28T15:50:42.12Z",
+      "txIndex": 0,
+      "txHashHex": "a2e7a3ea1a8edd2697c3f49da8627b5fd5d2cb6a70e5cbd6bef83204b7167c15",
+      "txBytes": 1492,
+      "code": 40105,
+      "infoBase64": "oWRkYXRhoW9zZXJpYWxpemVkRXJyb3KYQQIOGPEYohiZGF4YbRjmGPkY4Bj+CRj2CRhSGCoY+BhRGIAYMhhgGMkY4RjsGPcYnBi/GJUYIhiNGIAYrBgdFQMIGCQYbxh3GG4YZRhyGEkYZAYYcBhvGG8YbBhJGGQNGHQYZRhyGG0YcxhSGGUYdhhpGHMYaRhvGG4=",
+      "serializedErrorHex": "020ef1a2995e6de6f9e0fe09f609522af851803260c9e1ecf79cbf95228d80ac1d150308246f776e6572496406706f6f6c49640d7465726d735265766973696f6e",
+      "runLogLine": "[CONTROL] the duplicate at A's (pool, revision 2): code 40105, message \"Document HGF4QDga3nkPSpKUUkeLjrt61eNXf1tcvkE5br6hiU9r has duplicate unique properties [\"$ownerId\", \"poolId\", \"termsRevision\"] with other documents\"; classifier token execution-error-other; cost 1209293 credits (0.000012 DASH)",
+      "runLogSource": "copied verbatim from tegara/evidence/approval-contract/2026-09-28/ab-demo/run2.log, the run whose duplicate this refusal is"
+    }
+  ]
+}

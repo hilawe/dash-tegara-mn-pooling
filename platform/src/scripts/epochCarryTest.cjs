@@ -45,9 +45,11 @@ const CEIL = 9007199254740991n;
 const A = "a".repeat(64), B = "b".repeat(64), C = "c".repeat(64);
 
 // one epoch step, with carry-in supplied as a plain object for brevity
+// every existing case states explicitly that no member is final (epoch 0, an empty map)
+const NONE_FINAL = { epochIndex: 0, finalEpochOf: new Map() };
 const step = (carry, members, opts = {}) => advanceEpoch({
   carryIn: new Map(Object.entries(carry).map(([k, v]) => [k, BigInt(v)])),
-  members, encodingCeiling: CEIL, owedRefused: false, ...opts });
+  members, encodingCeiling: CEIL, owedRefused: false, ...NONE_FINAL, ...opts });
 const member = (key, owed, isSelfShare = false) =>
   ({ key, owedCredits: BigInt(owed), isSelfShare });
 // the state stores only OUTSTANDING deferrals, so no entry and a zero deferral are one
@@ -80,7 +82,7 @@ section("THE SPECIFICATION'S BOUNDARY LITERALS (E2_BUILD_SPEC.md item 6)", () =>
 
   // owed = 50000 in two consecutive epochs: N effective 50000 carried; N+1 effective 100000 payable
   const n = step({}, [member(A, 50000)]);
-  const n1 = advanceEpoch({ carryIn: n.carryOut, members: [member(A, 50000)], encodingCeiling: CEIL,
+  const n1 = advanceEpoch({ ...NONE_FINAL, carryIn: n.carryOut, members: [member(A, 50000)], encodingCeiling: CEIL,
     owedRefused: false });
   ok("vector 3: owed 50000 twice running carries at epoch N and pays at N+1, the state threaded from the first step's own output",
     n.effective[0] === 50000n && outOf(n, A) === 50000n && n.payable[0] === false
@@ -150,13 +152,13 @@ section("the pass-through rule, both refusing paths", () => {
 // ---- the input state is never mutated (M5) ----
 section("the input state is never mutated (M5)", () => {
   const input = new Map([[A, 700n]]);
-  const r = advanceEpoch({ carryIn: input, members: [member(A, 300)], encodingCeiling: CEIL,
+  const r = advanceEpoch({ ...NONE_FINAL, carryIn: input, members: [member(A, 300)], encodingCeiling: CEIL,
     owedRefused: false });
   ok("advanceEpoch does not mutate the caller's carry-in state, and returns a Map that is not the one it was given",
     input.size === 1 && input.get(A) === 700n && r.carryOut !== input && outOf(r, A) === 1000n);
 
   const inRef = new Map([[A, 700n]]);
-  const rr = advanceEpoch({ carryIn: inRef, members: [member(A, 0)], encodingCeiling: CEIL, owedRefused: true });
+  const rr = advanceEpoch({ ...NONE_FINAL, carryIn: inRef, members: [member(A, 0)], encodingCeiling: CEIL, owedRefused: true });
   ok("the pass-through returns a COPY, so writing into it cannot reach the state the caller still holds",
     rr.carryOut !== inRef && (rr.carryOut.set(A, 5n), inRef.get(A) === 700n));
 });
@@ -164,7 +166,7 @@ section("the input state is never mutated (M5)", () => {
 // ---- the effective-refusal path returns a COPY too (F5) ----
 section("the effective-refusal path returns a COPY too (F5)", () => {
   const inRef = new Map([[A, 700n]]);
-  const r = advanceEpoch({ carryIn: inRef, members: [member(A, CEIL), member(B, 0)],
+  const r = advanceEpoch({ ...NONE_FINAL, carryIn: inRef, members: [member(A, CEIL), member(B, 0)],
     encodingCeiling: CEIL, owedRefused: false });
   ok("the effective-refusal path returns a Map that is not the caller's own",
     r.kind === "encoding-refused" && r.refusedBy === "effective" && r.carryOut !== inRef);
@@ -179,12 +181,12 @@ section("refusedValue names the FIRST over-ceiling amount in member order (F6)",
   // distinct carry-ins. Owed values ABOVE the ceiling would be a state a conforming
   // caller never pairs with owedRefused false, since the owed calculation refuses them
   // first, so the fixture reaches the effective check the way a real epoch would.
-  const r = advanceEpoch({ carryIn: new Map([[A, 1n], [B, 999n]]), encodingCeiling: CEIL,
+  const r = advanceEpoch({ ...NONE_FINAL, carryIn: new Map([[A, 1n], [B, 999n]]), encodingCeiling: CEIL,
     owedRefused: false, members: [member(A, CEIL), member(B, CEIL)] });
   ok("with two effective amounts over the ceiling, refusedValue is the FIRST in member order, not the last or the largest",
     r.kind === "encoding-refused" && r.refusedBy === "effective"
     && r.refusedValue === String(CEIL + 1n));
-  const rev = advanceEpoch({ carryIn: new Map([[A, 1n], [B, 999n]]), encodingCeiling: CEIL,
+  const rev = advanceEpoch({ ...NONE_FINAL, carryIn: new Map([[A, 1n], [B, 999n]]), encodingCeiling: CEIL,
     owedRefused: false, members: [member(B, CEIL), member(A, CEIL)] });
   ok("reversing the member order reverses the reported value, which is what makes the previous case observe order at all",
     rev.refusedValue === String(CEIL + 999n));
@@ -211,32 +213,32 @@ section("the state carries only outstanding deferrals", () => {
     step({}, [member(B, 100)]).effective[0] === 100n);
   // a member who was paid last epoch must not trip the membership guard when the set
   // legitimately changes, which is what storing zero entries would have caused
-  const next = advanceEpoch({ carryIn: r.carryOut, encodingCeiling: CEIL, owedRefused: false,
+  const next = advanceEpoch({ ...NONE_FINAL, carryIn: r.carryOut, encodingCeiling: CEIL, owedRefused: false,
     members: [member(A, 10000), member(C, 400, true)] });
   ok("a member who deferred nothing can leave the set without refusing; only a deferral cannot vanish",
     next.kind === "encoded" && outOf(next, A) === 70000n);
   throws("but a member who IS deferring cannot leave the set",
-    () => advanceEpoch({ carryIn: r.carryOut, encodingCeiling: CEIL, owedRefused: false,
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: r.carryOut, encodingCeiling: CEIL, owedRefused: false,
       members: [member(B, 10000)] }), /not a member of this epoch/);
 });
 
 // ---- an epoch always has members ----
 section("an epoch always has members", () => {
   throws("an empty member set refuses rather than returning a conforming result over no rows",
-    () => advanceEpoch({ carryIn: emptyCarryState(), members: [], encodingCeiling: CEIL, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: emptyCarryState(), members: [], encodingCeiling: CEIL, owedRefused: false }),
     /members is empty/);
   throws("an empty member set refuses on the owed-refused path too",
-    () => advanceEpoch({ carryIn: emptyCarryState(), members: [], encodingCeiling: CEIL, owedRefused: true }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: emptyCarryState(), members: [], encodingCeiling: CEIL, owedRefused: true }),
     /members is empty/);
 });
 
 // ---- the refusal answer is never implied ----
 section("the refusal answer is never implied", () => {
   throws("an omitted owedRefused refuses rather than defaulting to an epoch that did not refuse",
-    () => advanceEpoch({ carryIn: emptyCarryState(), members: [member(A, 5)], encodingCeiling: CEIL }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: emptyCarryState(), members: [member(A, 5)], encodingCeiling: CEIL }),
     /owedRefused is required/);
   throws("a zero-state entry refuses: the state carries only outstanding deferrals",
-    () => advanceEpoch({ carryIn: new Map([[A, 0n]]), members: [member(A, 5)], encodingCeiling: CEIL, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: new Map([[A, 0n]]), members: [member(A, 5)], encodingCeiling: CEIL, owedRefused: false }),
     /only outstanding deferrals/);
 });
 
@@ -264,7 +266,7 @@ section("refusals: the member set", () => {
   throws("a non-boolean isSelfShare refuses",
     () => step({}, [{ key: A, owedCredits: 5n, isSelfShare: "no" }]), /explicit boolean isSelfShare/);
   throws("a Number owedCredits refuses (it may arrive already rounded)",
-    () => advanceEpoch({ carryIn: emptyCarryState(), members: [{ key: A, owedCredits: 500, isSelfShare: false }], encodingCeiling: CEIL, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: emptyCarryState(), members: [{ key: A, owedCredits: 500, isSelfShare: false }], encodingCeiling: CEIL, owedRefused: false }),
     /BigInt owedCredits/);
   throws("a negative owedCredits refuses", () => step({}, [member(A, -1)]), /negative owedCredits/);
   throws("an empty member key refuses", () => step({}, [member("", 5)]), /non-empty string key/);
@@ -280,16 +282,16 @@ section("refusals: the carry state", () => {
   throws("a carry-in that REACHES the pinned minimum refuses (no conforming predecessor produces one)",
     () => step({ [A]: 100000 }, [member(A, 1)]), /reaches the pinned minimum/);
   throws("a negative carry-in refuses",
-    () => advanceEpoch({ carryIn: new Map([[A, -1n]]), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: new Map([[A, -1n]]), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
     /only outstanding deferrals/);
   throws("a Number carry-in refuses",
-    () => advanceEpoch({ carryIn: new Map([[A, 500]]), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: new Map([[A, 500]]), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
     /non-BigInt carry-in/);
   throws("a plain object carry-in refuses (the state is a Map)",
-    () => advanceEpoch({ carryIn: { [A]: 5n }, members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: { [A]: 5n }, members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
     /must be a Map/);
   throws("a non-string carry-in key refuses",
-    () => advanceEpoch({ carryIn: new Map([[7, 5n]]), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: new Map([[7, 5n]]), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false }),
     /non-string member key/);
   // the state is validated even when the epoch will pass through, so a corrupt state
   // cannot ride through a refused epoch unexamined
@@ -300,13 +302,13 @@ section("refusals: the carry state", () => {
 // ---- refusals: the remaining arguments ----
 section("refusals: the remaining arguments", () => {
   throws("a Number encodingCeiling refuses",
-    () => advanceEpoch({ carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: 900, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: 900, owedRefused: false }),
     /positive BigInt/);
   throws("a zero encodingCeiling refuses",
-    () => advanceEpoch({ carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: 0n, owedRefused: false }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: 0n, owedRefused: false }),
     /positive BigInt/);
   throws("a non-boolean owedRefused refuses rather than being read as truthy",
-    () => advanceEpoch({ carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: "yes" }),
+    () => advanceEpoch({ ...NONE_FINAL, carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: "yes" }),
     /owedRefused is required/);
 });
 
@@ -319,7 +321,7 @@ section("a longer thread: the recursion across five epochs, expectations by hand
   const seen = [];
   const owedByEpoch = [30000, 30000, 30000, 30000, 30000];
   for (let e = 0; e < 5; e++) {
-    const r = advanceEpoch({ carryIn: state, encodingCeiling: CEIL, owedRefused: e === 2,
+    const r = advanceEpoch({ ...NONE_FINAL, carryIn: state, encodingCeiling: CEIL, owedRefused: e === 2,
       members: [member(A, owedByEpoch[e]), member(B, 200000)] });
     state = r.carryOut;
     seen.push({ kind: r.kind, a: outOf(r, A),
@@ -345,14 +347,73 @@ section("a longer thread: the recursion across five epochs, expectations by hand
     && seen[2].effA === null);
 });
 
-// THE SUITE ASSERTS ITS OWN SIZE. A section that returns early, or one whose assertions
-// stop being reached, reduces the count and would otherwise still exit zero, which is a
-// green run over fewer checks than anyone thinks are running. A hard equality by design:
-// when assertions are added, this number is raised deliberately in the same change.
-const EXPECTED_ASSERTIONS = 60;
+// ---- THE FINAL-EPOCH TERM (tegara/docs/FINAL_EPOCH_DESIGN.md). Each expectation is the design's
+// rule applied by hand: at a member's final epoch a positive sum below the minimum is raised to
+// the minimum and the raise is the declared top-up; nothing carries past it; the self-share is
+// never raised; a member present after its final epoch is refused. ----
+section("final epoch", () => {
+  const MIN = MIN_TRANSFER_AMOUNT_CREDITS;
+  const fin = (key, epoch) => ({ epochIndex: epoch, finalEpochOf: new Map([[key, epoch]]) });
+  // the 2026-09-22 stranded shape: 30,000 carried, nothing owed, and the epoch is final
+  const r = step({ [A]: 30000 }, [member(A, 0)], fin(A, 7));
+  ok("a final carry of 30,000 with nothing owed is raised to the minimum, with a declared top-up of 70,000, and is payable",
+    r.kind === "encoded" && r.effective[0] === MIN && r.topUp[0] === 70000n && r.payable[0] === true && r.final[0] === true);
+  ok("and nothing carries past it", r.carryOut.size === 0);
+  const low = step({ [A]: 1 }, [member(A, 0)], fin(A, 3));
+  ok("the smallest positive final sum, 1, is raised with the largest top-up, MIN - 1",
+    low.effective[0] === MIN && low.topUp[0] === MIN - 1n && low.carryOut.size === 0);
+  const edge = step({ [A]: String(MIN - 1n) }, [member(A, 0)], fin(A, 3));
+  ok("a final sum of MIN - 1 is raised with a top-up of exactly 1", edge.effective[0] === MIN && edge.topUp[0] === 1n);
+  const at = step({ [A]: 50000 }, [member(A, 50000)], fin(A, 3));
+  ok("a final sum AT the minimum is paid as it is, with no top-up", at.effective[0] === MIN && at.topUp[0] === 0n && at.payable[0] === true);
+  const above = step({ [A]: 99999 }, [member(A, 5)], fin(A, 3));
+  ok("a final sum above the minimum is paid as it is, with no top-up", above.effective[0] === MIN + 4n && above.topUp[0] === 0n);
+  const zero = step({}, [member(A, 0)], fin(A, 3));
+  ok("a final sum of zero stays zero: nothing is owed, nothing is raised, nothing is paid",
+    zero.effective[0] === 0n && zero.topUp[0] === 0n && zero.payable[0] === false && zero.carryOut.size === 0);
+  const self = step({}, [member(A, 30000, true)], fin(A, 3));
+  ok("the self-share at its final epoch is not raised and not payable", self.effective[0] === 30000n && self.topUp[0] === 0n && self.payable[0] === false);
+  const notYet = step({ [A]: 30000 }, [member(A, 0)], { epochIndex: 7, finalEpochOf: new Map([[A, 8]]) });
+  ok("the same carry one epoch BEFORE the final epoch still carries, unraised",
+    notYet.effective[0] === 30000n && notYet.topUp[0] === 0n && notYet.payable[0] === false && outOf(notYet, A) === 30000n && notYet.final[0] === false);
+  const mixed = step({ [A]: 30000, [B]: 20000 }, [member(A, 0), member(B, 0)], fin(A, 4));
+  ok("with only A final, A is raised and paid while B keeps carrying its own 20,000",
+    mixed.effective[0] === MIN && mixed.topUp[0] === 70000n && mixed.payable[1] === false && outOf(mixed, B) === 20000n && outOf(mixed, A) === 0n);
+  throws("a member present in an epoch after its final epoch is refused",
+    () => step({}, [member(A, 5)], { epochIndex: 9, finalEpochOf: new Map([[A, 8]]) }), /after its final epoch/);
+  const tight = step({ [A]: 30000 }, [member(A, 0)], { ...fin(A, 2), encodingCeiling: 50000n });
+  ok("the encoding check reads the RAISED amount, so a ceiling below the minimum refuses the final epoch",
+    tight.kind === "encoding-refused" && tight.refusedBy === "effective" && tight.refusedValue === String(MIN));
+  throws("an omitted finalEpochOf is refused",
+    () => advanceEpoch({ carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false, epochIndex: 0 }), /finalEpochOf is required/);
+  throws("an omitted epochIndex is refused",
+    () => advanceEpoch({ carryIn: emptyCarryState(), members: [member(A, 1)], encodingCeiling: CEIL, owedRefused: false, finalEpochOf: new Map() }), /epochIndex is required/);
+  throws("a final epoch that is not a safe integer is refused",
+    () => step({}, [member(A, 1)], { epochIndex: 0, finalEpochOf: new Map([[A, "3"]]) }), /not a safe non-negative integer/);
+  // AN ENCODING-REFUSED FINAL EPOCH settles nothing and drops nothing: the carried claim stays,
+  // and the next epoch refuses the member by name with the amount (fail-closed, see the module)
+  const refusedOwed = step({ [A]: 30000 }, [member(A, 0)], { ...fin(A, 1), owedRefused: true });
+  ok("an owed-refused final epoch keeps the member's 30,000 carried rather than dropping it",
+    refusedOwed.kind === "encoding-refused" && refusedOwed.refusedBy === "owed" && outOf(refusedOwed, A) === 30000n);
+  throws("and the next epoch refuses the member, naming the carry its final epoch could not settle",
+    () => advanceEpoch({ carryIn: refusedOwed.carryOut, members: [member(A, 0)], encodingCeiling: CEIL, owedRefused: false,
+      epochIndex: 2, finalEpochOf: new Map([[A, 1]]) }), /after its final epoch 1.*still carries 30000 credits.*encoding-refused/);
+  ok("the effective-refused final epoch keeps the carry too", outOf(tight, A) === 30000n);
+  throws("a member past its final epoch with nothing carried is refused without the carry clause",
+    () => step({}, [member(A, 5)], { epochIndex: 9, finalEpochOf: new Map([[A, 8]]) }), /after its final epoch 8; nothing may be paid or carried for it past the end$/);
+});
+
+// THE SUITE ASSERTS ITS OWN SIZE, after EVERY section. A section that returns early, or one
+// whose assertions stop being reached, reduces the count and would otherwise still exit zero,
+// which is a green run over fewer checks than anyone thinks are running. A hard equality by
+// design: when assertions are added, this number is raised deliberately in the same change. It
+// used to run before the final-epoch section, so that section's cases were outside the count
+// (found 2026-09-25 while folding the step 4 review).
+const EXPECTED_ASSERTIONS = 79;
 if (passed + failed !== EXPECTED_ASSERTIONS) {
   failed++;
   console.error(`FAIL: the suite ran ${passed + failed - 1} assertions, not the ${EXPECTED_ASSERTIONS} it declares; a section stopped short or the declared count was not raised with a new one`);
 }
+
 console.log(`epochCarryTest: ${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

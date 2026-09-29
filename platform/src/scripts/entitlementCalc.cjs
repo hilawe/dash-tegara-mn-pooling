@@ -211,11 +211,17 @@ const splitOwed = ({ distributableCredits, rowBps, encodingCeiling }) => {
  *   incomeIdentity  : the pool's income identity, 64 lowercase hex; its own row is the
  *                     self-share and never carries
  *   encodingCeiling : the schema's amountCredits ceiling, as a BigInt
+ *   finalEpochs     : REQUIRED, a Map from recipientId to that member's final epoch, from the
+ *                     ledger's memberFinalEpoch records (tegara/docs/FINAL_EPOCH_DESIGN.md);
+ *                     empty when no member is final. Passed through to the carry layer, which
+ *                     raises a final carry to the minimum and refuses a member present after
+ *                     its final epoch
  *
  * Returns { rowsFor(epochNumber), epochNumbers }.
  *
  * `rowsFor` answers one epoch's EFFECTIVE rows, in allocation order, each carrying
- * `recipientId`, `amountCredits` (the effective amount as a canonical decimal string),
+ * `recipientId`, `amountCredits` (the effective amount as a canonical decimal string, which at
+ * a member's final epoch already includes the declared top-up), `topUpCredits` WHEN NONZERO,
  * `isSelfShare` and `payable` (strict booleans, THE CARRY PARTITION'S OWN ANSWERS,
  * surfaced since the per-epoch context design's step 3b so that the forward plan
  * builder takes the partition's classification rather than re-deriving it)
@@ -240,7 +246,11 @@ const splitOwed = ({ distributableCredits, rowBps, encodingCeiling }) => {
  * supplying the run is the one caller who knows that number.
  */
 const buildCarryCapableEntitlements = ({ epochs, allocation, incomeIdentity,
-  encodingCeiling, configuredStart }) => {
+  encodingCeiling, configuredStart, finalEpochs }) => {
+  if (!(finalEpochs instanceof Map)) {
+    refuse("finalEpochs is required and must be a Map, empty when no member is final (an omitted answer would silently leave a final carry unpaid)");
+  }
+  const finalEpochOf = new Map(finalEpochs);   // one read, into a snapshot nothing else holds
   if (!isHex64(incomeIdentity)) {
     refuse("incomeIdentity must be a primitive 64 lowercase hex string (the self-share comparison's input)");
   }
@@ -334,6 +344,8 @@ const buildCarryCapableEntitlements = ({ epochs, allocation, incomeIdentity,
       carryIn: carry,
       encodingCeiling,
       owedRefused: false,
+      epochIndex: e.number,
+      finalEpochOf,
       members: alloc.map((a, i) => ({
         key: a.recipientId, isSelfShare: a.isSelfShare, owedCredits: split.owed[i],
       })),
@@ -360,7 +372,8 @@ const buildCarryCapableEntitlements = ({ epochs, allocation, incomeIdentity,
           amountCredits: String(step.effective[i]),
           isSelfShare: a.isSelfShare,
           payable: step.payable[i],
-          ...(carryIn === 0n ? {} : { carryInCredits: String(carryIn) }) };
+          ...(carryIn === 0n ? {} : { carryInCredits: String(carryIn) }),
+          ...(step.topUp[i] === 0n ? {} : { topUpCredits: String(step.topUp[i]) }) };
       }),
     });
     carry = step.carryOut;

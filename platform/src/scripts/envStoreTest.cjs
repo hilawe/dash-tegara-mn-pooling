@@ -157,12 +157,14 @@ updateEnvKey("PLAIN_KEY", "v3");
   // the v11 pair is owned for the same reason as v8's and v9's (E2 adoption table)
   updateEnvKey("CONTRACT_V11_PENDING", "1");
   updateEnvKey("CONTRACT_V11_ID", "theV11Id");
+  updateEnvKey("CONTRACT_V11_UPDATE_PENDING", "{\"nonce\":\"7\"}");
   // the E2 start-epoch family is owned (per-pool configured start, deliberately
   // mutable pre-journal: a soundness-review finding journal binding is the immutability authority)
   updateEnvKey("E2_START_EPOCH_" + "AB".repeat(32), "4123");
   saveEnv({ MNEMONIC: "m", SOME: "plain" }); // another stale foreign save
   ok("CONTRACT_V11_PENDING survives a foreign saveEnv", loadEnv().CONTRACT_V11_PENDING === "1");
   ok("CONTRACT_V11_ID survives a foreign saveEnv", loadEnv().CONTRACT_V11_ID === "theV11Id");
+  ok("CONTRACT_V11_UPDATE_PENDING survives a foreign saveEnv", loadEnv().CONTRACT_V11_UPDATE_PENDING === "{\"nonce\":\"7\"}");
   ok("an E2_START_EPOCH_ key survives a foreign saveEnv",
     loadEnv()["E2_START_EPOCH_" + "AB".repeat(32)] === "4123");
   ok("an E2_START_EPOCH_ key stays operator-mutable (no write-once class)",

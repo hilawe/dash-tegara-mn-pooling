@@ -73,7 +73,7 @@ const main = async () => {
   const plannedIdOf = (epochIndex, funderId) => D.docIdForIn({ generateId, ownerId: OWNER_B58, contractId: CONTRACT_B58,
     poolId: POOL, epochIndex, type: "platformAccrual", subject: funderId }).hex;
   const build = (over = {}) => X.buildEpochContext({ scope: scopeFor(0), formation: formation(), journalRun: [journaled(0)],
-    configuredStart: 0, declaredFigures: null, identifiers: identifiers(), ...over });
+    configuredStart: 0, declaredFigures: null, identifiers: identifiers(), finalEpochs: new Map(), ...over });
 
   // ---- THE INDEPENDENCE PROPERTY, as a check on the module's imports ----
   {
@@ -120,6 +120,44 @@ const main = async () => {
       edited && p2.members[1].payable === true && p2.header.grossCredits === GROSS && p2.scope.chainId === CHAIN && ctx0.scope.chainId === CHAIN && ctx0.rows[1].payable === true
       && p1 !== p2 && p1.members !== p2.members && p1.scope !== ctx0.scope && p1.scope !== p2.scope && p1.header !== p2.header && p1.members[1] !== p2.members[1]
       && p1.scope.chainId === "edited" && p1.header.grossCredits === "1" && p1.members[1].payable === false);
+  }
+
+  // ---- 1b. THE POOL'S FINAL EPOCHS (FINAL_EPOCH_DESIGN.md): C owes 2,000 at epoch 0, below the
+  // minimum. With C final at epoch 0 the row carries the minimum, the declared top-up is the
+  // difference computed here from the pinned minimum, and the kernel plans C as payable ----
+  {
+    const topUp = String(MIN_TRANSFER_AMOUNT_CREDITS - OWED[C]);
+    const ctxF = build({ finalEpochs: new Map([[C, 0]]) });
+    const cRow = ctxF.rows.find((r) => r.funderId === C);
+    ok(`a member at its final epoch carries the minimum on the forward context's row with the declared top-up ${topUp}, payable`,
+      cRow.effectiveCredits === String(MIN_TRANSFER_AMOUNT_CREDITS) && cRow.topUpCredits === topUp && cRow.payable === true);
+    ok("the other rows are the ones built with no final epoch, member for member",
+      JSON.stringify(ctxF.rows.filter((r) => r.funderId !== C)) === JSON.stringify(ctx0.rows.filter((r) => r.funderId !== C))
+      && ctxF.rows.every((r) => r.funderId === C || !("topUpCredits" in r)));
+    const planF = K.buildExpectedRecordPlan(X.planInputOf(ctxF));
+    const cPlan = planF.members.find((m) => m.funderId === C);
+    ok("through the real kernel the raised member is planned payable at the minimum",
+      cPlan && cPlan.classification === "payable" && cPlan.effectiveCredits === String(MIN_TRANSFER_AMOUNT_CREDITS));
+    // the self-share is never raised, whatever a final-epoch map says
+    const ctxA = build({ finalEpochs: new Map([[A, 0]]) });
+    ok("the income identity's own row is never raised by a final epoch",
+      JSON.stringify(ctxA.rows) === JSON.stringify(ctx0.rows));
+    // a run reaching an epoch after a member's final epoch refuses the build
+    let pastErr = null;
+    try { build({ scope: scopeFor(1), journalRun: [journaled(0), journaled(1)], finalEpochs: new Map([[C, 0]]) }); }
+    catch (e) { pastErr = e.message; }
+    ok("a run reaching an epoch after a member's final epoch refuses the build", pastErr !== null && /after its final epoch 0/.test(pastErr));
+    throws("an omitted finalEpochs refuses", () => X.buildEpochContext({ scope: scopeFor(0), formation: formation(), journalRun: [journaled(0)],
+      configuredStart: 0, declaredFigures: null, identifiers: identifiers() }), /options\.finalEpochs is required/);
+    throws("a finalEpochs that is not a Map refuses", () => build({ finalEpochs: { [C]: 0 } }), /finalEpochs must be a Map/);
+    throws("a finalEpochs keyed by a non-canonical identifier refuses", () => build({ finalEpochs: new Map([[C.toUpperCase(), 0]]) }), /a finalEpochs member must be 64 lowercase hex/);
+    throws("a finalEpochs whose value is not an epoch refuses", () => build({ finalEpochs: new Map([[C, "0"]]) }), /not a u32 epoch/);
+    // THE SNAPSHOT: a Map whose own entries method lies is read through Map.prototype.entries
+    const lying = new Map([[C, 0]]);
+    lying.entries = function* () { yield* []; };
+    lying[Symbol.iterator] = function* () { yield* []; };
+    const ctxL = build({ finalEpochs: lying });
+    ok("the map's entries are read through Map.prototype.entries, not the value's own method", ctxL.rows.find((r) => r.funderId === C).topUpCredits === topUp);
   }
 
   // ---- 2. a declared fresh epoch: appended to the run, the carry reaches it ----
@@ -346,7 +384,7 @@ const main = async () => {
     const mkCarrier = (padLen) => toHex(canonicalString(proofObj(padLen)));
     const carrierOfLength = (wantL) => { let padLen = 1, hex = mkCarrier(padLen); padLen += wantL - hex.length / 2; hex = mkCarrier(Math.floor(padLen)); while (hex.length / 2 < wantL) { padLen += 1; hex = mkCarrier(padLen); } while (hex.length / 2 > wantL) { padLen -= 1; hex = mkCarrier(padLen); } if (hex.length / 2 !== wantL) throw new Error("carrier length"); return hex; };
     const bigCarrier = carrierOfLength(2 * PART_BOUND_B + 100);   // three chunks: proofBytes plus parts 1 and 2
-    const META_OBJ = { chainId: CHAIN, protocolVersion: 12, height: "1000", timeMs: "1690000000000", coreChainLockedHeight: 777, epoch: 5 };
+    const META_OBJ = { chainId: CHAIN, protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN, height: "1000", timeMs: "1690000000000", coreChainLockedHeight: 777, epoch: 5 };
     const META_HEX = toHex(canonicalString(META_OBJ));
     const TRANSFER_HEX = toHex(canonicalString({ senderId: A, recipientId: B, amountCredits: AMOUNT, nonce: "7" }));
     const TH = sha(TRANSFER_HEX);

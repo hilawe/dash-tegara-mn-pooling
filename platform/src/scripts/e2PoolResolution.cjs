@@ -43,6 +43,7 @@
  */
 const formationCore = require("./formationCore.cjs");
 const entitlementCalc = require("./entitlementCalc.cjs");
+const finalEpoch = require("./e2FinalEpoch.cjs");
 
 const refuse = (m) => { throw new Error(`e2PoolResolution: ${m}`); };
 
@@ -74,12 +75,19 @@ const makeProvedFetchOne = ({ provedQuery }) => {
 // itself is a shared component with its own tests (`receiptPoolCheckTest.cjs`); the runner wires
 // the real one, and a battery can drive both sides of the verdict.
 const RESOLVE_ENV = ["provedQuery", "contractId", "writerHex", "b58Of", "idHex",
-  "encodingCeiling", "openJournalFor", "runFromJournal", "docIdForIn", "checkReceiptAgainstPool"];
+  "encodingCeiling", "openJournalFor", "runFromJournal", "docIdForIn", "checkReceiptAgainstPool",
+  "contractDefinesFinalEpochType"];
 
 /**
  * makeResolveProvedPool(env) -> async (pid) -> {
  *   resolved: true, writerIdentity, incomeIdentity, allocationHashHex, owners,
  *   entitlementsForEpoch(epochIndex, numbers) }
+ *
+ * `env.contractDefinesFinalEpochType` answers, from the PROVED contract definition, whether the
+ * pool's contract defines memberFinalEpoch. The pool's final epochs are read at resolution time
+ * through e2FinalEpoch's composition, the one the writer uses, so the admission's funding sum and
+ * the writer's amounts cannot disagree at a final epoch. A record effective when read stays
+ * effective, since any header written later has a later $createdAt.
  *
  * ONE PROVED RESOLUTION PER REAL POOL, honoring the identifier it is asked for. A resolver that
  * ignores its argument answers wrongly the moment the store holds two pools, which bootstrap mode
@@ -128,6 +136,12 @@ const makeResolveProvedPool = (env) => {
     const poolOwners = alloc[5].map((row) => ({ ownerB58: row[0], bps: row[2] }));
     if (poolOwners.length < 1) throw new Error(`${label}: the allocation carries no owners`);
     const incomeIdentity = ownerHexOf(poolDocP);
+    // THE POOL'S EFFECTIVE FINAL EPOCHS, by the writer's own composition; a late record refuses
+    const finalRead = await finalEpoch.readEffectiveFinalEpochs({
+      poolId: pid, lateIs: "refused",
+      ...finalEpoch.makeFinalEpochReads({ poolId: pid, provedQuery: env.provedQuery, idHex,
+        contractDefinesType: env.contractDefinesFinalEpochType }),
+    });
     return {
       // THE ATTESTATION the admission requires (a soundness-review finding). Everything above this point is the
       // proved resolution: the pool and its completion receipt read through the proof-verifying
@@ -179,6 +193,7 @@ const makeResolveProvedPool = (env) => {
           throw new Error(`${label}: epoch ${epochIndex}'s memberCount is ${mine.memberCount} in the run and ${numbers.memberCount} in the numbers the admission passed; refusing rather than choosing one`);
         }
         const calc = entitlementCalc.buildCarryCapableEntitlements({
+          finalEpochs: finalRead.finalEpochs,
           incomeIdentity,
           encodingCeiling,
           configuredStart: read.configuredStartEpoch,

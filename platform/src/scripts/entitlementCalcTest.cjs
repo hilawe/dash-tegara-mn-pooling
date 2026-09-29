@@ -116,7 +116,7 @@ section("splitOwed: the allocation shape", () => {
     () => splitOwed({ distributableCredits: "1", rowBps: [10000], encodingCeiling: CEIL + 1n }),
     /is not the schema's credit ceiling/);
   throws("the same refusal reaches the run builder, which passes the ceiling through",
-    () => buildCarryCapableEntitlements({ incomeIdentity: A, allocation: half, configuredStart: 0,
+    () => buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A, allocation: half, configuredStart: 0,
       encodingCeiling: CEIL * 2n, epochs: [{ number: 0, distributableCredits: "1" }] }),
     /is not the schema's credit ceiling/);
   // the vector predicate carries the same bounds as the descriptor reader
@@ -135,7 +135,7 @@ section("the multi-epoch run", () => {
   //                     carry-out zero.
   //          epoch 7 -> B effective 50000 again, carried again.
   //          A is 50000 every epoch and never carries at any amount.
-  const calc = buildCarryCapableEntitlements({ configuredStart: 5,
+  const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 5,
     incomeIdentity: A, allocation: half, encodingCeiling: CEIL,
     epochs: [5, 6, 7].map((number) => ({ number, distributableCredits: "100000" })) });
 
@@ -180,7 +180,7 @@ section("a member who never reaches the minimum", () => {
   // D = 20000 at 5000/5000 bps is 10000 owed each per epoch. B accumulates 10000 per
   // epoch and needs TEN epochs to reach the 100000 minimum, so epochs 0..8 all defer and
   // epoch 9 pays. Expectations by hand: carry-in at epoch n is 10000n.
-  const calc = buildCarryCapableEntitlements({ configuredStart: 0,
+  const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 0,
     incomeIdentity: A, allocation: half, encodingCeiling: CEIL,
     epochs: Array.from({ length: 11 }, (_, n) => ({ number: n, distributableCredits: "20000" })) });
   const eff = (n) => calc.rowsFor(n)[1].amountCredits;
@@ -199,7 +199,7 @@ section("a member who never reaches the minimum", () => {
 
 // ---- an encoding-refused epoch refuses the run from there on ----
 section("an encoding-refused run", () => {
-  const calc = buildCarryCapableEntitlements({ configuredStart: 1,
+  const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 1,
     incomeIdentity: A, allocation: half, encodingCeiling: CEIL,
     epochs: [{ number: 1, distributableCredits: "100000" },
       { number: 2, distributableCredits: String(CEIL * 4n) },
@@ -218,7 +218,7 @@ section("the carry step's own encoding refusal", () => {
   // effective amount is ceiling plus the carried 1, so the CARRY step is what refuses.
   // This is a different branch from the split's refusal and the two must both be reached.
   const solo = [{ recipientId: B, bps: 10000 }];
-  const calc = buildCarryCapableEntitlements({ incomeIdentity: A, allocation: solo, configuredStart: 0,
+  const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A, allocation: solo, configuredStart: 0,
     encodingCeiling: CEIL,
     epochs: [{ number: 0, distributableCredits: "1" },
       { number: 1, distributableCredits: String(CEIL) }] });
@@ -230,14 +230,14 @@ section("the carry step's own encoding refusal", () => {
 
 // ---- the run's boundaries ----
 section("the run's boundaries", () => {
-  const calc = buildCarryCapableEntitlements({ configuredStart: 5,
+  const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 5,
     incomeIdentity: A, allocation: half, encodingCeiling: CEIL,
     epochs: [{ number: 5, distributableCredits: "100000" }] });
   throws("an epoch BELOW the run refuses rather than answering from a base it never established",
     () => calc.rowsFor(4), /outside this run \(5\.\.5\)/);
   throws("an epoch ABOVE the run refuses rather than extrapolating",
     () => calc.rowsFor(6), /outside this run/);
-  const run = (...numbers) => () => buildCarryCapableEntitlements({ incomeIdentity: A, configuredStart: numbers[0],
+  const run = (...numbers) => () => buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A, configuredStart: numbers[0],
     allocation: half, encodingCeiling: CEIL,
     epochs: numbers.map((number) => ({ number, distributableCredits: "1" })) });
   throws("a non-ascending run refuses, because the recursion threads each epoch's carry into the next",
@@ -250,13 +250,13 @@ section("the run's boundaries", () => {
     run(5, 7), /does not immediately follow 5/);
   throws("a gap later in a longer run refuses too", run(5, 6, 7, 9), /does not immediately follow 7/);
   ok("a consecutive run of four is accepted", (() => { run(5, 6, 7, 8)(); return true; })());
-  throws("an empty run refuses", () => buildCarryCapableEntitlements({ incomeIdentity: A,
+  throws("an empty run refuses", () => buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A,
     allocation: half, encodingCeiling: CEIL, epochs: [] }), /non-empty array/);
 });
 
 // ---- the build-time refusals ----
 section("the build-time refusals", () => {
-  const build = (over) => () => buildCarryCapableEntitlements({ incomeIdentity: A, allocation: half, configuredStart: 0,
+  const build = (over) => () => buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A, allocation: half, configuredStart: 0,
     encodingCeiling: CEIL, epochs: [{ number: 0, distributableCredits: "100000" }], ...over });
   throws("an absent income identity refuses (nothing could recognize the self-share)", build({ incomeIdentity: undefined }), /64 lowercase hex/);
   throws("a short income identity refuses", build({ incomeIdentity: A.slice(0, 62) }), /64 lowercase hex/);
@@ -289,7 +289,7 @@ section("the build-time refusals", () => {
   // carry. One epoch cannot show that: the first epoch's amounts are 50000 either way.
   // The second epoch is where a member that carried differs from one that did not.
   ok("with a third identity as the income identity, BOTH members carry, which only the second epoch can show",
-    (() => { const c = buildCarryCapableEntitlements({ incomeIdentity: C, allocation: half,
+    (() => { const c = buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: C, allocation: half,
       configuredStart: 0, encodingCeiling: CEIL,
       epochs: [0, 1].map((number) => ({ number, distributableCredits: "100000" })) });
       const e0 = c.rowsFor(0), e1 = c.rowsFor(1);
@@ -297,7 +297,7 @@ section("the build-time refusals", () => {
         && e1[0].carryInCredits === "50000" && e1[1].carryInCredits === "50000"
         && e1[0].amountCredits === "100000" && e1[1].amountCredits === "100000"; })());
   ok("and when the income identity IS a member, that member alone stops carrying",
-    (() => { const c = buildCarryCapableEntitlements({ incomeIdentity: A, allocation: half,
+    (() => { const c = buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A, allocation: half,
       configuredStart: 0, encodingCeiling: CEIL,
       epochs: [0, 1].map((number) => ({ number, distributableCredits: "100000" })) });
       const e1 = c.rowsFor(1);
@@ -306,7 +306,7 @@ section("the build-time refusals", () => {
 
 // ---- the run's base is enforced, not assumed ----
 section("the run's base is enforced", () => {
-  const at = (start) => () => buildCarryCapableEntitlements({ incomeIdentity: A,
+  const at = (start) => () => buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A,
     allocation: half, encodingCeiling: CEIL, configuredStart: start,
     epochs: [{ number: 5, distributableCredits: "100000" }] });
   throws("a run beginning ABOVE the configured start refuses: every earlier epoch's owed amount would be missing from its carry",
@@ -330,7 +330,7 @@ section("every validated value is read exactly once", () => {
   const shifty = {};
   Object.defineProperty(shifty, "number", { ...twoFaced(6, 7), enumerable: true });
   shifty.distributableCredits = "100000";
-  const c1 = buildCarryCapableEntitlements({ incomeIdentity: A, allocation: half,
+  const c1 = buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: A, allocation: half,
     encodingCeiling: CEIL, configuredStart: 6, epochs: [shifty] });
   ok("the epoch the run answers for is the one that was validated, not the one a later read named",
     JSON.stringify(c1.epochNumbers) === "[6]" && c1.rowsFor(6)[0].amountCredits === "50000");
@@ -341,7 +341,7 @@ section("every validated value is read exactly once", () => {
   const rowA = { bps: 5000 }, rowB = { bps: 5000 };
   Object.defineProperty(rowA, "recipientId", { ...twoFaced(A, B), enumerable: true });
   Object.defineProperty(rowB, "recipientId", { ...twoFaced(B, B), enumerable: true });
-  const c2 = buildCarryCapableEntitlements({ incomeIdentity: C, allocation: [rowA, rowB],
+  const c2 = buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: C, allocation: [rowA, rowB],
     encodingCeiling: CEIL, configuredStart: 0,
     epochs: [{ number: 0, distributableCredits: "100000" }] });
   const got = c2.rowsFor(0).map((r) => r.recipientId);
@@ -369,7 +369,7 @@ section("every validated value is read exactly once", () => {
 section("the self-share never carries at any amount", () => {
   // A is income and owed 1 credit an epoch. Over three epochs it stays 1, never 2 or 3,
   // because a self-share is settled where it sits rather than deferred.
-  const calc = buildCarryCapableEntitlements({ configuredStart: 0,
+  const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 0,
     incomeIdentity: A, allocation: [{ recipientId: A, bps: 10000 }], encodingCeiling: CEIL,
     epochs: [0, 1, 2].map((number) => ({ number, distributableCredits: "1" })) });
   ok("a self-share owed 1 credit an epoch stays at 1 every epoch, rather than accumulating to 2 and 3",
@@ -401,7 +401,7 @@ section("the carry partition's answers travel on each row (the per-epoch context
   // the same fixture as the multi-epoch run: A is the income identity, B a plain member,
   // D = 100000 at 5000/5000, so B is below the minimum at epochs 5 and 7 and exactly at it
   // (through the carry) at epoch 6
-  const calc = buildCarryCapableEntitlements({ configuredStart: 5,
+  const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 5,
     incomeIdentity: A, allocation: half, encodingCeiling: CEIL,
     epochs: [5, 6, 7].map((number) => ({ number, distributableCredits: "100000" })) });
   const e5 = calc.rowsFor(5), e6 = calc.rowsFor(6), e7 = calc.rowsFor(7);
@@ -412,7 +412,7 @@ section("the carry partition's answers travel on each row (the per-epoch context
     && e5[1].payable === false && e6[1].payable === true && e7[1].payable === false);
   ok("both answers are strict booleans on every row",
     [e5, e6, e7].every((e) => e.every((r) => typeof r.isSelfShare === "boolean" && typeof r.payable === "boolean")));
-  const z = buildCarryCapableEntitlements({ configuredStart: 0, incomeIdentity: A, allocation: half,
+  const z = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 0, incomeIdentity: A, allocation: half,
     encodingCeiling: CEIL, epochs: [{ number: 0, distributableCredits: "1" }] }).rowsFor(0);
   ok("a zero effective amount is not payable, and the self-share flag is the identity comparison alone",
     z[1].amountCredits === "0" && z[1].payable === false && z[1].isSelfShare === false && z[0].isSelfShare === true && z[0].payable === false);
@@ -421,20 +421,20 @@ section("the carry partition's answers travel on each row (the per-epoch context
   // independently over the same owed amounts and the same carry-in, index by index
   const { advanceEpoch, emptyCarryState } = require("./epochCarry.cjs");
   const carry5 = new Map([[B, 50000n]]);
-  const step6 = advanceEpoch({ carryIn: carry5, encodingCeiling: CEIL, owedRefused: false,
+  const step6 = advanceEpoch({ carryIn: carry5, encodingCeiling: CEIL, owedRefused: false, epochIndex: 6, finalEpochOf: new Map(),
     members: [{ key: A, isSelfShare: true, owedCredits: 50000n }, { key: B, isSelfShare: false, owedCredits: 50000n }] });
   ok("the row's payable IS the carry partition's answer, index by index, over the same owed amounts and carry-in",
     step6.kind === "encoded" && e6.every((r, i) => r.payable === step6.payable[i]) && e6[1].amountCredits === String(step6.effective[1]));
   // REORDERED MEMBERS: the answers follow the allocation's order, so the income identity
   // placed SECOND is the self-share at index 1 and the member at index 0 is payable
-  const swapped = buildCarryCapableEntitlements({ configuredStart: 5, incomeIdentity: A,
+  const swapped = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 5, incomeIdentity: A,
     allocation: [{ recipientId: B, bps: 5000 }, { recipientId: A, bps: 5000 }], encodingCeiling: CEIL,
     epochs: [5, 6].map((number) => ({ number, distributableCredits: "100000" })) }).rowsFor(6);
   ok("with the allocation reordered, each answer stays with its own member (the income identity second is the self-share at index 1)",
     swapped[0].recipientId === B && swapped[0].isSelfShare === false && swapped[0].payable === true
     && swapped[1].recipientId === A && swapped[1].isSelfShare === true && swapped[1].payable === false);
   // THE MINIMUM'S EDGE: one credit below the pinned minimum is not payable, exactly at it is
-  const edge = (d) => buildCarryCapableEntitlements({ configuredStart: 0, incomeIdentity: A, allocation: half,
+  const edge = (d) => buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 0, incomeIdentity: A, allocation: half,
     encodingCeiling: CEIL, epochs: [{ number: 0, distributableCredits: d }] }).rowsFor(0)[1];
   ok("one credit below the pinned minimum is not payable and exactly the minimum is",
     edge("199998").amountCredits === "99999" && edge("199998").payable === false
@@ -460,7 +460,32 @@ section("the carry partition's answers travel on each row (the per-epoch context
       members: e6.map((r, i) => memberOf(i === 0 ? { ...r, payable: true } : r, i)) }), /payable AND a self-share/);
 });
 
-const EXPECTED_ASSERTIONS = 83;
+// ---- THE FINAL-EPOCH TERM THROUGH THE ROW SOURCE (tegara/docs/FINAL_EPOCH_DESIGN.md). A is the
+// income identity, so B is the one payable member; 100,000 distributable splits 50,000 each, so B
+// alone is below the minimum in epoch 0 and carries. ----
+section("final epoch through the row source", () => {
+  const run = (finalEpochs, numbers = [0, 1]) => buildCarryCapableEntitlements({ finalEpochs, configuredStart: numbers[0],
+    incomeIdentity: A, allocation: half, encodingCeiling: CEIL,
+    epochs: numbers.map((number) => ({ number, distributableCredits: "60000" })) });
+  // 60,000 split in half is 30,000 each epoch; B carries 30,000 out of epoch 0
+  const plain = run(new Map());
+  ok("with no final epoch, B carries 30,000 into epoch 1, where its 60,000 is still below the minimum and carries again, unraised",
+    plain.rowsFor(0)[1].payable === false && plain.rowsFor(1)[1].amountCredits === "60000"
+      && plain.rowsFor(1)[1].carryInCredits === "30000" && plain.rowsFor(1)[1].payable === false
+      && plain.rowsFor(1)[1].topUpCredits === undefined);
+  const final0 = run(new Map([[B, 0]]), [0]);
+  const b = final0.rowsFor(0)[1];
+  ok("with B final at epoch 0, its 30,000 is raised to the minimum, declared as a 70,000 top-up, and payable",
+    b.amountCredits === "100000" && b.topUpCredits === "70000" && b.payable === true && b.carryInCredits === undefined);
+  ok("the self-share's row is untouched by B's final epoch", final0.rowsFor(0)[0].amountCredits === "30000" && final0.rowsFor(0)[0].topUpCredits === undefined);
+  throws("a member final at epoch 0 in a run that continues to epoch 1 is refused at build, since it is present after its end",
+    () => run(new Map([[B, 0]])), /after its final epoch/);
+  throws("an omitted finalEpochs is refused",
+    () => buildCarryCapableEntitlements({ configuredStart: 0, incomeIdentity: A, allocation: half, encodingCeiling: CEIL,
+      epochs: [{ number: 0, distributableCredits: "60000" }] }), /finalEpochs is required/);
+});
+
+const EXPECTED_ASSERTIONS = 88;
 if (passed + failed !== EXPECTED_ASSERTIONS) {
   failed++;
   console.error(`FAIL: the suite ran ${passed + failed - 1} assertions, not the ${EXPECTED_ASSERTIONS} it declares; a section stopped short or the declared count was not raised with a new one`);

@@ -220,6 +220,48 @@ const main = async () => {
       cases === 32 && agree === 32);
   }
 
+  // ---- the FINAL-EPOCH RECORD identifier (FINAL_EPOCH_DESIGN.md, the command's ownership invariant) ----
+  {
+    const P1 = "5a".repeat(32), P2 = "5b".repeat(32), M1 = "6a".repeat(32), M2 = "6b".repeat(32);
+    const feId = (poolId, funderId, ownerId = OWNER, contractId = CONTRACT) =>
+      D.finalEpochIdFor({ generateId, ownerId, contractId, poolId, funderId });
+    // THE SPECIFICATION, recomputed here from its words and not from the module: the entropy is
+    // sha256 over "tegara.e2.member-final-epoch.v1|<pool>|<member>", and Platform's identifier is the
+    // double SHA-256 of contract, owner, the type name and the entropy (generate_document_id_v0)
+    const feSpec = (poolId, funderId, owner32, contract32) => {
+      const ent = crypto.createHash("sha256").update(`tegara.e2.member-final-epoch.v1|${poolId}|${funderId}`).digest();
+      const inner = crypto.createHash("sha256").update(Buffer.concat([contract32, owner32, Buffer.from("memberFinalEpoch"), ent])).digest();
+      return { entropy: ent.toString("hex"), id: crypto.createHash("sha256").update(inner).digest("hex") };
+    };
+    const w = feSpec(P1, M1, formationCore.toId32(OWNER), formationCore.toId32(CONTRACT));
+    ok("final epoch: the entropy and the installed generator's identifier equal the specification's, recomputed here",
+      feId(P1, M1).entropy.toString("hex") === w.entropy && feId(P1, M1).hex === w.id
+      && D.finalEpochEntropyFor(P1, M1).toString("hex") === w.entropy);
+    ok("final epoch: every attempt for one member of one pool derives one identifier", feId(P1, M1).hex === feId(P1, M1).hex);
+    ok("final epoch: a SECOND POOL OF THE SAME WRITER gets a different identifier for the same member (the shared-identity case)",
+      feId(P1, M1).hex !== feId(P2, M1).hex);
+    ok("final epoch: another member of the same pool gets a different identifier", feId(P1, M1).hex !== feId(P1, M2).hex);
+    ok("final epoch: the pool and the member are not interchangeable (swapping them changes the identifier)", feId(P1, M1).hex !== feId(M1, P1).hex);
+    ok("final epoch: an epoch passed beside the inputs is not read, so naming another epoch cannot move the identifier",
+      D.finalEpochIdFor({ generateId, ownerId: OWNER, contractId: CONTRACT, poolId: P1, funderId: M1, finalEpochIndex: 5 }).hex
+        === D.finalEpochIdFor({ generateId, ownerId: OWNER, contractId: CONTRACT, poolId: P1, funderId: M1, finalEpochIndex: 9 }).hex);
+    const legacyAccrual = D.docIdForIn({ generateId, ownerId: OWNER, contractId: CONTRACT, poolId: P1, epochIndex: 0, type: "platformAccrual", subject: M1 });
+    ok("final epoch: the identifier differs from the member's accrual identifier in the same pool", legacyAccrual.hex !== feId(P1, M1).hex);
+    const refusedFe = (fn) => { try { fn(); return false; } catch (e) { return /e2DocId/.test(e.message); } };
+    ok("final epoch: an uppercase pool, a short member and a missing generator are refused",
+      refusedFe(() => feId("5A".repeat(32), M1)) && refusedFe(() => feId(P1, "6a".repeat(31)))
+      && refusedFe(() => D.finalEpochIdFor({ ownerId: OWNER, contractId: CONTRACT, poolId: P1, funderId: M1 })));
+    // RANDOM INPUTS, fresh each run, so a derivation reading only part of either input is visible
+    let agreeFe = 0;
+    for (let i = 0; i < 32; i++) {
+      const pool = crypto.randomBytes(32).toString("hex"), member = crypto.randomBytes(32).toString("hex");
+      const want = feSpec(pool, member, formationCore.toId32(OWNER), formationCore.toId32(CONTRACT));
+      const got = feId(pool, member);
+      if (got.hex === want.id && got.entropy.toString("hex") === want.entropy) agreeFe++;
+    }
+    ok("final epoch: for 32 random pools and members the entropy and identifier equal the specification's", agreeFe === 32);
+  }
+
   console.log(`\ne2DocIdTest: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exitCode = 1;
 };

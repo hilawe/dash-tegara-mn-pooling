@@ -10,7 +10,7 @@
  * WHAT IT ESTABLISHES: a receipt (or served capture) is accepted ONLY when
  * its parts are exactly the canonical contiguous split, its carriers decode
  * and RE-ENCODE BYTE-EQUAL under the pinned pipeline with the pinned chain
- * identifier and protocol version 12, its lifted fields equal the decoded
+ * identifier and the shared protocol-version pin (13), its lifted fields equal the decoded
  * messages, its transition hash is recomputed from its bytes, its decoded
  * sender, recipient and amount equal the pool's income identity and the
  * recomputed entitlement, BOTH proof stages succeed (the signature check
@@ -62,7 +62,8 @@ const U32_MAX = 4294967295;
 const PART_BOUND_B = 5120;
 // the allowed route registry, today exactly one route
 const ROUTE_REGISTRY = Object.freeze(["tenderdash-tx"]);
-const PROTOCOL_VERSION_PIN = 12;
+// the one shared pin and the reasoning behind its value live in platformProtocolPin.cjs
+const { PROTOCOL_VERSION_PIN } = require("./platformProtocolPin.cjs");
 
 // A MODULE-PRIVATE class used for CONTROL FLOW INSIDE THIS MODULE ONLY. It is
 // not exported, no recognizer is exported, and nothing outside this file is ever
@@ -217,7 +218,7 @@ const reassembleProof = (receipt, parts) => {
  * pipeline (injected), re-encode the known fields with unknown fields
  * omitted, REFUSE unless the re-encoding is byte-equal to the supplied
  * bytes, REFUSE unless the decoded chain identifier equals the pinned one,
- * and REFUSE a protocol version other than 12. Returns the decoded pair.
+ * and REFUSE a protocol version other than the shared pin (13). Returns the decoded pair.
  */
 const verifyCarrierConformance = ({ carrierHex, metadataHex, chainIdPin, deps }) => {
   if (typeof chainIdPin !== "string" || chainIdPin.length === 0) refuse("the carrier stage needs the owned chain pin");

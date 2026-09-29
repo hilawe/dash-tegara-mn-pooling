@@ -126,7 +126,8 @@ const mkFetch = (balances, over = {}) => {
   const fn = async (id) => {
     calls.push(id);
     return { balance: balances[id], metadata: { chainId: over.chainId ?? CHAIN,
-      protocolVersion: over.protocolVersion ?? 12, height: over.height ?? "100" } };
+      // the LITERAL 13, independent of the module's pin (platformProtocolPin.cjs, 2026-09-27)
+      protocolVersion: over.protocolVersion ?? 13, height: over.height ?? "100" } };
   };
   fn.calls = calls;
   return fn;
@@ -151,7 +152,7 @@ const unresolvedCases = [
 
 const admit = (over = {}) => {
   const locks = over.locks || acquireIdentityLocks([W, I]);
-  const p = admitHeader({ dir: over.dir, poolId: over.poolId || POOL_A,
+  const p = (over.admitHeader || admitHeader)({ dir: over.dir, poolId: over.poolId || POOL_A,
     candidate: over.candidate || candidate,
     identities: over.identities || { writer: W, income: I },
     resolvePool: over.resolvePool || resolverFor({}),
@@ -190,6 +191,27 @@ const admit = (over = {}) => {
         fetch: mkFetch({ [W]: "999999", [I]: "999999" }) }),
       /did not resolve/);
   }
+}
+
+// ---- A SUBDIRECTORY OF THE STORE IS OUTSIDE THE INVENTORY (2026-09-27) ----
+// The registration runner keeps its probe phase's journal in a subdirectory of the store
+// (registerV11Run.mjs, PROBE_DIR), so the canonical phase's admission, whose resolver resolves
+// no pool, does not meet the probe pool. That relies on the inventory reading only the top
+// level. The same unresolved journal with obligations must not refuse the admission from a
+// subdirectory, and must refuse it from the top level (the contrary case).
+{
+  const dir = caseDir();
+  const sub = path.join(dir, "probe-phase");
+  fs.mkdirSync(sub);
+  const recs = [lag(POOL_B, 5), headerW(POOL_B, 5, 2, true), marker(POOL_B, "header", 5, null, hBytes(5))];
+  writeJournal(POOL_B, recs, sub);
+  const r = await admit({ dir, fetch: mkFetch({ [W]: "999999", [I]: "999999" }) });
+  ok("an unresolved journal in a subdirectory of the store is outside the inventory, so the admission proceeds",
+    r.admitted === true);
+  writeJournal(POOL_B, recs, dir);
+  await rejects("the same journal at the store's top level refuses the admission (a soundness-review finding)",
+    admit({ dir, fetch: mkFetch({ [W]: "999999", [I]: "999999" }) }),
+    /did not resolve/);
 }
 
 // ---- the concurrent-pool refusal: another pool's incomplete epoch shares
@@ -421,9 +443,38 @@ const admit = (over = {}) => {
   await rejects("a chainId differing from the owned pin refuses",
     admit({ dir, fetch: mkFetch({ [W]: "9999", [I]: "9999" }, { chainId: "other-chain" }) }),
     /differs from the owned pin/);
-  await rejects("an authenticated protocolVersion other than 12 refuses",
-    admit({ dir, fetch: mkFetch({ [W]: "9999", [I]: "9999" }, { protocolVersion: 11 }) }),
-    /not the pinned 12/);
+  // 12 is the dead bench's version and the old pin, 14 the next one
+  for (const pv of [12, 14]) {
+    await rejects(`an authenticated protocolVersion ${pv} refuses, naming the pin 13`,
+      admit({ dir, fetch: mkFetch({ [W]: "9999", [I]: "9999" }, { protocolVersion: pv }) }),
+      new RegExp(`protocolVersion ${pv} is not the pinned 13`));
+  }
+  // THE ADMISSION TAKES ITS PIN FROM THE SHARED MODULE, bound apart from the value (review
+  // 2026-09-27): a fresh copy of e2BalanceCheck loaded against a stand-in pin module answering 77
+  // must refuse a balance served at the literal 13, naming 77. Its own locks are used, since lock
+  // ownership is the loaded copy's to check. The module cache is restored after.
+  {
+    const Module = require("module");
+    const pinPath = require.resolve("./platformProtocolPin.cjs");
+    const bcPath = require.resolve("./e2BalanceCheck.cjs");
+    const savedPin = require.cache[pinPath], savedBc = require.cache[bcPath];
+    let alt;
+    try {
+      const stand = new Module(pinPath);
+      stand.filename = pinPath; stand.loaded = true; stand.exports = { PROTOCOL_VERSION_PIN: 77 };
+      require.cache[pinPath] = stand;
+      delete require.cache[bcPath];
+      alt = require(bcPath);
+    } finally { require.cache[pinPath] = savedPin; require.cache[bcPath] = savedBc; }
+    const altLocks = alt.acquireIdentityLocks([W, I]);
+    try {
+      await rejects("with platformProtocolPin.cjs answering 77, a balance at the literal 13 refuses naming 77 (the admission reads the shared module)",
+        admit({ dir, admitHeader: alt.admitHeader, locks: altLocks, fetch: mkFetch({ [W]: "9999", [I]: "9999" }) }),
+        /protocolVersion 13 is not the pinned 77/);
+    } finally { altLocks.release(); }
+    ok("the balance module cache is restored after the stand-in load",
+      require("./e2BalanceCheck.cjs") === bc && alt !== bc);
+  }
   await rejects("an unserved result refuses",
     admit({ dir, fetch: async () => { throw new Error("proof verification failed"); } }),
     /did not verify/);

@@ -61,7 +61,8 @@ const { openValidatedJournal } = require("./e2Journal.cjs");
 const { canonicalString } = require("./canonicalJson.cjs");
 
 const HEX64 = /^[0-9a-f]{64}$/;
-const PROTOCOL_VERSION_PIN = 12;
+// the one shared pin and the reasoning behind its value live in platformProtocolPin.cjs
+const { PROTOCOL_VERSION_PIN } = require("./platformProtocolPin.cjs");
 // 1 reservation + up to 8 parts (proofPartCount maximum) + 1 receipt document
 const WRITER_PER_ENTITLEMENT = 10n;
 
@@ -90,6 +91,12 @@ const WRITER_PER_ENTITLEMENT = 10n;
 // re-measure and re-record (the drift samples after the authoritative
 // run peaked at 279600244 for the receipt against its 305000000
 // ceiling, an 8.3 percent margin).
+// CARRIED TO PROTOCOL 13 WITHOUT RE-MEASURING, decided 2026-09-27. The pin moved from 12 to 13
+// for testnet (platformProtocolPin.cjs), and both versions use FEE_VERSION2, so the schedule these
+// maxima were measured under is the same one. That is the whole argument. These figures were
+// NOT measured on testnet or at protocol 13, and testnet's much larger state could move the
+// state-dependent part of a fee. The re-measure trigger above therefore applies to the first
+// testnet runs' proved costs: a raw fee within five percent of its ceiling re-measures there.
 const D2_MEASURED_MAX_FEES = Object.freeze({
   header: "30227725", accrual: "55585023", reservation: "47763004",
   receipt: "276610563", part: "197684183", creditTransfer: "900940",
@@ -231,7 +238,7 @@ const advanceFrontierFromCapture = ({ kind, height, identities }, { dir, locks }
  * the refusal logic is testable offline). REFUSES: an unserved or unverified
  * result (the fetch throwing, or a result without the closed
  * { balance, metadata } shape); a chainId differing from the owned pin; an
- * authenticated protocolVersion other than 12; and a height below the
+ * authenticated protocolVersion other than the shared pin (13); and a height below the
  * identity's durable store-wide frontier. On acceptance the frontier
  * advances from the verified height BEFORE admission. No stronger recency is
  * claimed than the monotone floor.

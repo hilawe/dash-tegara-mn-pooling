@@ -284,8 +284,10 @@ const buildDeps = (platform, calc, contexts, snapshotRef, opts = {}) => {
       entitlementsForEpoch: (epochIndex) => ctxOf(epochIndex).rows }),
     // READ AT THE CURRENT TIP, never a remembered one
     fetchBalanceWithMetadata: async () => ({ balance: opts.balance ?? "999999999",
-      metadata: { chainId: CHAIN, protocolVersion: 12, height: platform.currentHeight() } }),
+      metadata: { chainId: CHAIN, protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN, height: platform.currentHeight() } }),
     provedHeaderQuery: async () => ({ found: false, proved: true }),
+    // the probe's fake Platform records no final epoch, so the re-check confirms
+    confirmFinalEpochs: async () => {},
     buildHeaderTransition: ({ epochIndex, expectedContents }) => {
       const bytes = "0102" + String(epochIndex).padStart(4, "0") + "01";
       const transitionHash = shaBytes(bytes);
@@ -345,7 +347,12 @@ const buildDeps = (platform, calc, contexts, snapshotRef, opts = {}) => {
 /** everything a run needs, REBUILT FROM SCRATCH so a restart shares no process memory */
 const buildRunState = (platform, opts = {}) => {
   const figures = opts.figures || EPOCH_FIGURES;
+  // AN EMPTY FINAL-EPOCH SET, BY DESIGN: this is a nonnormative probe over a fake Platform whose
+  // pool records no final epoch, and it is not a reader of any ledger. The ledger's readers (the
+  // writer, the pool resolution, the audit and the forward-transport run) read the records
+  // through e2FinalEpoch.readEffectiveFinalEpochs (tegara/docs/FINAL_EPOCH_DESIGN.md).
   const calc = entitlementCalc.buildCarryCapableEntitlements({
+    finalEpochs: new Map(),
     incomeIdentity: A,
     encodingCeiling: entitlementCalc.SCHEMA_CREDIT_CEILING,
     configuredStart: EPOCHS[0],

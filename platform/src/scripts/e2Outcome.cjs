@@ -5,8 +5,9 @@
  *
  *   "success-with-proof"           <- { outcome: "verified-proof", ... }
  *   "execution-error-unique-index" <- { outcome: "execution-refusal", ... } whose
- *                                     structured code matches the PINNED
+ *                                     structured code AND data match the PINNED
  *                                     unique-index consensus-error identity
+ *                                     (consensusErrorPin.cjs, pinned 2026-09-28)
  *   "execution-error-other"        <- every other execution-refusal whose code is
  *                                     a CONSENSUS code (10000 to 49999)
  *   "ambiguous"                    <- malformed-response, transport-failure, and an
@@ -34,10 +35,14 @@
  * THE UNIQUE-INDEX IDENTITY IS A PINNING-TIME READ (specification revision 10, finding 11:
  * the exact structured consensus-error identity is read from the pinned
  * protocol definitions and recorded beside the client pins, with fixtures for
- * header and reservation uniqueness). The installed packages carry no such
- * enumeration (verified during this build unit), so UNTIL THE PIN LANDS the
- * identity below is null and EVERY consensus-range refusal classifies as
- * "execution-error-other". THIS MODULE CLAIMS TOKEN ROUTING ONLY (the
+ * header and reservation uniqueness). PINNED 2026-09-28 in consensusErrorPin.cjs,
+ * beside the protocol pin, as code 40105 AND a structural decode of the data
+ * (the serialized ConsensusError must be exactly StateError's
+ * DuplicateUniqueIndexError, read from Platform v4.1.1's definitions and checked
+ * against two real testnet payloads and both pinned DPP builds). Before that the
+ * identity was null and every consensus-range refusal classified "other", so the
+ * callers' unique-index branches were reachable only through a test seam, which
+ * is removed with this pin. THIS MODULE CLAIMS TOKEN ROUTING ONLY (the
  * batched checker's finding 5): the run-level consequence, that the
  * other-error rows stop at a human decision and are strictly more
  * conservative than the fetch-and-compare continuation, is the procedure
@@ -55,17 +60,15 @@
  * contract does not define would launder a wrapper bug into a recovery path.
  */
 
-// null until the pinning-time read lands; then the STRUCTURAL identity
-// recorded beside the client pins, covering BOTH the consensus-error code and
-// the error data's decoded shape (the frozen contract's identity is
-// structural, not a bare integer; the batched checker's finding 4), with the
-// uniqueness fixtures proving it against real header and reservation
-// refusals. The pinned form is
+// the STRUCTURAL identity recorded beside the client pins, covering BOTH the
+// consensus-error code and the error data's decoded shape (the frozen
+// contract's identity is structural, not a bare integer; the batched checker's
+// finding 4). Its form is
 //   { code: <integer>, dataMatches: (dataHex) => true | false | "malformed" }
 // where dataMatches returns "malformed" when the data bytes cannot be decoded
 // as the refusal payload the code promises; per the closed fallbacks, a
 // MALFORMED payload classifies AMBIGUOUS, never as an execution error.
-const UNIQUE_INDEX_IDENTITY = null;
+const { UNIQUE_INDEX_IDENTITY } = require("./consensusErrorPin.cjs");
 
 const TOKENS = Object.freeze({
   SUCCESS: "success-with-proof",
@@ -93,16 +96,10 @@ const requireClosedMembers = (obj, members) => {
   }
 };
 
-// The optional second argument exists for the TEST SUITE ONLY, so the
-// pinned-identity branches are executable before the real pin lands; a
-// production caller passes nothing and gets the module constant. This is a
-// governed escape hatch: narrow (one parameter), observable (any use outside
-// the test file is a review finding), and it disappears into the constant
-// when the pinning-time read lands.
-const classifyOutcome = (result, identityForTest) => {
-  const IDENTITY = identityForTest === undefined ? UNIQUE_INDEX_IDENTITY : identityForTest;
-  return classifyWith(result, IDENTITY);
-};
+// THE ONE ENTRY. The test seam that let a battery supply its own identity is removed with the pin
+// (2026-09-28), as it was planned to be: every caller, the batteries included, now classifies
+// through the pinned identity, so a unique-index branch is reached only by a payload that decodes.
+const classifyOutcome = (result) => classifyWith(result, UNIQUE_INDEX_IDENTITY);
 const classifyWith = (result, IDENTITY) => {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     refuse("not an object");
@@ -144,9 +141,8 @@ const classifyWith = (result, IDENTITY) => {
         // ledger processed and refused, which refusal is unknown
         return TOKENS.OTHER;
       }
-      // a consensus code that is not the pinned identity, or the identity not yet
-      // pinned: the ledger processed and refused, which refusal is unknown;
-      // fail-closed to the terminal rows
+      // a consensus code that is not the pinned identity: the ledger processed and
+      // refused, which refusal is unknown; fail-closed to the terminal rows
       return TOKENS.OTHER;
     }
     case "malformed-response": {

@@ -178,6 +178,7 @@ const mkEnv = (over = {}) => {
     // accrual identity belongs is visible in the row
     docIdForIn: (poolId, epochIndex, type, subject) => ({ hex: `${type}:${poolId.slice(0, 4)}:${epochIndex}:${subject}` }),
     checkReceiptAgainstPool: over.pairCheck || strictPairCheck,
+    contractDefinesFinalEpochType: over.definesFinal || (() => false),
     ...over.env,
   };
   return { env, queries, journals, journalReads };
@@ -278,6 +279,31 @@ const main = async () => {
       r.owners[0].ownerB58 !== r.owners[1].ownerB58 && r.owners[0].bps !== r.owners[1].bps);
   }
 
+  // ================= 8b. the pool's final epochs (tegara/docs/FINAL_EPOCH_DESIGN.md) =================
+  // 990 distributable at epoch 5 splits 594 to A and 396 to B, both below the minimum; with B final
+  // at epoch 5 the admission's row for B must be the writer's raised 100,000, never the carried 396
+  {
+    const finalDoc = { getProperties: () => ({ poolId: Buffer.from(POOL, "hex"), funderId: Buffer.from(OWNER_B, "hex"),
+      finalEpochIndex: EPOCH }), createdAt: 1000n };
+    const answerWith = (finals) => (type, where) => {
+      if (type === "memberFinalEpoch") return finals();
+      if (type === "epochHeader") return [];
+      return whereMatches(type, where) ? [type === "pool" ? poolDoc({}) : receiptDoc({})] : [];
+    };
+    const numbers = { grossCredits: GROSS, feeCredits: FEE };
+    const plain = await CLEAN.makeResolveProvedPool(mkEnv().env)(POOL);
+    const rowB = (rows) => rows.find((x) => x.recipientId === OWNER_B);
+    ok("with no final-epoch type on the contract, B's admission row is its carried 396",
+      rowB(plain.entitlementsForEpoch(EPOCH, numbers)).amountCredits === "396");
+    const fin = await CLEAN.makeResolveProvedPool(mkEnv({ definesFinal: () => true, answer: answerWith(() => [finalDoc]) }).env)(POOL);
+    ok("with B final at epoch 5, B's admission row is the raised 100,000 the writer pays, and A's is its own 594",
+      rowB(fin.entitlementsForEpoch(EPOCH, numbers)).amountCredits === "100000"
+        && fin.entitlementsForEpoch(EPOCH, numbers).find((x) => x.recipientId === OWNER_A).amountCredits === "594");
+    await rejects("a final-epoch read that fails refuses the resolution rather than admitting unraised amounts",
+      CLEAN.makeResolveProvedPool(mkEnv({ definesFinal: () => true,
+        answer: answerWith(() => { throw new Error("final read failed"); }) }).env)(POOL), /final read failed/);
+  }
+
   // ================= 9. entitlement rows and their refusals =================
   {
     const resolveWith = async (over = {}) => CLEAN.makeResolveProvedPool(mkEnv(over).env)(POOL);
@@ -298,7 +324,7 @@ const main = async () => {
       // earlier and more specific diagnostic, not the prevention itself.
       ok("the calculation refuses the same out-of-run epoch on its own, so this guard is a diagnostic layer rather than the sole prevention",
         /is outside this run/.test(entitlementCalc.buildCarryCapableEntitlements
-          ? (() => { try { entitlementCalc.buildCarryCapableEntitlements({ incomeIdentity: INCOME,
+          ? (() => { try { entitlementCalc.buildCarryCapableEntitlements({ finalEpochs: new Map(), incomeIdentity: INCOME,
               encodingCeiling: CEILING, configuredStart: EPOCH,
               allocation: [{ recipientId: OWNER_A, bps: 10000 }], epochs: runEpochs() }).rowsFor(EPOCH + 3);
               return "no refusal"; } catch (e) { return e.message; } })() : "unavailable"));

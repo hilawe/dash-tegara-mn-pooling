@@ -95,6 +95,30 @@ const ENUM_META = { height: "1000", chainId: CHAIN };
 const mkEnumeration = (currentEpoch) => async (a, b) => { const out = []; for (let n = a; n <= b && n < currentEpoch; n++) out.push({ number: n }); return { epochs: out, metadata: { ...ENUM_META, epoch: currentEpoch } }; };
 const mkSparseEnumeration = (currentEpoch, absent) => async (a, b) => { const out = []; for (let n = a; n <= b && n < currentEpoch; n++) if (!absent.includes(n)) out.push({ number: n }); return { epochs: out, metadata: { ...ENUM_META, epoch: currentEpoch } }; };
 const target = (n = 0) => ({ contractId: CONTRACT_HEX, chainId: CHAIN, contractVersion: 11, poolId: POOL, epochIndex: n });
+// THE FINAL-EPOCH READS' FAKE: the proved query over a LEDGER shared by every pool of this sending
+// identity. It serves memberFinalEpoch records by poolId and epoch headers by poolId and epoch,
+// as served documents (properties plus a bigint creation time), and records every query.
+// `unfiltered` serves every record whatever pool was asked for.
+const OTHER_POOL = "9a".repeat(32);
+const feDoc = (props, createdAt) => ({ getProperties: () => props, createdAt: BigInt(createdAt) });
+const mkFinalEpochQuery = ({ records = [], headers = {}, unfiltered = false, failRecords = false } = {}) => {
+  const asked = [];
+  const provedQuery = async (type, where, label) => {
+    asked.push(type);
+    const pool = Buffer.from(where[0][2]).toString("hex");
+    if (type === "memberFinalEpoch") {
+      if (failRecords) throw new Error(`${label}: the read did not pass through the patched proof-verifying query (no verified-call marker)`);
+      return records.filter((r) => unfiltered || r.poolId === pool).map((r) => feDoc({ poolId: Buffer.from(r.poolId, "hex"),
+        funderId: Buffer.from(r.funderId, "hex"), finalEpochIndex: r.finalEpochIndex }, r.createdAt));
+    }
+    if (type === "epochHeader") {
+      const t = pool === POOL ? headers[where[1][2]] : undefined;
+      return t === undefined ? [] : [feDoc({ poolId: Buffer.from(POOL, "hex"), epochIndex: where[1][2] }, t)];
+    }
+    throw new Error(`${label}: unexpected type ${type}`);
+  };
+  return { asked, provedQuery };
+};
 
 const main = async () => {
   const ROOT = process.env.TEGARA_PLATFORM_ROOT || path.join(__dirname, "..", "..");
@@ -121,7 +145,7 @@ const main = async () => {
   const h = (f) => f.repeat(64 / f.length);
   const carrierOfLength = (wantL) => { const mk = (n) => toHex(canonicalString({ quorumHash: h("dd"), round: 3, blockIdHash: h("bb"), quorumType: 4, signature: "cd".repeat(Math.max(1, n)) })); let padLen = 1, hex = mk(padLen); padLen += wantL - hex.length / 2; hex = mk(Math.floor(padLen)); while (hex.length / 2 < wantL) { padLen += 1; hex = mk(padLen); } while (hex.length / 2 > wantL) { padLen -= 1; hex = mk(padLen); } return hex; };
   const bigCarrier = carrierOfLength(2 * PART_BOUND_B + 100);
-  const META_HEX = toHex(canonicalString({ chainId: CHAIN, protocolVersion: 12, height: "1000", timeMs: "1690000000000", coreChainLockedHeight: 777, epoch: 5 }));
+  const META_HEX = toHex(canonicalString({ chainId: CHAIN, protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN, height: "1000", timeMs: "1690000000000", coreChainLockedHeight: 777, epoch: 5 }));
   const AMOUNT_B = "1000000";
   const TRANSFER_HEX = toHex(canonicalString({ senderId: A, recipientId: B, amountCredits: AMOUNT_B, nonce: "7" }));
   const TH = sha(TRANSFER_HEX);
@@ -154,7 +178,8 @@ const main = async () => {
     synthetic: { ...C.V2_SYNTHETIC }, at: "2026-09-18T00:00:00.000Z",
   });
   const compose = (over = {}) => M.composeV2Inputs({ poolId: POOL, contractId: GC, target: target(0), universeEnd: 1, declared: {},
-    provedOne: mkProvedOne().provedOne, b58Of, readJournal: () => mkRead({ records: [capture] }), readEpochInterval: mkEnumeration(5), identifiers, log: () => {}, ...over });
+    provedOne: mkProvedOne().provedOne, b58Of, readJournal: () => mkRead({ records: [capture] }), readEpochInterval: mkEnumeration(5), identifiers,
+    provedQuery: mkFinalEpochQuery().provedQuery, contractDefinesFinalEpochType: () => false, log: () => {}, ...over });
   const failedChecks = (v) => v.results.filter((r) => r.required && !r.pass).map((r) => r.check);
 
   // ================= 1. the positive control through the real instrument =================
@@ -342,6 +367,47 @@ const main = async () => {
     throws("the lookup needs an array", () => M.captureLookupOver(undefined), /needs the journal's records array/);
     await rejects("the composition refuses a target bound to another pool", compose({ target: { ...target(0), poolId: h("99") } }), /bound to the same pool/);
     await rejects("the composition needs the journal reader", compose({ readJournal: undefined }), /needs readJournal/);
+  }
+
+  // ================= 6. the pool's final epochs (FINAL_EPOCH_DESIGN.md) =================
+  // Epoch 0 grosses 150,000 with no fee, so each of the two 5000-bps owners owes 75,000, below
+  // the 100,000 minimum. A is the income identity and never raised. B's final epoch at 0 raises
+  // B's 75,000 to 100,000 with a declared top-up of 25,000. EVERY CASE carries a second pool of
+  // the same sending identity on the ledger, whose record names B at epoch 0 too.
+  {
+    const small = () => mkRead({ perEpoch: { 0: { header: journalHeader("150000", "0") } }, records: [capture] });
+    const otherRecord = { poolId: OTHER_POOL, funderId: B, finalEpochIndex: 0, createdAt: 10 };
+    const bRecord = (createdAt, finalEpochIndex = 0) => ({ poolId: POOL, funderId: B, finalEpochIndex, createdAt });
+    const withFe = (fe, over = {}) => compose({ readJournal: small, provedQuery: fe.provedQuery, contractDefinesFinalEpochType: () => true, ...over });
+    // the type absent from the proved contract: no record is asked for and nothing is raised
+    const feAbsent = mkFinalEpochQuery({ records: [bRecord(1500), otherRecord], headers: { 0: 2000 } });
+    const inAbsent = await compose({ readJournal: small, provedQuery: feAbsent.provedQuery });
+    const bAbsent = inAbsent.contextFor(0).rows.find((r) => r.funderId === B);
+    ok("with the type absent from the proved contract no record is read and B's 75,000 carries unraised", feAbsent.asked.length === 0 && inAbsent.finalEpochs.size === 0 && bAbsent.effectiveCredits === "75000" && bAbsent.payable === false && !("topUpCredits" in bAbsent));
+    // the type defined, B's record created before epoch 0's header: the raised amount reaches the row
+    const feDef = mkFinalEpochQuery({ records: [bRecord(1500), otherRecord], headers: { 0: 2000 } });
+    const inDef = await withFe(feDef);
+    const rowsDef = inDef.contextFor(0).rows;
+    const bDef = rowsDef.find((r) => r.funderId === B), aDef = rowsDef.find((r) => r.funderId === A);
+    ok("B's effective final epoch raises the 75,000 to the minimum in the forward context's row, a declared top-up of 25,000, payable (the other pool's record for B is not this pool's)",
+      inDef.finalEpochs.size === 1 && inDef.finalEpochs.get(B) === 0
+      && bDef.effectiveCredits === "100000" && bDef.topUpCredits === "25000" && bDef.payable === true
+      && aDef.effectiveCredits === "75000" && aDef.isSelfShare === true && !("topUpCredits" in aDef));
+    ok("the reads asked are the pool's records and then the named epoch's header", feDef.asked.join() === "memberFinalEpoch,epochHeader");
+    // only the OTHER pool's record on the ledger: this pool's B is unaffected
+    const inOther = await withFe(mkFinalEpochQuery({ records: [otherRecord], headers: { 0: 2000 } }));
+    const bOther = inOther.contextFor(0).rows.find((r) => r.funderId === B);
+    ok("a second pool's record for the same member changes nothing in this pool's context", inOther.finalEpochs.size === 0 && bOther.effectiveCredits === "75000" && !("topUpCredits" in bOther));
+    // a LATE record (created at the header's own millisecond) refuses the run, as it refuses the writer's
+    await rejects("a late final-epoch record refuses the run rather than being applied or ignored", withFe(mkFinalEpochQuery({ records: [bRecord(2000), otherRecord], headers: { 0: 2000 } })), /final-epoch state is inconsistent and needs an operator/);
+    // a record for another pool served in this pool's answer refuses
+    await rejects("another pool's record served in this pool's answer refuses", withFe(mkFinalEpochQuery({ records: [bRecord(1500), otherRecord], headers: { 0: 2000 }, unfiltered: true })), /names another pool/);
+    // a failed record read refuses: an unperformed read never answers "no final epochs"
+    await rejects("a failed record read refuses the composition", withFe(mkFinalEpochQuery({ failRecords: true })), /no verified-call marker/);
+    // a run reaching an epoch AFTER B's final epoch refuses the context build by name
+    const past = () => mkRead({ perEpoch: { 0: { header: journalHeader("150000", "0") }, 1: { header: journalHeader("150000", "0") } }, records: [capture] });
+    await rejects("a run reaching an epoch after a member's final epoch refuses the contexts", withFe(mkFinalEpochQuery({ records: [bRecord(1500)], headers: { 0: 2000 } }), { readJournal: past }), /after its final epoch 0/);
+    await rejects("the composition needs the contract-definition answer", compose({ contractDefinesFinalEpochType: undefined }), /needs provedQuery and contractDefinesFinalEpochType/);
   }
 
   console.log(`\ne2ForwardTransportV2ComposeTest: ${passed} passed, ${failed} failed`);

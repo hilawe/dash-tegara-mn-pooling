@@ -157,6 +157,10 @@ const mkEnv = (over = {}) => {
     readIdentityNonce: async () => ({ nonce: 7n, metadata: { chainId: PIN, protocolVersion: PROTOCOL_PIN } }),
     readBalance: async () => ({ balance: 999n, metadata: { chainId: PIN, protocolVersion: PROTOCOL_PIN, height: 555n } }),
     idHex, sha256hex,
+    // the run's effective final epochs and the proved contract's answer, for the header step's
+    // re-check. The defaults are a contract without the type, and so an empty set
+    runFinalEpochs: new Map(),
+    contractDefinesFinalEpochType: () => false,
   };
   return { env: { ...base, ...over.env }, queries, createdDocs, identityTransitions, provedCalls, docTransitions,
     keyA, transferKey };
@@ -936,6 +940,40 @@ const main = async () => {
     const r = await deps.fetchBalanceWithMetadata();
     ok("the balance and height are handed on as canonical decimal strings",
       r.balance === "999" && r.metadata.height === "555" && r.metadata.chainId === PIN);
+  }
+
+  // ================= 13b. the header step's final-epoch re-check =================
+  // confirmFinalEpochs reads the pool's final epochs NOW through the one shared composition and
+  // compares them with the set the run's rows were built from. The ledger below also holds a
+  // SECOND POOL OF THE SAME WRITER with a record for the same member, which must change nothing.
+  {
+    const M1 = hx("member-1"), M2 = hx("member-2"), OTHER = hx("other-pool");
+    const recDoc = (pool, member, epoch, t) => ({ getProperties: () => ({ poolId: Buffer.from(pool, "hex"),
+      funderId: Buffer.from(member, "hex"), finalEpochIndex: epoch }), createdAt: BigInt(t) });
+    const hdrDoc = (pool, epoch, t) => ({ getProperties: () => ({ poolId: Buffer.from(pool, "hex"), epochIndex: epoch }), createdAt: BigInt(t) });
+    const ledgerOf = ({ records, headers = [], failRecords = false }) => (type, where) => {
+      const pool = Buffer.from(where[0][2]).toString("hex");
+      if (type === "memberFinalEpoch") {
+        if (failRecords) throw new Error("the record read did not pass through the proving route");
+        return records.filter((r) => r[0] === pool).map((r) => recDoc(...r));
+      }
+      if (type === "epochHeader") return headers.filter((x) => x[0] === pool && x[1] === where[1][2]).map((x) => hdrDoc(...x));
+      return [];
+    };
+    const confirmWith = (runFinalEpochs, ledger, defines = true) => bundleOf(CLEAN, EP0, new Set(), {
+      env: { runFinalEpochs, contractDefinesFinalEpochType: () => defines }, provedAnswer: ledger }).deps.confirmFinalEpochs(0);
+    const base = [[POOL, M1, 5, 100], [OTHER, M1, 2, 50]];
+    ok("an unchanged set confirms, the other pool's record for the same member counting for nothing",
+      !(await refusedP(confirmWith(new Map([[M1, 5]]), ledgerOf({ records: base, headers: [[POOL, 5, 200]] })))));
+    const added = await confirmWith(new Map([[M1, 5]]), ledgerOf({ records: [...base, [POOL, M2, 7, 150]] })).then(() => null, (e) => e.message);
+    ok("a record created since the run's rows were built refuses by name", added !== null && /effective final epochs changed/.test(added));
+    ok("a record present at the run's start and gone now refuses too", await refusedP(confirmWith(new Map([[M1, 5], [M2, 7]]), ledgerOf({ records: base }))));
+    ok("a failed record read refuses rather than confirming", await refusedP(confirmWith(new Map([[M1, 5]]), ledgerOf({ records: base, failRecords: true }))));
+    const late = await confirmWith(new Map([[M1, 5]]), ledgerOf({ records: base, headers: [[POOL, 5, 100]] })).then(() => null, (e) => e.message);
+    ok("a record now late against its header refuses, as at the run's start", late !== null && /needs an operator/.test(late));
+    ok("a contract without the type confirms an empty run set", !(await refusedP(confirmWith(new Map(), ledgerOf({ records: [] }), false))));
+    ok("and refuses a run set that is not empty", await refusedP(confirmWith(new Map([[M1, 5]]), ledgerOf({ records: [] }), false)));
+    throws("a factory whose run set is not a Map refuses", () => CLEAN.makeEpochDepsFactory(mkEnv({ env: { runFinalEpochs: [] } }).env), /runFinalEpochs as the Map/);
   }
 
   // ================= 14. THE MUTATION BATTERY (the contrary control) =================

@@ -151,4 +151,65 @@ function buildV11(poolLedgerContract) {
 const E2_TYPES = ["epochHeader", "platformAccrual", "transferReceipt",
   "receiptProofPart", "transferReservation"];
 
-module.exports = { buildV11, E2_TYPES };
+/**
+ * A MEMBER'S FINAL EPOCH (tegara/docs/FINAL_EPOCH_DESIGN.md), the one type added to v11 by
+ * CONTRACT UPDATE. A registered contract may gain a document type but can never change or remove
+ * one (rs-dpp `data_contract/methods/validate_update`, `IndexLevel::validate_update`), so this
+ * definition is PERMANENT once registered: every property below is decided, not provisional.
+ *
+ * It names the epoch after which a member receives nothing, so the carry layer can top a final
+ * carry up to the pinned minimum and pay it in that epoch, from ledger records alone. Owner-only,
+ * immutable and non-deletable like every E2 type. ONE FINAL EPOCH PER MEMBER PER POOL, by the
+ * unique index; a member who leaves and rejoins the same pool is refused, not modeled.
+ */
+const MEMBER_FINAL_EPOCH = {
+  type: "object",
+  documentsMutable: false, canBeDeleted: false, creationRestrictionMode: 1,
+  properties: {
+    poolId:          { ...HASH32, position: 0 },
+    funderId:        { ...HASH32, position: 1 },
+    finalEpochIndex: { type: "integer", minimum: 0, maximum: 4294967295, position: 2 },
+  },
+  required: ["poolId", "funderId", "finalEpochIndex", "$createdAt"],
+  additionalProperties: false,
+  indices: [
+    { name: "byPoolFunder", properties: [{ poolId: "asc" }, { funderId: "asc" }], unique: true },
+  ],
+};
+
+// v11 as its first UPDATE registers it: every v11 type unchanged, plus the final-epoch type
+function buildV11WithFinalEpoch(poolLedgerContract) {
+  const v = buildV11(poolLedgerContract);
+  if (Object.prototype.hasOwnProperty.call(v, "memberFinalEpoch")) {
+    throw new Error("contractV11: v11 already defines memberFinalEpoch; the update would not be additive");
+  }
+  v.memberFinalEpoch = JSON.parse(JSON.stringify(MEMBER_FINAL_EPOCH));
+  return v;
+}
+
+/**
+ * The payload expected for each proved version of the canonical v11 contract: version 1 is the
+ * registration's publication, without memberFinalEpoch, and version 2 is the update's, with it.
+ * Any other version refuses. Choosing by the proved version selects between two payloads rebuilt
+ * from source here, so no content is ever taken from the fetched contract (the audit's rule).
+ */
+function expectedV11Payload(poolLedgerContract, version) {
+  if (version === 1) return buildV11(poolLedgerContract);
+  if (version === 2) return buildV11WithFinalEpoch(poolLedgerContract);
+  throw new Error(`contractV11: no expected payload for contract version ${JSON.stringify(version)}`);
+}
+
+/**
+ * The audit's seam: readVersion() answers the proved contract version and nothing else, so the
+ * expected payload can only ever be one of the two source builds above. An answer that is not an
+ * integer (an object carrying the fetched schemas, for instance) refuses.
+ */
+async function selectExpectedPayload({ readVersion, poolLedgerContract }) {
+  const version = await readVersion();
+  if (!Number.isInteger(version)) {
+    throw new Error(`contractV11: the proved contract version must be an integer, got ${typeof version}`);
+  }
+  return expectedV11Payload(poolLedgerContract, version);
+}
+
+module.exports = { buildV11, E2_TYPES, buildV11WithFinalEpoch, expectedV11Payload, selectExpectedPayload, FINAL_EPOCH_TYPE: "memberFinalEpoch" };

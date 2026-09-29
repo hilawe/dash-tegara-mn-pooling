@@ -51,7 +51,7 @@ const {
   classifyRecordEpoch, gradeVerdict, buildOpenEndedAnnotation, buildReport,
   evaluateReservationPresence, evaluateTransferExecution, evaluateOrdering,
   evaluateFormationInputs, evaluateContractIntegrity, evaluateLedgerRecords,
-  U32_MAX,
+  enumerateFinalEpochRecords, U32_MAX,
 } = auditModule.__testing;
 
 let passed = 0, failed = 0;
@@ -881,8 +881,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       a.activationBoundary = { evaluated: true, label: "OPERATOR-PROVIDED", source: "journal" };
       return a;
     })(),
-    epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [], undistributedCredits: "0" },
-      { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [], undistributedCredits: "0" }],
+    epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [], undistributedCredits: "0", finalMembers: [] },
+      { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [], undistributedCredits: "0", finalMembers: [] }],
     lag: { lagCount: 1, undistributedCredits: "540000" },
     heightRanges: { records: { min: "880", max: "912" }, universe: null, balance: null },
     diagnostics: { extras: [], orphans: [], poolGlobal: [] },
@@ -891,7 +891,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   {
     const rep = buildReport(reportInput());
     ok("the report carries the closed kind, the supplied identifiers and the verdict",
-      rep.kind === REPORT_KIND && rep.v === 1 && rep.contractVersion === "v11"
+      rep.kind === REPORT_KIND && rep.v === 2 && rep.contractVersion === "v11"
       && rep.contractId.length > 0 && rep.verdict === "PARTIAL BY EVIDENCE");
     ok("the expectedChainId member is present with the supplied value",
       rep.expectedChainId === "tegara-harness-1");
@@ -953,14 +953,14 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       diagnostics: { extras: Array(1), orphans: [], poolGlobal: [] } }), /own enumerable data element/);
   throwsSync("a sparse per-epoch diagnostics array refuses",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: Array(1), undistributedCredits: "0" }] }), /own enumerable data element/);
+      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: Array(1), undistributedCredits: "0", finalMembers: [] }] }), /own enumerable data element/);
   throwsSync("an annotation endEpoch disagreeing with the interval refuses",
     () => buildReport({ ...reportInput(),
       annotation: buildOpenEndedAnnotation({ endEpoch: 29, recordsHeightMax: "900" }) }),
     /disagrees with the interval/);
   throwsSync("a numeric per-epoch r is refused (canonical decimal STRINGS only)",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: null, r: 1, diagnostics: [], undistributedCredits: "0" }] }), /per-epoch row/);
+      epochs: [{ epochIndex: 5, condition: null, r: 1, diagnostics: [], undistributedCredits: "0", finalMembers: [] }] }), /per-epoch row/);
   throwsSync("a numeric undistributedCredits is refused",
     () => buildReport({ ...reportInput(), lag: { lagCount: 1, undistributedCredits: 540000 } }), /lag member/);
   throwsSync("a numeric annotation recordsHeightMax is refused",
@@ -970,11 +970,11 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     /not a u32/);
   throwsSync("an over-u32 per-epoch index refuses",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 4294967296, condition: null, r: null, diagnostics: [], undistributedCredits: "0" }] }), /not a u32/);
+      epochs: [{ epochIndex: 4294967296, condition: null, r: null, diagnostics: [], undistributedCredits: "0", finalMembers: [] }] }), /not a u32/);
   // the sub-shapes are closed too: an undeclared member anywhere refuses
   throwsSync("a per-epoch row with an undeclared member refuses",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: [], undeclared: true, undistributedCredits: "0" }] }),
+      epochs: [{ epochIndex: 5, condition: null, r: null, diagnostics: [], undeclared: true, undistributedCredits: "0", finalMembers: [] }] }),
     /shape is closed/);
   throwsSync("a lag object with an undeclared member refuses",
     () => buildReport({ ...reportInput(),
@@ -1072,7 +1072,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     }, /plain enumerable data property/);
   throwsSync("an empty-string per-epoch condition refuses (a token is nonempty)",
     () => buildReport({ ...reportInput(),
-      epochs: [{ epochIndex: 5, condition: "", r: null, diagnostics: [], undistributedCredits: "0" }] }), /per-epoch row/);
+      epochs: [{ epochIndex: 5, condition: "", r: null, diagnostics: [], undistributedCredits: "0", finalMembers: [] }] }), /per-epoch row/);
   {
     const inp = reportInput();
     inp.heightRanges = { records: { min: "880", max: "912" },
@@ -1101,7 +1101,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   throwsSync("a missing contract pin refuses the report",
     () => buildReport({ ...reportInput(), contractId: "" }), /CONTRACT_V11_ID/);
   throwsSync("a malformed per-epoch row refuses",
-    () => buildReport({ ...reportInput(), epochs: [{ epochIndex: 5, condition: null, r: "07", diagnostics: [], undistributedCredits: "0" }] }),
+    () => buildReport({ ...reportInput(), epochs: [{ epochIndex: 5, condition: null, r: "07", diagnostics: [], undistributedCredits: "0", finalMembers: [] }] }),
     /per-epoch row/);
   throwsSync("a malformed lag member refuses",
     () => buildReport({ ...reportInput(), lag: { lagCount: -1, undistributedCredits: "0" } }), /lag member/);
@@ -1135,7 +1135,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     // replaced behind the verdict (a review finding 3)
     const rep = buildReport(reportInput());
     const expected = {
-      v: 1, kind: "tegara.e2.auditReport.v1", poolId,
+      v: 2, kind: "tegara.e2.auditReport.v2", poolId,
       contractVersion: "v11", contractId: "8oS5nqe1JbGm1RXWmZK1eTLbzHU3d9ikMzXKZ9G9Z7C5",
       expectedChainId: "tegara-harness-1", startSource: "journal", configuredStart: 5,
       branch: "open-ended", interval: { startEpoch: 5, endEpoch: 30 },
@@ -1156,8 +1156,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         balance: { evaluated: true, label: "UNVERIFIABLE" },
         contractIntegrity: { evaluated: true, label: "PROVED" },
       },
-      epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [], undistributedCredits: "0" },
-        { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [], undistributedCredits: "0" }],
+      epochs: [{ epochIndex: 5, condition: null, r: "1", diagnostics: [], undistributedCredits: "0", finalMembers: [] },
+        { epochIndex: 6, condition: "zero-earning-epoch", r: "0", diagnostics: [], undistributedCredits: "0", finalMembers: [] }],
       lag: { lagCount: 1, undistributedCredits: "540000" },
       heightRanges: { records: { min: "880", max: "912" }, universe: null, balance: null,
         overlap: "not-applicable" },
@@ -1179,7 +1179,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       branch: "deactivation-bounded", interval: { startEpoch: 2, endEpoch: 4 }, annotation: null,
       coverage: { lateConfiguredStart: false, containsUniverse: true, narrowedRange: false },
       aspects: a,
-      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"], undistributedCredits: "0" }],
+      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"], undistributedCredits: "0", finalMembers: [] }],
       lag: { lagCount: 0, undistributedCredits: "0" },
       heightRanges: { records: { min: "10", max: "20" }, universe: { min: "15", max: "25" },
         balance: { min: "18", max: "19" } },
@@ -1187,7 +1187,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       refusals: [],
     });
     const expected = {
-      v: 1, kind: "tegara.e2.auditReport.v1", poolId,
+      v: 2, kind: "tegara.e2.auditReport.v2", poolId,
       contractVersion: "v11", contractId: "8oS5nqe1JbGm1RXWmZK1eTLbzHU3d9ikMzXKZ9G9Z7C5",
       expectedChainId: "tegara-harness-1", startSource: "explicit-input", configuredStart: 2,
       branch: "deactivation-bounded", interval: { startEpoch: 2, endEpoch: 4 },
@@ -1208,7 +1208,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         balance: { evaluated: true, label: "PROVED-NET" },
         contractIntegrity: { evaluated: true, label: "PROVED" },
       },
-      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"], undistributedCredits: "0" }],
+      epochs: [{ epochIndex: 2, condition: null, r: "0", diagnostics: ["one note"], undistributedCredits: "0", finalMembers: [] }],
       lag: { lagCount: 0, undistributedCredits: "0" },
       heightRanges: { records: { min: "10", max: "20" }, universe: { min: "15", max: "25" },
         balance: { min: "18", max: "19" }, overlap: { overlaps: true } },
@@ -1363,13 +1363,13 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   throwsSync("an ACCESSOR-backed per-epoch row refuses (a getter is not an own data element)",
     () => { const epochs = [];
       Object.defineProperty(epochs, 0, { enumerable: true, configurable: true,
-        get() { return { epochIndex: 5, condition: null, r: null, diagnostics: [], undistributedCredits: "0" }; } });
+        get() { return { epochIndex: 5, condition: null, r: null, diagnostics: [], undistributedCredits: "0", finalMembers: [] }; } });
       return buildReport({ ...reportInput(), epochs }); },
     /own enumerable data element/);
   throwsSync("a NON-ENUMERABLE per-epoch row refuses (it would vanish from serialization)",
     () => { const epochs = [];
       Object.defineProperty(epochs, 0, { enumerable: false, configurable: true, writable: true,
-        value: { epochIndex: 5, condition: null, r: null, diagnostics: [], undistributedCredits: "0" } });
+        value: { epochIndex: 5, condition: null, r: null, diagnostics: [], undistributedCredits: "0", finalMembers: [] } });
       return buildReport({ ...reportInput(), epochs }); },
     /own enumerable data element/);
   {
@@ -1614,7 +1614,7 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
   const PROOF_OBJ = { quorumHash: h32("dd"), round: 3, blockIdHash: h32("bb"),
     quorumType: 4, signature: "cd".repeat(40) };
   const CARRIER = toHex(canonicalString(PROOF_OBJ));
-  const metaObj = (epoch) => ({ chainId: CHAIN, protocolVersion: 12, height: "1000",
+  const metaObj = (epoch) => ({ chainId: CHAIN, protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN, height: "1000",
     timeMs: "1690000000000", coreChainLockedHeight: 777, epoch });
   const metaHexOf = (epoch) => toHex(canonicalString(metaObj(epoch)));
 
@@ -1660,6 +1660,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const contractPayload = { "$id": GC, version: "v11",
       documentTypes: ["header", "accrual", "reservation", "receipt", "part"],
       documents: { pool: { required: ["nodeType", "operatorFeeBps"] } } };
+    // THE FINAL-EPOCH TYPE, defined on the contract only when a case asks for it. The audit
+    // reads whether it exists from the proved contract, so the payload is the world's answer
+    if (opts.finalEpochType) contractPayload.memberFinalEpoch = { required: ["poolId", "funderId", "finalEpochIndex", "$createdAt"] };
 
     // epoch 5 pays G = 1000000 (fee 200000, owed 400000/240000/160000);
     // epoch 6 is zero-earning (the node absent from its proposer set)
@@ -1680,10 +1683,10 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const headers = [
       { id: h32("10"), poolId: POOL_HEX, epochIndex: 5, grossCredits: 1000000,
         feeCredits: 200000, memberCount: 3, calcVersion: 1,
-        allocationHash: allocHash.toString("hex") },
+        allocationHash: allocHash.toString("hex"), "$createdAt": 1000 },
       { id: h32("11"), poolId: POOL_HEX, epochIndex: 6, grossCredits: 0,
         feeCredits: 0, memberCount: 3, calcVersion: 1,
-        allocationHash: allocHash.toString("hex") },
+        allocationHash: allocHash.toString("hex"), "$createdAt": 2000 },
     ];
     const accruals = [];
     owed5.forEach(([amount, funder], i) => accruals.push({
@@ -1742,14 +1745,17 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         signerIdentity: h32("f0"), signerKeyId: 2, sig: "00".repeat(65) };
     });
 
+    // finalEpoch holds the LEDGER'S memberFinalEpoch records, of every pool that shares this
+    // income identity, and the page adapter serves the queried pool's own (the shared-identity
+    // rule: another pool's record must change nothing here)
     const docs = { header: headers, accrual: accruals, reservation: reservations,
-      receipt: receipts, part: partDocs };
+      receipt: receipts, part: partDocs, finalEpoch: opts.finalEpochRecords ?? [] };
     if (opts.mutateDocs) opts.mutateDocs(docs);
     const journalRecords = opts.journalRecords !== undefined ? opts.journalRecords
       : [...headerCaps, ...captures];
 
     const heightsByType = { header: "900", accrual: "901", reservation: "902",
-      receipt: "903", part: "904" };
+      receipt: "903", part: "904", finalEpoch: "905" };
     const fetchVerifiedPage = opts.fetchVerifiedPage ?? (async ({ contractId, type, where, orderBy, limit, startAfter }) => {
       // the adapter checks the exact query it receives (the review
       // provenance gap: a wrong or dropped predicate must fail loudly)
@@ -1763,7 +1769,9 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         }
         if (limit !== 100) throw new Error(`page adapter: wrong limit ${limit}`);
       }
-      const all = [...docs[type]].sort((a, b) => (a.id < b.id ? -1 : 1));
+      const all = [...docs[type]]
+        .filter((d) => type !== "finalEpoch" || opts.finalEpochUnfiltered || d.poolId === where[0][2])
+        .sort((a, b) => (a.id < b.id ? -1 : 1));
       const start = startAfter === null ? 0 : all.findIndex((d) => d.id === startAfter) + 1;
       return { status: "verified", documents: all.slice(start, start + limit),
         height: heightsByType[type] };
@@ -1818,7 +1826,8 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
           .filter(([k]) => !k.startsWith("$"))),
     };
     return { deps, docs, pool, fr, manifest, contractPayload, journalRecords,
-      captures, headerCaps, accruals, receipts, reservations, allocHash, hBytes, ecOf };
+      captures, headerCaps, accruals, receipts, reservations, allocHash, hBytes, ecOf,
+      definesFinalEpochType: Boolean(opts.finalEpochType) };
   };
 
   const happyResolution = async (deps) => resolveInterval({ requestedStart: 5,
@@ -1837,6 +1846,10 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         orderBy: [["$id", "asc"]],
         fetchVerifiedPage: w.deps.fetchVerifiedPage }));
     }
+    // the sixth read goes through the module's own three-way decision, as runAudit's does
+    enums.finalEpoch = await enumerateFinalEpochRecords({ contractId: GC, poolId: POOL_HEX,
+      definesFinalEpochType: "definesFinalEpochType" in over ? over.definesFinalEpochType : w.definesFinalEpochType,
+      fetchVerifiedPage: w.deps.fetchVerifiedPage });
     const formation = over.formation ?? await evaluateFormationInputs({ poolId: POOL_HEX,
       contractId: GC, deps: w.deps });
     return evaluateLedgerRecords({ poolId: POOL_HEX, contractId: GC, resolution,
@@ -2969,6 +2982,19 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const ledSolo0 = await runLedger(wSolo0);
     ok("a zero accrual after the refused epoch refuses against the preserved carry",
       ledSolo0.perEpoch.get(7).diagnostics.some((d) => /differs from the recomputed 80000/.test(d)));
+    // AN ENCODING-REFUSED FINAL EPOCH (the step 4 review's third finding): OB's final epoch is the
+    // refused epoch 6, so the 80000 cannot be settled there, stays carried rather than dropped, and
+    // epoch 7 refuses OB by name with the unsettled amount
+    const wSoloF = mkWorld({ manifest: soloManifest, operatorFeeBps: 0,
+      journalRecords: [], fetchRange: soloRange, finalEpochType: true,
+      finalEpochRecords: [{ id: h32("a3"), poolId: POOL_HEX, funderId: FB, finalEpochIndex: 6, "$createdAt": 1500 }],
+      mutateFr: (fr) => { fr.participantCount = 1; },
+      mutateDocs: soloDocs(80000) });
+    const ledSoloF = await runLedger(wSoloF);
+    ok("an encoding-refused final epoch keeps the claim, and the next epoch refuses the member naming the unsettled 80000",
+      ledSoloF.recordSet.label === "REFUSED"
+      && ledSoloF.perEpoch.get(6).condition === "encoding-refused"
+      && ledSoloF.perEpoch.get(7).diagnostics.some((d) => /after its final epoch 6.*still carries 80000 credits that its final epoch could not settle/.test(d)));
     // TWO-EPOCH ACCUMULATION CROSSING THE MINIMUM (the spec's vector set
     // 6): epoch 6 earns the same figures, so the small owner's effective
     // there is 80000 + 80000 = 160000, PAYABLE; an epoch-6 accrual still
@@ -4790,6 +4816,208 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       && led.aggregates.transferExecution === "READ-CHECKED");
   }
 
+  // ---- A MEMBER'S FINAL EPOCH, the audit's reading (FINAL_EPOCH_DESIGN.md) ----
+  // The carry world: OC holds 1000 bps, owes 80000 at epoch 5, which is below the minimum, so it
+  // carries into the zero-earning epoch 6. With a final-epoch record for OC at epoch 6 the audit
+  // expects the carried 80000 RAISED to 100000, a declared top-up of 20000, and one payable transfer.
+  //
+  // EVERY CASE HERE HAS A SECOND POOL OF THE SAME SENDING IDENTITY on the ledger (the
+  // shared-identity rule): OTHER_POOL's record names the same member at epoch 5. If the audit let
+  // it in, epoch 5 would expect OC raised and epoch 6 would refuse as past the end, so each case's
+  // clean result is also evidence that the other pool's record changed nothing.
+  {
+    const OTHER_POOL = h32("9a");
+    const feCarryManifest = {
+      v: 1, poolId: GP, realHash: "aa".repeat(32), target: EVO,
+      owners: [
+        { owner: OA, amountDuffs: String(BigInt(EVO) / 2n), bps: 5000, rewardScriptHex: "76a914" + "11".repeat(20) + "88ac" },
+        { owner: OB, amountDuffs: String(BigInt(EVO) * 4n / 10n), bps: 4000, rewardScriptHex: "76a914" + "22".repeat(20) + "88ac" },
+        { owner: OC, amountDuffs: String(BigInt(EVO) / 10n), bps: 1000, rewardScriptHex: "76a914" + "33".repeat(20) + "88ac" },
+      ] };
+    const otherPoolRecord = { id: h32("a1"), poolId: OTHER_POOL, funderId: FC, finalEpochIndex: 5, "$createdAt": 10 };
+    const ocRecord = (createdAt, finalEpochIndex = 6) => ({ id: h32("a0"), poolId: POOL_HEX, funderId: FC,
+      finalEpochIndex, "$createdAt": createdAt });
+    // the carry world's documents: OC's epoch-5 accrual carries, so it has no machinery
+    const stripOc5 = (docs) => {
+      docs.receipt = docs.receipt.filter((r) => r.accrualId !== docs.accrual[2].id);
+      docs.reservation = docs.reservation.filter((r) => r.accrualId !== docs.accrual[2].id);
+    };
+    // one executed transfer for an accrual, built the way the world builds epoch 5's
+    const addTransfer = (w, accrual, epoch, amount, tag) => {
+      const t = toHex(canonicalString({ senderId: INCOME, recipientId: accrual.funderId,
+        amountCredits: String(amount), nonce: `9${tag}`, pad: "x".repeat(40) }));
+      w.docs.receipt.push({ id: h32(`4${tag}`), poolId: POOL_HEX, accrualId: accrual.id,
+        transitionBytes: t, transitionHash: sha(t), proofBytes: CARRIER, proofPartCount: 1,
+        metadataBytes: metaHexOf(epoch), blockHeight: be64("1000"), timeMs: be64("1690000000000"),
+        quorumHash: h32("dd"), coreChainLockedHeight: 777, round: 3 });
+      w.docs.reservation.push({ id: h32(`5${tag}`), poolId: POOL_HEX, accrualId: accrual.id, transitionHash: sha(t) });
+      w.journalRecords.push({ v: 1, kind: CAP_RECEIPT, object: "transfer", gen: 1, poolId: POOL_HEX,
+        epochIndex: epoch, accrualId: accrual.id, transitionHash: sha(t), transitionBytes: t,
+        proofMsg: CARRIER, metadataMsg: metaHexOf(epoch), inclusionHeight: "1001", heightRoute: "tenderdash-tx",
+        signerIdentity: h32("f0"), signerKeyId: 2, sig: "00".repeat(65) });
+    };
+    const feWorld = ({ records, oc6Amount, withTransfer, ...rest }) => {
+      const w = mkWorld({ manifest: feCarryManifest, finalEpochType: true,
+        finalEpochRecords: [...records, otherPoolRecord], ...rest,
+        mutateDocs: (docs) => { stripOc5(docs); docs.accrual[5].amountCredits = oc6Amount; } });
+      if (withTransfer) addTransfer(w, w.docs.accrual[5], 6, oc6Amount, "f");
+      return w;
+    };
+
+    // 1. THE SUCCESSFUL CASE: the raised amount conforms and the top-up is reported
+    const led1 = await runLedger(feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true }));
+    const fm6 = led1.perEpoch.get(6).finalMembers;
+    ok("a final epoch whose accrual carries the raised amount conforms, with the top-up reported (a second pool's record for the same member changes nothing)",
+      led1.recordSet.label === "READ-CHECKED"
+      && led1.perEpoch.get(5).diagnostics.length === 0
+      && led1.perEpoch.get(6).diagnostics.length === 0
+      && led1.perEpoch.get(5).finalMembers.length === 0
+      && fm6.length === 1 && fm6[0].funderId === FC
+      && fm6[0].sumCredits === "80000" && fm6[0].topUpCredits === "20000"
+      && led1.receiptEvaluations.length === 3
+      && led1.receiptEvaluations.some((r) => r.epochIndex === 6)
+      && led1.lag.lagCount === 0 && led1.diagnostics.poolGlobal.length === 0);
+
+    // 2. the same final epoch with the UNRAISED amount on the ledger is flagged
+    const led2 = await runLedger(feWorld({ records: [ocRecord(1500)], oc6Amount: 80000, withTransfer: false }));
+    ok("the same final epoch whose accrual carries the unraised amount is flagged",
+      led2.recordSet.label === "REFUSED"
+      && led2.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed 100000/.test(d)));
+
+    // 3. A LATE RECORD, created at the SAME millisecond as its epoch's header (the ordering rule
+    // is strict), is reported and NOT applied: epoch 6 still expects the unraised carry
+    const led3 = await runLedger(feWorld({ records: [ocRecord(2000)], oc6Amount: 80000, withTransfer: false }));
+    ok("a late record (created at the header's own millisecond) is reported and not applied",
+      led3.recordSet.label === "REFUSED"
+      && led3.diagnostics.poolGlobal.some((d) => /final-epoch record for epoch 6 was created at 2000, not before that epoch's header at 2000; the record is LATE/.test(d))
+      && led3.perEpoch.get(6).diagnostics.length === 0
+      && led3.perEpoch.get(6).finalMembers.length === 0);
+    // and the late record's raised amount on the ledger would be a mismatch, never a pass
+    const led3b = await runLedger(feWorld({ records: [ocRecord(2000)], oc6Amount: 100000, withTransfer: true }));
+    ok("a late record's raised amount on the ledger is a mismatch, never a pass",
+      led3b.recordSet.label === "REFUSED"
+      && led3b.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed 80000/.test(d)));
+
+    // 3c. THE HEADER A RECORD IS ORDERED AGAINST IS THE ONE THAT EXISTS (the step 4 review's
+    // second finding): epoch 6's header is omitted from the enumeration and served by its unique
+    // key. A record at the header's own millisecond is still LATE and not applied.
+    const omitHeader6 = (w) => {
+      const basePage = w.deps.fetchVerifiedPage;
+      w.deps.fetchVerifiedPage = async (q) => {
+        const page = await basePage(q);
+        return q.type === "header" && page.status === "verified"
+          ? { ...page, documents: page.documents.filter((d) => d.epochIndex !== 6) } : page;
+      };
+      return w;
+    };
+    const led3c = await runLedger(omitHeader6(feWorld({ records: [ocRecord(2000)], oc6Amount: 80000, withTransfer: false })));
+    ok("a late record is not applied when its header is missing from the enumeration and recovered by key",
+      led3c.recordSet.label !== "READ-CHECKED"
+      && led3c.diagnostics.poolGlobal.some((d) => /final-epoch record for epoch 6 was created at 2000, not before that epoch's header at 2000; the record is LATE/.test(d))
+      && led3c.diagnostics.poolGlobal.some((d) => /epoch 6 header: recovered by a unique-key read but ABSENT from the enumeration/.test(d))
+      && led3c.perEpoch.get(6).finalMembers.length === 0
+      && !led3c.perEpoch.get(6).diagnostics.some((d) => /differs from the recomputed/.test(d)));
+    const led3d = await runLedger(omitHeader6(feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true })));
+    ok("a record created before the recovered header is applied, and the record set is not READ-CHECKED",
+      led3d.recordSet.label === "UNPROVED" && led3d.perEpoch.get(6).finalMembers.length === 1
+      && led3d.perEpoch.get(6).finalMembers[0].topUpCredits === "20000");
+    // ONE HEADER ANSWER PER EPOCH (the confirmation round's finding): a header that proves absent at
+    // the ordering's read and would be served at a later one is read ONCE, and the whole evaluation
+    // uses that one answer, so the ordering and the forward pass cannot see different ledgers
+    const w3f = omitHeader6(feWorld({ records: [ocRecord(2000)], oc6Amount: 80000, withTransfer: false }));
+    const baseKey3f = w3f.deps.provedByKey;
+    let header6Reads = 0;
+    w3f.deps.provedByKey = async (type, key) => {
+      if (type === "headerByEpoch" && key.epochIndex === 6) {
+        header6Reads++;
+        if (header6Reads === 1) return { status: "proved-absence", height: "917" };
+      }
+      return baseKey3f(type, key);
+    };
+    const led3f = await runLedger(w3f);
+    ok("the epoch's header is read once, and the forward pass classifies the ordering's own answer",
+      header6Reads === 1 && led3f.recordSet.label === "REFUSED"
+      && led3f.perEpoch.get(6).diagnostics.some((d) => /epoch 6 header: proved absent/.test(d)));
+    // the third round's two coverage items: an UNVERIFIED pre-read makes the evidence unavailable
+    // (never a throw or a "no header"), and a pre-read serving another epoch's header refuses hard
+    const w3h = omitHeader6(feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true }));
+    const baseKey3h = w3h.deps.provedByKey;
+    w3h.deps.provedByKey = async (type, key) => (type === "headerByEpoch" && key.epochIndex === 6 ? { status: "unverified" } : baseKey3h(type, key));
+    let led3h = null, threw3h = null;
+    try { led3h = await runLedger(w3h); } catch (e) { threw3h = e; }
+    ok("an unverified unique-key header read makes the record set UNPROVED with the reason, never a throw",
+      threw3h === null && led3h.recordSet.label === "UNPROVED" && /could not be served or verified/.test(led3h.recordSet.reason));
+    const w3i = omitHeader6(feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true }));
+    const baseKey3i = w3i.deps.provedByKey;
+    w3i.deps.provedByKey = async (type, key) => {
+      if (type === "headerByEpoch" && key.epochIndex === 6) {
+        const seven = await baseKey3i(type, { ...key, epochIndex: 7 });
+        return { status: "served", doc: { ...w3i.docs.header[1], epochIndex: 7, "$createdAt": 1 }, height: seven.height || "917" };
+      }
+      return baseKey3i(type, key);
+    };
+    let threw3i = null;
+    try { await runLedger(w3i); } catch (e) { threw3i = e; }
+    ok("a unique-key header read serving another epoch's header refuses before the ordering uses it",
+      threw3i !== null && /served a header for another key/.test(threw3i.message));
+    let served6Reads = 0;
+    const w3g = omitHeader6(feWorld({ records: [ocRecord(2000)], oc6Amount: 80000, withTransfer: false }));
+    const baseKey3g = w3g.deps.provedByKey;
+    w3g.deps.provedByKey = async (type, key) => { if (type === "headerByEpoch" && key.epochIndex === 6) served6Reads++; return baseKey3g(type, key); };
+    await runLedger(w3g);
+    ok("a served header is read once too", served6Reads === 1);
+    const w3e = omitHeader6(feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true }));
+    const baseKey3e = w3e.deps.provedByKey;
+    w3e.deps.provedByKey = async (type, key) => (type === "headerByEpoch" ? { status: "unserved" } : baseKey3e(type, key));
+    const led3e = await runLedger(w3e);
+    ok("an unserved unique-key header read leaves the order undecidable, so the record set is UNPROVED with the reason",
+      led3e.recordSet.label === "UNPROVED" && /ordered against is absent from the enumeration and its unique-key read could not be served/.test(led3e.recordSet.reason));
+
+    // 4. a record for ANOTHER pool served in this pool's enumeration refuses hard, as a foreign
+    // document of any other type does
+    let threw4 = null;
+    try { await runLedger(feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true, finalEpochUnfiltered: true })); }
+    catch (e) { threw4 = e; }
+    ok("a record for another pool served in this pool's enumeration refuses",
+      threw4 !== null && /finalEpoch enumeration served a document for a DIFFERENT pool/.test(threw4.message));
+
+    // 5. an UNPROVED final-epoch read never yields an affirmative result: neither an unserved
+    // enumeration nor an unknown contract definition reads as "no final epochs"
+    const w5 = feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true });
+    const base5 = w5.deps.fetchVerifiedPage;
+    w5.deps.fetchVerifiedPage = async (q) => (q.type === "finalEpoch" ? { status: "unserved" } : base5(q));
+    const led5 = await runLedger(w5);
+    ok("an unproved final-epoch enumeration does not produce an affirmative result",
+      led5.recordSet.label === "UNPROVED" && /finalEpoch enumeration could not be served/.test(led5.recordSet.reason)
+      && led5.aggregates.transferExecution === "UNPROVED" && led5.recordsProved === false);
+    const led5b = await runLedger(feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true }),
+      { definesFinalEpochType: null });
+    ok("an unknown contract definition does not read as no final epochs",
+      led5b.recordSet.label === "UNPROVED" && /whether the contract defines memberFinalEpoch is unknown/.test(led5b.recordSet.reason));
+
+    // 5c. a record naming an epoch whose header was served WITHOUT its $createdAt cannot be
+    // ordered, so it refuses rather than being treated as having no header (the runner serves a
+    // header without the member when the query does not expose it)
+    let threw5c = null;
+    try {
+      const w5c = feWorld({ records: [ocRecord(1500)], oc6Amount: 100000, withTransfer: true });
+      delete w5c.docs.header[1]["$createdAt"];
+      await runLedger(w5c);
+    } catch (e) { threw5c = e; }
+    ok("a record naming a header served without its creation time refuses rather than applying",
+      threw5c !== null && /epoch 6 header carries no millisecond \$createdAt/.test(threw5c.message));
+
+    // 6. an epoch AFTER a member's final epoch, still in the allocation, is a named refusal of
+    // that epoch rather than a stopped report. OC's final epoch is 5 here, so epoch 5 raises the
+    // 80000 to the minimum and epoch 6 lists OC past the end
+    const led6 = await runLedger(feWorld({ records: [ocRecord(500, 5)], oc6Amount: 0, withTransfer: false }));
+    ok("an epoch after a member's final epoch is refused by name, and the report is still produced",
+      led6.recordSet.label === "REFUSED"
+      && led6.perEpoch.get(6).diagnostics.some((d) => /is in the allocation at epoch 6, after its final epoch 5/.test(d))
+      && led6.perEpoch.get(5).finalMembers.length === 1
+      && led6.perEpoch.get(5).finalMembers[0].topUpCredits === "20000");
+  }
+
   // ---- runAudit end to end, over a REAL journal built by the append path ----
   {
     const w = mkWorld();
@@ -5706,6 +5934,62 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
       ok("a contract pin that does not decode to 32 bytes is REFUSED-INPUT",
         r.verdict === "REFUSED-INPUT" && /does not decode/.test(r.reason));
     } finally { envStore.updateEnvKey("CONTRACT_V11_ID", GC); }
+  }
+
+  {
+    // THE FINAL-EPOCH READ THROUGH THE ENTRY, over the end-to-end journal. runAudit asks for the
+    // records exactly when the PROVED contract read defines the type, and nowhere else decides it.
+    const asked = [];
+    const counting = (w) => {
+      const base = w.deps.fetchVerifiedPage;
+      return { ...w.deps, fetchVerifiedPage: async (q) => { asked.push(q.type); return base(q); } };
+    };
+    // the type absent from the proved contract: no record read is asked for, and the report
+    // carries an empty finalMembers on every row
+    const wAbsent = mkWorld();
+    const repAbsent = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"), deps: counting(wAbsent) });
+    ok("the entry asks for no final-epoch records when the proved contract does not define the type",
+      repAbsent.kind === REPORT_KIND && !asked.includes("finalEpoch")
+      && repAbsent.aspects.recordSet.label === "READ-CHECKED"
+      && repAbsent.epochs.every((e) => Array.isArray(e.finalMembers) && e.finalMembers.length === 0));
+    // the type defined, with an effective record for FC at the zero-earning epoch 6: the entry
+    // reads it, the report names the member final there with nothing to raise, and a second
+    // pool's record for the same member is not served to this pool
+    asked.length = 0;
+    const wDef = mkWorld({ finalEpochType: true, finalEpochRecords: [
+      { id: h32("a0"), poolId: POOL_HEX, funderId: FC, finalEpochIndex: 6, "$createdAt": 1500 },
+      { id: h32("a1"), poolId: h32("9a"), funderId: FA, finalEpochIndex: 5, "$createdAt": 10 }] });
+    const repDef = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"), deps: counting(wDef) });
+    const row6 = repDef.epochs && repDef.epochs.find((e) => e.epochIndex === 6);
+    ok("the entry reads the final-epoch records when the proved contract defines the type, and reports the final member",
+      repDef.kind === REPORT_KIND && asked.includes("finalEpoch")
+      && repDef.aspects.recordSet.label === "READ-CHECKED"
+      && repDef.aspects.contractIntegrity.label === "PROVED"
+      && row6 && row6.finalMembers.length === 1 && row6.finalMembers[0].funderId === FC
+      && row6.finalMembers[0].sumCredits === "0" && row6.finalMembers[0].topUpCredits === "0"
+      && repDef.epochs.find((e) => e.epochIndex === 5).finalMembers.length === 0);
+    // the SUPPLIED payload lacks the type while the PROVED contract defines it: integrity refuses,
+    // and the records are still read, because the proved contract answers the type question
+    asked.length = 0;
+    const wWrongPayload = mkWorld({ finalEpochType: true, finalEpochRecords: [
+      { id: h32("a0"), poolId: POOL_HEX, funderId: FC, finalEpochIndex: 6, "$createdAt": 1500 }] });
+    const payloadNoType = { ...wWrongPayload.deps.expectedContractPayload };
+    delete payloadNoType.memberFinalEpoch;
+    const repWrong = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"),
+      deps: { ...counting(wWrongPayload), expectedContractPayload: payloadNoType } });
+    const row6w = repWrong.epochs && repWrong.epochs.find((e) => e.epochIndex === 6);
+    ok("the type question is answered by the proved contract, not the supplied payload",
+      repWrong.kind === REPORT_KIND && repWrong.aspects.contractIntegrity.label === "REFUSED"
+      && asked.includes("finalEpoch") && row6w && row6w.finalMembers.length === 1);
+    // the contract read unserved: whether the type exists is unknown, so the record set cannot
+    // be affirmative, whatever the enumerations say
+    const wUnk = mkWorld({ finalEpochType: true,
+      provedByKey: (base) => async (type, key) => (type === "contract" ? { status: "unserved" } : base(type, key)) });
+    const repUnk = await runAudit({ poolId: POOL_HEX, dir: path.join(TMP, "jr-happy"), deps: wUnk.deps });
+    ok("through the entry, an unserved contract read leaves the final epochs unknown and the record set UNPROVED",
+      repUnk.kind === REPORT_KIND && repUnk.aspects.contractIntegrity.label === "UNPROVED"
+      && repUnk.aspects.recordSet.label === "UNPROVED"
+      && /whether the contract defines memberFinalEpoch is unknown/.test(repUnk.aspects.recordSet.note));
   }
 
   console.log(`e2AuditTest: ${passed} passed, ${failed} failed (seed ${SEED})`);

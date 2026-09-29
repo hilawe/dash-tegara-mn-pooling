@@ -395,7 +395,7 @@ const main = async () => {
     const formation2 = () => ({ resolved: true, incomeIdentity: A, allocationHash: AH2, allocation: [{ recipientId: A, bps: 5000 }, { recipientId: B, bps: 5000 }] });
     const journaled = (number, gross = GROSS, fee = FEE) => ({ number, grossCredits: gross, feeCredits: fee, distributableCredits: String(BigInt(gross) - BigInt(fee)), allocationHash: AH2, memberCount: 2 });
     const identifiers = { generateId, ownerId: OWNER_B58, contractId: CONTRACT_B58 };
-    const buildCtx = (n, over = {}) => X.buildEpochContext({ scope: scope2(n), formation: formation2(), journalRun: [journaled(0)], configuredStart: 0, declaredFigures: null, identifiers, ...over });
+    const buildCtx = (n, over = {}) => X.buildEpochContext({ scope: scope2(n), formation: formation2(), journalRun: [journaled(0)], configuredStart: 0, declaredFigures: null, identifiers, finalEpochs: new Map(), ...over });
     const plannedIdOf = (n, f) => D.docIdForIn({ ...identifiers, poolId: POOL2, epochIndex: n, type: "platformAccrual", subject: f }).hex;
     const ACC_A = plannedIdOf(0, A), ACC_B = plannedIdOf(0, B);
     // the verifier fixture (the verifier test's mock pipeline at its contract)
@@ -412,7 +412,7 @@ const main = async () => {
       verifyStageTwo: async () => { calls.stageTwo += 1; return true; } }, verifyCaptureBasis: async () => { calls.basis += 1; return true; } } }; };
     const carrierOfLength = (wantL) => { const mk = (n) => toHex(canonicalString({ quorumHash: h("dd"), round: 3, blockIdHash: h("bb"), quorumType: 4, signature: "cd".repeat(Math.max(1, n)) })); let padLen = 1, hex = mk(padLen); padLen += wantL - hex.length / 2; hex = mk(Math.floor(padLen)); while (hex.length / 2 < wantL) { padLen += 1; hex = mk(padLen); } while (hex.length / 2 > wantL) { padLen -= 1; hex = mk(padLen); } return hex; };
     const bigCarrier = carrierOfLength(2 * PART_BOUND_B + 100);
-    const META_HEX = toHex(canonicalString({ chainId: CHAIN, protocolVersion: 12, height: "1000", timeMs: "1690000000000", coreChainLockedHeight: 777, epoch: 5 }));
+    const META_HEX = toHex(canonicalString({ chainId: CHAIN, protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN, height: "1000", timeMs: "1690000000000", coreChainLockedHeight: 777, epoch: 5 }));
     const AMOUNT_B = "1000000";
     const TRANSFER_HEX = toHex(canonicalString({ senderId: A, recipientId: B, amountCredits: AMOUNT_B, nonce: "7" }));
     const TH2 = sha(TRANSFER_HEX);
@@ -543,7 +543,7 @@ const main = async () => {
       await rejects("v2: a selfShares argument is refused for a v2 run", runV2({ extra: { selfShares: [] } }), /takes no selfShares argument/);
       await rejects("v2: a plannedIdFor argument is refused for a v2 run", runV2({ extra: { plannedIdFor: () => ACC_A } }), /takes no plannedIdFor argument/);
       await rejects("v1: a contextFor argument is refused for a v1 run", C.runTransportCheck({ query: makeQuery().query, ledger, profile: PROFILE, provenance: provenanceFor(), acceptance: true, target: { contractId: CONTRACT_HEX, chainId: "devnet-x", contractVersion: 11, poolId: POOL, epochIndex: EPOCH }, plannedIdFor: plannedIdFor("good"), selfShares: [], executionVerdict: () => ({ label: "CAPTURE-VERIFIED" }), contextFor: () => null }), /takes no contextFor/);
-      await rejects("v2: a context for another pool is refused", runV2({ contexts: { 0: X.buildEpochContext({ scope: { ...scope2(0), poolId: h("ffee") }, formation: formation2(), journalRun: [journaled(0)], configuredStart: 0, declaredFigures: null, identifiers }), 1: buildCtx(1) } }), /per-epoch context for pool/);
+      await rejects("v2: a context for another pool is refused", runV2({ contexts: { 0: X.buildEpochContext({ scope: { ...scope2(0), poolId: h("ffee") }, formation: formation2(), journalRun: [journaled(0)], configuredStart: 0, declaredFigures: null, identifiers, finalEpochs: new Map() }), 1: buildCtx(1) } }), /per-epoch context for pool/);
       await rejects("v2: a context on another chain is refused", runV2({ contexts: { 0: buildCtx(0, { scope: { ...scope2(0), chainId: "other" } }), 1: buildCtx(1) } }), /bound to another contract, chain or version/);
       await rejects("v2: a universe not containing the target epoch is refused", runV2({ universe: [1], contexts: { 1: buildCtx(1) } }), /target epoch 0 is not in the universe/);
       await rejects("v2: a non-ascending universe is refused", runV2({ universe: [1, 0] }), /strictly ascending/);

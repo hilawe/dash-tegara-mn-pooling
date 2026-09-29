@@ -191,5 +191,38 @@ const reservationIdForTransfer = ({ generateId, ownerId, contractId, transferHas
   return { b58, hex: d.toString("hex"), entropy };
 };
 
+/**
+ * finalEpochIdFor({ generateId, ownerId, contractId, poolId, funderId }) -> { b58, hex, entropy }
+ *
+ * A member's FINAL-EPOCH RECORD identifier (tegara/docs/FINAL_EPOCH_DESIGN.md, the command's
+ * ownership invariant, item 1). The entropy is sha256 over `tegara.e2.member-final-epoch.v1|`, the
+ * pool, `|` and the member, each in lowercase hex, and NOTHING ELSE: not the epoch, not a nonce, not
+ * a time. Every attempt for one member of one pool therefore derives one identifier, and the ledger
+ * refuses a second document there, so a rerun or a concurrent command cannot create a second record.
+ * Two pools of the same writer derive different identifiers for the same member. Like the other
+ * derivations here, the contract does not enforce it. The unique index on pool and member does the
+ * enforcing, and this identifier makes a rerun land on the same document.
+ */
+const FINAL_EPOCH_DOMAIN = "tegara.e2.member-final-epoch.v1";
+const finalEpochEntropyFor = (poolId, funderId) => {
+  if (!isPrimitiveString(poolId) || !HEX64.test(poolId)) refuse("the pool must be 64 lowercase hex");
+  if (!isPrimitiveString(funderId) || !HEX64.test(funderId)) refuse("the member must be 64 lowercase hex");
+  return crypto.createHash("sha256").update(`${FINAL_EPOCH_DOMAIN}|${poolId}|${funderId}`).digest();
+};
+const finalEpochIdFor = ({ generateId, ownerId, contractId, poolId, funderId } = {}) => {
+  if (typeof generateId !== "function") refuse("generateId must be the injected identifier generator function");
+  if (!isPrimitiveString(ownerId) || ownerId.length === 0) refuse("ownerId must be a non-empty primitive string (the writer identity as the generator takes it)");
+  if (!isPrimitiveString(contractId) || contractId.length === 0) refuse("contractId must be a non-empty primitive string (the contract identifier as the generator takes it)");
+  const entropy = finalEpochEntropyFor(poolId, funderId);
+  const id = generateId("memberFinalEpoch", ownerId, contractId, new Uint8Array(entropy));
+  const b58 = isPrimitiveString(id) ? id
+    : (id !== null && typeof id === "object" && typeof id.base58 === "function" ? id.base58() : null);
+  if (!isPrimitiveString(b58) || b58.length === 0) refuse("the generator returned no base58 identifier (a primitive string or an object with a callable base58 method)");
+  const d = formationCore.toId32(b58);
+  if (!d) refuse("the generator's identifier does not decode to 32 bytes");
+  return { b58, hex: d.toString("hex"), entropy };
+};
+
 module.exports = { ENTROPY_DOMAIN, DOCUMENT_TYPES, entropyForIn, docIdForIn,
-  RESERVATION_BY_TRANSFER_DOMAIN, reservationEntropyForTransfer, reservationIdForTransfer };
+  RESERVATION_BY_TRANSFER_DOMAIN, reservationEntropyForTransfer, reservationIdForTransfer,
+  FINAL_EPOCH_DOMAIN, finalEpochEntropyFor, finalEpochIdFor };

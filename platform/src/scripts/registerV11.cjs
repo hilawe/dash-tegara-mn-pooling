@@ -69,7 +69,8 @@ const refuse = (why) => { throw new Error(`registerV11: ${why}`); };
 // The pinned platform limits this gate consumes (E2_BUILD_SPEC.md, "The pinned
 // platform limits", read at platform commit 37ea011c87, SYSTEM_LIMITS_V2 for
 // protocol version 12). CONSUMED here, never re-derived; a change at the pin
-// is a change to the spec's table first.
+// is a change to the spec's table first. Re-read for protocol 13 on 2026-09-27:
+// SYSTEM_LIMITS_V3 keeps both values below (the spec's table carries the note).
 const PLATFORM_LIMITS = Object.freeze({
   // a fee-estimation figure at the pinned commit (its single consuming site is
   // the estimated-costs branch), kept as a conservative bound per the D1

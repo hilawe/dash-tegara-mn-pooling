@@ -1,15 +1,21 @@
 /**
  * Offline test for the outcome classifier (plain `node`, no network): every
  * wrapper variant maps to its token, the closed fallbacks hold, every
- * out-of-contract shape refuses (extra members included), and the UNPINNED
- * unique-index identity fails CLOSED (every refusal is the terminal
- * other-error token until the pinning-time read lands). The wrapper-boundary
+ * out-of-contract shape refuses (extra members included), and the PINNED
+ * unique-index identity (consensusErrorPin.cjs, since 2026-09-28) reaches the
+ * unique-index token only through code 40105 AND a payload that decodes as that
+ * error, taken here from a REAL testnet refusal. The wrapper-boundary
  * cases here are the classifier's half; the wrapper's own golden cases join
  * in e2RawCaptureTest.cjs when that patch lands, and the full
  * every-variant-times-every-operation-class boundary matrix is asserted by
  * the procedure tests that own the operation context.
  */
 const { classifyOutcome, TOKENS, UNIQUE_INDEX_IDENTITY } = require("./e2Outcome.cjs");
+const PIN = require("./consensusErrorPin.cjs");
+// a REAL unique-index payload, the refusal of a duplicate approval on testnet at Platform height
+// 604,561 (fixtures/consensus-error-unique-index-testnet.json)
+const REAL_UNIQUE = require("./fixtures/consensus-error-unique-index-testnet.json").captures
+  .find((c) => c.platformHeight === 604561).serializedErrorHex;
 
 let passed = 0, failed = 0;
 const ok = (name, cond) => {
@@ -30,17 +36,20 @@ const mkTransport = () => ({ outcome: "transport-failure", reason: "socket close
 
 // ---- the four variants map to their tokens ----
 ok("verified-proof -> success-with-proof", classifyOutcome(mkVerified()) === TOKENS.SUCCESS);
-ok("a consensus-coded execution-refusal -> execution-error-other (identity unpinned, fail-closed)",
+ok("a 40105 refusal whose data is not the unique-index payload -> execution-error-other",
   classifyOutcome(mkRefusal(40105)) === TOKENS.OTHER);
+ok("a 40105 refusal carrying the real unique-index payload -> execution-error-unique-index",
+  classifyOutcome({ ...mkRefusal(40105), data: REAL_UNIQUE }) === TOKENS.UNIQUE);
 ok("malformed-response -> ambiguous", classifyOutcome(mkMalformed()) === TOKENS.AMBIGUOUS);
 ok("transport-failure -> ambiguous", classifyOutcome(mkTransport()) === TOKENS.AMBIGUOUS);
 
-// ---- the fail-closed pin state is REAL, not assumed: while the identity is
-// null, no integer code whatsoever reaches the unique-index token ----
-ok("the identity is genuinely unpinned in this build", UNIQUE_INDEX_IDENTITY === null);
-for (const code of [0, 1, 1000, 4009, 40105, -7, Number.MAX_SAFE_INTEGER]) {
-  ok(`unpinned: code ${code} never classifies unique-index`,
-    classifyOutcome(mkRefusal(code)) !== TOKENS.UNIQUE);
+// ---- the pin is the module's, and it is a code AND a payload, never the code alone ----
+ok("the identity is the pinned one from consensusErrorPin.cjs", UNIQUE_INDEX_IDENTITY === PIN.UNIQUE_INDEX_IDENTITY
+  && UNIQUE_INDEX_IDENTITY.code === 40105);
+ok("the classifier takes no identity from its caller any more (the test seam is gone)", classifyOutcome.length === 1);
+for (const code of [0, 1, 1000, 4009, 40100, 40204, -7, Number.MAX_SAFE_INTEGER]) {
+  ok(`code ${code} never classifies unique-index, even with the real unique-index payload`,
+    classifyOutcome({ ...mkRefusal(code), data: REAL_UNIQUE }) !== TOKENS.UNIQUE);
 }
 
 // ---- ONLY A CONSENSUS CODE IS A REFUSAL (a soundness-review finding). The contrary control is the answer Platform's
@@ -63,10 +72,10 @@ for (const code of [0, 1, 1000, 4009, 40105, -7, Number.MAX_SAFE_INTEGER]) {
   // real consensus codes from the pinned table: a transfer amount refusal, a nonce refusal
   ok("the pinned transfer-amount refusal, 10524, is a refusal", classifyOutcome(mkRefusal(10524)) === TOKENS.OTHER);
   ok("the pinned nonce refusal, 40204, is a refusal", classifyOutcome(mkRefusal(40204)) === TOKENS.OTHER);
-  // the range decides before the identity: a pinned identity outside the range cannot make a
-  // gateway answer into a unique-index refusal
-  ok("an out-of-range code equal to a pinned identity is still ambiguous",
-    classifyOutcome(mkRefusal(13), { code: 13, dataMatches: () => true }) === TOKENS.AMBIGUOUS);
+  // the range decides before the identity: a gateway answer carrying a unique-index payload is
+  // still the gateway speaking
+  ok("an out-of-range code with the real unique-index payload is still ambiguous",
+    classifyOutcome({ ...mkRefusal(13), data: REAL_UNIQUE }) === TOKENS.AMBIGUOUS);
   // EVERY code from below zero to past the range, against an expectation written here from the
   // spec rather than imported, so an interior exclusion cannot hide between sampled values
   const expectRefusal = (code) => code >= 10000 && code <= 49999;
@@ -92,19 +101,21 @@ ok("the four token VALUES are exactly the contract's",
 ok("the four token values are distinct",
   new Set(Object.values(TOKENS)).size === 4 && Object.keys(TOKENS).length === 4);
 
-// ---- the PINNED-identity branches, executed through the test-only seam (the
-// production constant stays null; the seam is the governed hatch the module
-// documents, and these cases become the real pinned fixtures at pinning) ----
+// ---- the PINNED identity's three answers, through the production entry, with real bytes ----
 {
-  const identity = { code: 40105, dataMatches: (d) => (d === "aa11" ? true : d === "" ? "malformed" : false) };
-  ok("pinned: the exact structural identity classifies unique-index",
-    classifyOutcome({ ...mkRefusal(40105), data: "aa11" }, identity) === TOKENS.UNIQUE);
-  ok("pinned: decodable non-unique data on the pinned code classifies other",
-    classifyOutcome({ ...mkRefusal(40105), data: "bb22" }, identity) === TOKENS.OTHER);
-  ok("pinned: MALFORMED data on the pinned code classifies ambiguous, never an execution error",
-    classifyOutcome({ ...mkRefusal(40105), data: "" }, identity) === TOKENS.AMBIGUOUS);
-  ok("pinned: a different code stays other regardless of data",
-    classifyOutcome({ ...mkRefusal(40100), data: "aa11" }, identity) === TOKENS.OTHER);
+  const already = "0202" + "5a".repeat(32); // StateError::DocumentAlreadyPresentError, decodable
+  ok("pinned: the real unique-index payload on 40105 classifies unique-index",
+    classifyOutcome({ ...mkRefusal(40105), data: REAL_UNIQUE }) === TOKENS.UNIQUE);
+  ok("pinned: decodable non-unique data on 40105 classifies other",
+    classifyOutcome({ ...mkRefusal(40105), data: already }) === TOKENS.OTHER);
+  ok("pinned: EMPTY data on 40105 is malformed, so ambiguous, never an execution error",
+    classifyOutcome({ ...mkRefusal(40105), data: "" }) === TOKENS.AMBIGUOUS);
+  ok("pinned: a TRUNCATED unique-index payload on 40105 is ambiguous",
+    classifyOutcome({ ...mkRefusal(40105), data: REAL_UNIQUE.slice(0, 40) }) === TOKENS.AMBIGUOUS);
+  ok("pinned: the real payload with one trailing byte is ambiguous",
+    classifyOutcome({ ...mkRefusal(40105), data: REAL_UNIQUE + "00" }) === TOKENS.AMBIGUOUS);
+  ok("pinned: a different consensus code with the real payload stays other",
+    classifyOutcome({ ...mkRefusal(40100), data: REAL_UNIQUE }) === TOKENS.OTHER);
 }
 
 // ---- out-of-contract shapes refuse loudly, extra members included ----

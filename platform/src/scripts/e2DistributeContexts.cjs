@@ -76,19 +76,23 @@ const validateEpochList = (epochs, configuredStart) => {
 
 /**
  * buildContexts({ poolId, configuredStart, epochs, allocation, owners, incomeIdentity,
- *                 encodingCeiling, identifiers })
+ *                 encodingCeiling, identifiers, finalEpochs })
  *
  * `epochs` is [{ number, figures }] for the whole run, consecutive and beginning at the
  * configured start. `identifiers` is { generateId, ownerId, contractId }, the derivation's
  * injected pieces, so this module needs no platform client. `owners` carries the display fields
- * the driver attaches to each row, one entry per allocation recipient.
+ * the driver attaches to each row, one entry per allocation recipient. `finalEpochs` is the pool's
+ * EFFECTIVE final epochs from e2FinalEpoch.readEffectiveFinalEpochs, required and possibly empty.
  *
  * Returns { epochNumbers, contextFor(n), has(n) }. contextFor REFUSES an epoch outside the run
  * rather than answering, because an epoch the calculation never covered has no carry state and an
  * answer for it would be arithmetic over a base that does not exist.
  */
 const buildContexts = ({ poolId, configuredStart, epochs, allocation, owners, incomeIdentity,
-  encodingCeiling, identifiers }) => {
+  encodingCeiling, identifiers, finalEpochs }) => {
+  if (!(finalEpochs instanceof Map)) {
+    refuse("buildContexts needs finalEpochs, the pool's effective final epochs as a Map, empty when none (an omitted answer would leave a final carry unpaid)");
+  }
   if (typeof poolId !== "string" || !HEX64.test(poolId)) refuse(`poolId ${JSON.stringify(poolId)} is not 64 lowercase hex`);
   if (!identifiers || typeof identifiers.generateId !== "function") refuse("buildContexts needs identifiers.generateId");
   if (identifiers.ownerId === undefined || identifiers.contractId === undefined) refuse("buildContexts needs identifiers.ownerId and identifiers.contractId");
@@ -98,6 +102,7 @@ const buildContexts = ({ poolId, configuredStart, epochs, allocation, owners, in
 
   // ONE calculation over the WHOLE run, so the carry threads between epochs
   const calc = entitlementCalc.buildCarryCapableEntitlements({
+    finalEpochs,
     incomeIdentity,
     encodingCeiling,
     configuredStart,

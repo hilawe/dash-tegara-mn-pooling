@@ -51,7 +51,7 @@ const figures = (gross, fee, over = {}) => ({ grossCredits: String(gross), feeCr
   allocationHash: "ee".repeat(32), memberCount: 2, calcVersion: 1, ...over });
 const build = (over = {}) => {
   const { identifiers } = mkIdentifiers();
-  return buildContexts({ poolId: POOL, configuredStart: 0, allocation, owners,
+  return buildContexts({ finalEpochs: new Map(), poolId: POOL, configuredStart: 0, allocation, owners,
     incomeIdentity: INCOME, encodingCeiling: CEILING, identifiers,
     epochs: [{ number: 0, figures: figures(1000000, 0) }, { number: 1, figures: figures(3000000, 500) }],
     ...over });
@@ -121,7 +121,7 @@ throws("a run with no base refuses", () => validateEpochList([{ number: 0 }], nu
   // the second epoch's carry-in. Building one context at a time would give epoch 1 a zero
   // carry-in, which is correct only for the first epoch of a run.
   const { identifiers } = mkIdentifiers();
-  const c = buildContexts({ poolId: POOL, configuredStart: 0, allocation, owners,
+  const c = buildContexts({ finalEpochs: new Map(), poolId: POOL, configuredStart: 0, allocation, owners,
     incomeIdentity: INCOME, encodingCeiling: CEILING, identifiers,
     epochs: [{ number: 0, figures: figures(3, 0) }, { number: 1, figures: figures(1000000, 0) }] });
   const e0 = c.contextFor(0);
@@ -200,6 +200,22 @@ throws("a recipient absent from the owner list refuses rather than being dropped
   const first = c.contextFor(0).rows[0];
   ok("a row is frozen against in-place edits",
     (() => { try { first.amountCredits = "999"; } catch (_) { /* strict mode throws */ } return first.amountCredits !== "999"; })());
+}
+
+// ---- THE FINAL EPOCHS REACH THE CONTEXT ROW (tegara/docs/FINAL_EPOCH_DESIGN.md). Neither funder is
+// the income identity here, so with 100,000 gross A owes 60,000 and B 40,000, both below the
+// minimum; B final at epoch 0 is raised to 100,000 with a 60,000 top-up, and A carries. ----
+{
+  const one = (finalEpochs) => build({ finalEpochs, epochs: [{ number: 0, figures: figures(100000, 0) }] }).contextFor(0);
+  const plain = one(new Map());
+  ok("with no final epoch both funders carry: neither row is payable",
+    plain.rows.every((r) => r.payable === false) && plain.rows.find((r) => r.funderHex === FUNDER_B).amountCredits === "40000");
+  const fin = one(new Map([[FUNDER_B, 0]]));
+  const b = fin.rows.find((r) => r.funderHex === FUNDER_B), a = fin.rows.find((r) => r.funderHex === FUNDER_A);
+  ok("with B final at epoch 0, B's context row carries 100,000, a 60,000 top-up, and is payable",
+    b.amountCredits === "100000" && b.topUpCredits === "60000" && b.payable === true);
+  ok("and A's row is untouched, still carrying its 60,000", a.amountCredits === "60000" && a.payable === false && a.topUpCredits === undefined);
+  throws("an omitted finalEpochs refuses the build", () => build({ finalEpochs: undefined }), /needs finalEpochs/);
 }
 
 console.log(`e2DistributeContextsTest: ${passed} passed, ${failed} failed`);

@@ -14,7 +14,7 @@
  * four exported functions are:
  *
  *   buildEpochContext({ scope, formation, journalRun, configuredStart, declaredFigures,
- *                       identifiers })  -> a deep-frozen, branded context
+ *                       identifiers, finalEpochs })  -> a deep-frozen, branded context
  *   planInputOf(ctx)                    -> the kernel's plan-builder input, fresh per call
  *   reservationForVerifier(answer)      -> the verifier's three-way reservation shape
  *   executionVerdictFor(ctx, { captureFor, deps })
@@ -39,7 +39,14 @@
  * THE ROWS ARE THE CARRY PARTITION'S (design section 3, step 3b): `entitlementCalc.
  * buildCarryCapableEntitlements` over the run answers each member's effective amount,
  * `isSelfShare` and `payable`, and this module copies those answers rather than deriving them
- * again. The planned accrual identifier is `e2DocId.docIdForIn` over the scope's pool, this
+ * again. THE POOL'S FINAL EPOCHS enter the row source as given (FINAL_EPOCH_DESIGN.md): a member
+ * at its final epoch has its positive below-minimum amount raised to the minimum, the row
+ * carries the raise as `topUpCredits` exactly when it is nonzero (as it carries a nonzero
+ * `carryInCredits`), and a run reaching an epoch after a member's final epoch refuses the build,
+ * since nothing may be paid or carried for that member past the end. The map is the caller's,
+ * read through e2FinalEpoch.readEffectiveFinalEpochs, and it is REQUIRED, empty when no member
+ * is final: an omitted one would read as "nobody is final" and leave a final carry unpaid. The
+ * planned accrual identifier is `e2DocId.docIdForIn` over the scope's pool, this
  * epoch, the platformAccrual type and the member's identity (step 3c). `shareBps` is the
  * allocation row's. The schema ceiling is `entitlementCalc.SCHEMA_CREDIT_CEILING`, stated
  * rather than selected by a caller.
@@ -273,6 +280,21 @@ const captureIdentifiers = (raw, scope) => {
   return { generateId, ownerId, contractId };
 };
 
+// THE POOL'S EFFECTIVE FINAL EPOCHS, captured once into a snapshot: a Map from a 64-hex member
+// to a u32 epoch. Entries are read through Map.prototype.entries, never the caller's own
+// iteration, so an overridden method on the value cannot answer one set to this check and
+// another to the row source.
+const captureFinalEpochs = (raw) => {
+  if (!(raw instanceof Map)) refuse("options.finalEpochs must be a Map of the pool's effective final epochs from e2FinalEpoch.readEffectiveFinalEpochs, empty when no member is final (an omitted answer would read as nobody final and leave a final carry unpaid)");
+  const out = new Map();
+  for (const [k, v] of Array.from(Map.prototype.entries.call(raw))) {
+    requireHex64(k, "a finalEpochs member");
+    if (!Number.isSafeInteger(v) || v < 0 || v > 4294967295) refuse(`finalEpochs holds ${typeof v === "number" ? v : typeof v} for ${k.slice(0, 8)}..., not a u32 epoch`);
+    out.set(k, v);
+  }
+  return out;
+};
+
 // the row source's refusal for an encoding-refused epoch, recognized by its own text for
 // that condition (its `rowsFor` throws; the design's table names this as the source of
 // `encodingRefused`); any other thrown value propagates
@@ -292,6 +314,8 @@ const ENCODING_REFUSAL = /^entitlementCalc: epoch \d+ cannot be answered: the ru
  * configuredStart  the run's configured start epoch
  * declaredFigures  null, or { grossCredits, feeCredits } from harness configuration
  * identifiers      { generateId, ownerId, contractId } as e2DocId's docIdForIn takes them
+ * finalEpochs      Map(member 64-hex -> final epoch), the pool's EFFECTIVE final epochs,
+ *                  required and possibly empty
  */
 const buildEpochContext = (input) => {
   if (!isPlain(input)) refuse("buildEpochContext takes one options object");
@@ -302,6 +326,7 @@ const buildEpochContext = (input) => {
   if (!Number.isSafeInteger(configuredStart) || configuredStart < 0) refuse("configuredStart must be a non-negative safe integer (the run's base, which the caller supplying the run knows)");
   const declared = captureDeclaredFigures(takeOwnData(input, "declaredFigures", "options", true));
   const identifiers = captureIdentifiers(takeOwnData(input, "identifiers", "options", true), scope);
+  const finalEpochs = captureFinalEpochs(takeOwnData(input, "finalEpochs", "options", true));
   const { epochIndex, poolId } = scope;
   const memberCount = formation.allocation.length;
 
@@ -361,7 +386,9 @@ const buildEpochContext = (input) => {
   }
 
   // ---- the rows: the carry partition's own answers (section 3, step 3b) ----
+  // the pool's effective final epochs, captured above, so a final carry is raised to the minimum
   const calc = entitlementCalc.buildCarryCapableEntitlements({
+    finalEpochs,
     epochs: run.map((e) => ({ number: e.number, distributableCredits: e.distributableCredits })),
     allocation: formation.allocation.map((a) => ({ recipientId: a.recipientId, bps: a.bps })),
     incomeIdentity: formation.incomeIdentity,
@@ -393,6 +420,7 @@ const buildEpochContext = (input) => {
       return { funderId: r.recipientId, effectiveCredits: r.amountCredits, shareBps: a.bps,
         isSelfShare: r.isSelfShare, payable: r.payable,
         ...(r.carryInCredits === undefined ? {} : { carryInCredits: r.carryInCredits }),
+        ...(r.topUpCredits === undefined ? {} : { topUpCredits: r.topUpCredits }),
         plannedAccrualId: plannedIdOf(r.recipientId) };
     });
   }

@@ -127,7 +127,9 @@ const mkDeps = (over = {}) => {
 const proofObj = (padLen) => ({ quorumHash: h32("dd"), round: 3, blockIdHash: h32("bb"),
   quorumType: 4, signature: "cd".repeat(Math.max(1, padLen)) });
 const mkCarrier = (padLen) => toHex(canonicalString(proofObj(padLen)));
-const META_OBJ = { chainId: CHAIN, protocolVersion: 12, height: "1000",
+// protocolVersion is the LITERAL 13, not the module's export, so a pin moved in the module alone
+// fails every golden case here instead of moving with it (platformProtocolPin.cjs, 2026-09-27)
+const META_OBJ = { chainId: CHAIN, protocolVersion: 13, height: "1000",
   timeMs: "1690000000000", coreChainLockedHeight: 777, epoch: 5 };
 const META_HEX = toHex(canonicalString(META_OBJ));
 const TRANSFER_OBJ = { senderId: INCOME, recipientId: RECIPIENT, amountCredits: "1000", nonce: "7" };
@@ -280,10 +282,12 @@ const conformanceVariants = (obj, knownHex) => ({
   await rejects("receipt carrier class: chain-identifier mismatch refuses",
     verify({ receipt: { ...fix.receipt, metadataBytes: badMeta }, parts: fix.parts }),
     /differs from the pinned expected chain identifier/);
-  const badVersion = toHex(canonicalString({ ...META_OBJ, protocolVersion: 11 }));
-  await rejects("a protocol version other than 12 refuses",
+  // 12, the dead bench's version and the old pin, carried in the metadata BYTES rather than the
+  // decoder override the pin cases below use
+  const badVersion = toHex(canonicalString({ ...META_OBJ, protocolVersion: 12 }));
+  await rejects("a protocol version other than 13 (here 12, in the metadata bytes) refuses",
     verify({ receipt: { ...fix.receipt, metadataBytes: badVersion }, parts: fix.parts }),
-    /not the pinned 12/);
+    /protocolVersion 12 is not the pinned 13/);
   const metaVariants = conformanceVariants(META_OBJ, META_HEX);
   await rejects("metadata conformance: a retained unknown field refuses",
     verify({ receipt: { ...fix.receipt, metadataBytes: metaVariants.unknownField }, parts: fix.parts }),
@@ -692,6 +696,45 @@ const mkReceiptCapture = (over = {}) => ({ v: 1, kind: "tegara.e2.receiptCapture
     ok("the exported protocol pin is the value the verifier enforces",
       badPv.status === "refused"
       && badPv.reason.includes(`is not the pinned ${verifyModule.PROTOCOL_VERSION_PIN}`));
+    // THE PIN IS 13 AND IS ONE VALUE (2026-09-27). 12 is the dead bench's version, the one
+    // eight separate constants used to hold, so a capture at 12 is the regression that matters;
+    // 14 is the next version, which must refuse until Platform's tables are compared again.
+    ok("the pin is 13, and the verifier, the balance admission and the shared module agree",
+      verifyModule.PROTOCOL_VERSION_PIN === 13
+      && require("./e2BalanceCheck.cjs").PROTOCOL_VERSION_PIN === 13
+      && require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN === 13);
+    for (const pv of [12, 14]) {
+      const r = await verify(fix, { deps: { ...mkDeps(),
+        decodeMetadata: (h) => ({ ...mkDeps().decodeMetadata(h), protocolVersion: pv }) } });
+      ok(`a capture whose metadata says protocolVersion ${pv} refuses, naming the pin 13`,
+        r.status === "refused" && r.reason.includes(`protocolVersion ${pv} is not the pinned 13`));
+    }
+    // THE VERIFIER TAKES ITS PIN FROM THE SHARED MODULE, bound apart from the value (review
+    // 2026-09-27: a local `const PROTOCOL_VERSION_PIN = 13` in the verifier kept every case above
+    // green). A fresh copy of the verifier is loaded against a stand-in pin module answering 77,
+    // and the golden capture at 13 must then refuse naming 77. The module cache is restored after.
+    {
+      const Module = require("module");
+      const pinPath = require.resolve("./platformProtocolPin.cjs");
+      const verPath = require.resolve("./e2ReceiptVerify.cjs");
+      const savedPin = require.cache[pinPath], savedVer = require.cache[verPath];
+      let alt;
+      try {
+        const stand = new Module(pinPath);
+        stand.filename = pinPath; stand.loaded = true; stand.exports = { PROTOCOL_VERSION_PIN: 77 };
+        require.cache[pinPath] = stand;
+        delete require.cache[verPath];
+        alt = require(verPath);
+      } finally { require.cache[pinPath] = savedPin; require.cache[verPath] = savedVer; }
+      const r = await alt.verifyReceipt({ receipt: fix.receipt, parts: fix.parts, reservation: SERVED,
+        entitlementRow: ROW, incomeIdentity: INCOME, chainIdPin: CHAIN, deps: mkDeps() });
+      ok("the verifier reads its pin from platformProtocolPin.cjs: with that module answering 77, a golden capture at 13 refuses naming 77",
+        alt !== verifyModule && alt.PROTOCOL_VERSION_PIN === 77
+        && r.status === "refused" && r.reason.includes("protocolVersion 13 is not the pinned 77"));
+      ok("the module cache is restored after the stand-in load",
+        require("./e2ReceiptVerify.cjs") === verifyModule
+        && require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN === 13);
+    }
     ok("the exported route registry is the set the verifier accepts, and it is frozen",
       Object.isFrozen(verifyModule.ROUTE_REGISTRY)
       && verifyModule.ROUTE_REGISTRY.length >= 1);

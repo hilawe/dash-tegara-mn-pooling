@@ -203,7 +203,7 @@ const mkSignedHeaderCapture = async ({ poolId = POOL, epochIndex = 7, gen = 1, c
 // expected document with the expected contents, stage two verifies
 const mkVerifyDeps = (capture) => ({
   decodeProofCarrier: (hex) => ({ reencodedHex: hex, quorumHashHex: "ff".repeat(32), round: 0 }),
-  decodeMetadata: (hex) => ({ reencodedHex: hex, chainId: "dashmate_local_52", protocolVersion: 12,
+  decodeMetadata: (hex) => ({ reencodedHex: hex, chainId: "dashmate_local_52", protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN,
     height: "41", timeMs: "1700000000000", coreChainLockedHeight: 9, epoch: 1 }),
   decodeTransfer: () => { throw new Error("no transfer decode in a header case"); },
   verifyStageOne: async () => ({ ok: true, rootHashHex: "ab".repeat(32),

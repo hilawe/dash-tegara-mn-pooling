@@ -306,6 +306,12 @@ const OWNED_PREFIXES = ["COMPOUND_", "AUTOPAY_", "WATCH_", "FORMATION_", "RECEIP
 const OWNED_KEYS = ["RAIL_STATE", "MATCH_STATE", "CONTRACT_V8_PENDING", "CONTRACT_V8_ID",
   "CONTRACT_V9_PENDING", "CONTRACT_V9_ID",
   "CONTRACT_V11_PENDING", "CONTRACT_V11_ID",
+  // the v11 update's pending record (registerV11Update.cjs, runV11UpdateFlow): the signed bytes of
+  // an update that may have been broadcast, which a later run may only resend unchanged
+  "CONTRACT_V11_UPDATE_PENDING",
+  // the approval contract's pair (registerApprovalContract.cjs), owned for the v8 pair's
+  // silent-republish reason: its pending record holds signed bytes a later run may only resend
+  "APPROVAL_CONTRACT_PENDING", "APPROVAL_CONTRACT_ID",
   "E2_EXPECTED_CHAIN_ID", "E2_GATE_CAPTURE"];
 const isOwnedKey = (k) => OWNED_KEYS.includes(k) || OWNED_PREFIXES.some((p) => k.startsWith(p));
 

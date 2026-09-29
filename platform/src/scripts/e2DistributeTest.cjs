@@ -94,10 +94,26 @@ if (classifyOutcome(SUCCESS_RESULT) !== TOKENS.SUCCESS
   || classifyOutcome(AMBIGUOUS_RESULT) !== TOKENS.AMBIGUOUS) {
   throw new Error("outcome fixtures no longer match the classifier's contract");
 }
-// the duplicate-refusal token needs the pinned identity, unpinned in
-// production; the governed seam supplies ONLY the identity argument (the
-// closed-shape validation always runs), exactly the e2Outcome precedent
-const UNIQUE_ID = { code: 40105, dataMatches: () => true };
+// THE DUPLICATE REFUSALS ARE REAL-FORMAT since the unique-index identity was pinned (2026-09-28):
+// code 40105 and the serialized error in the layout of the two real testnet payloads
+// (consensusErrorPinTest.cjs checks that layout against them and against both DPP builds). Each names
+// the index the refused document would have hit. The classifier takes no test identity any more, so
+// a case reaches a unique-index branch only through a payload that decodes.
+const uniqueRefusal = (props) => ({ outcome: "execution-refusal", code: 40105,
+  data: Buffer.concat([Buffer.from([2, 14]), Buffer.alloc(32, 0x5a), Buffer.from([props.length]),
+    ...props.map((p) => Buffer.concat([Buffer.from([p.length]), Buffer.from(p)]))]).toString("hex"),
+  message: `Document has duplicate unique properties ${JSON.stringify(props)} with other documents` });
+const HEADER_UNIQUE = uniqueRefusal(["poolId", "epochIndex"]);
+const ACCRUAL_UNIQUE = uniqueRefusal(["poolId", "funderId", "epochIndex"]);
+const RESERVATION_UNIQUE = uniqueRefusal(["accrualId"]);
+// the same code with a payload that is NOT this error (DocumentAlreadyPresentError, decodable) and
+// with one that does not decode: neither may reach a unique-index branch
+const CODE_ONLY_OTHER = { outcome: "execution-refusal", code: 40105, data: "0202" + "5a".repeat(32), message: "code only" };
+const CODE_ONLY_MALFORMED = { outcome: "execution-refusal", code: 40105, data: "", message: "code only" };
+if ([HEADER_UNIQUE, ACCRUAL_UNIQUE, RESERVATION_UNIQUE].some((r) => classifyOutcome(r) !== TOKENS.UNIQUE)
+  || classifyOutcome(CODE_ONLY_OTHER) !== TOKENS.OTHER || classifyOutcome(CODE_ONLY_MALFORMED) !== TOKENS.AMBIGUOUS) {
+  throw new Error("the duplicate-refusal fixtures no longer classify as the pinned identity says");
+}
 
 const mkCapture = ({ poolId, epochIndex, gen, writeAhead }) => ({ v: 1, kind: HEADER_KIND,
   object: "header", gen, poolId, epochIndex, transitionBytes: writeAhead.transitionBytes,
@@ -134,7 +150,6 @@ const mkDeps = (poolId, dir, over = {}) => {
     chainIdPin: CHAIN,
     discoveryOpts: { width: 8 },
     epochDistributionComplete: (epoch) => complete(epoch),
-    ...(over.unique ? { _uniqueIdentityForTest: UNIQUE_ID } : {}),
     fetchRange: async (start, end) => {
       const epochs = [];
       for (let n = start; n <= Math.min(end, universeTop); n++) epochs.push({ number: n });
@@ -142,13 +157,16 @@ const mkDeps = (poolId, dir, over = {}) => {
     },
     entitlementsForEpoch: rowsFor,
     epochNumbers: () => numbersOf(),
+    // THE FINAL-EPOCH RE-CHECK (e2FinalEpoch.assertSameFinalEpochs): these pools record no final
+    // epoch, so the default confirms. The case that is about it passes one that refuses
+    confirmFinalEpochs: over.confirmFinalEpochs || (async () => {}),
     resolvePool: () => ({ resolved: true, writerIdentity: W, incomeIdentity: I,
       entitlementsForEpoch: (epoch) => rowsFor(epoch) }),
     fetchBalanceWithMetadata: async (id) => {
       calls.fetch.push(id);
       if (over.balance === "throw") throw new Error("verification failed");
       return { balance: over.balance ?? "999999999",
-        metadata: { chainId: CHAIN, protocolVersion: 12, height: "1000" } };
+        metadata: { chainId: CHAIN, protocolVersion: require("./platformProtocolPin.cjs").PROTOCOL_VERSION_PIN, height: "1000" } };
     },
     buildHeaderTransition: ({ epochIndex }) => {
       calls.build.push(epochIndex);
@@ -299,6 +317,9 @@ const mkDeps = (poolId, dir, over = {}) => {
         const behavior = (over.docBehavior || (() => "ok"))(object, key, calls.docWrites.length);
         if (behavior === "ok") { ledger.set(docKey(object, key), payload); return SUCCESS_RESULT; }
         if (behavior === "ok-silent") { ledger.set(docKey(object, key), payload); return REFUSAL_RESULT; }
+        if (behavior === "ok-silent-unique") { ledger.set(docKey(object, key), payload); return ACCRUAL_UNIQUE; }
+        if (behavior === "code-only-other") return CODE_ONLY_OTHER;
+        if (behavior === "code-only-malformed") return CODE_ONLY_MALFORMED;
         if (behavior === "refuse") return REFUSAL_RESULT;
         return AMBIGUOUS_RESULT;
       },
@@ -328,6 +349,30 @@ const mkDeps = (poolId, dir, over = {}) => {
     lagCount: 0, undistributedCredits: "0", configuredStartEpoch: 6 }, dir);
   throws("set-start refuses once any journal record exists (a soundness-review finding)",
     () => setStart(pool, "7", { dir }), /bound and immutable/);
+}
+{
+  // the bootstrap start (2026-09-27): bind while unbound, then match or refuse
+  const dir = caseDir();
+  const pool = freshPool();
+  const { bindBootstrapStart } = require("./e2Distribute.cjs");
+  throws("a malformed requested bootstrap start refuses", () => bindBootstrapStart(pool, "019209", { dir }), /canonical decimal u32/);
+  ok("an unbound pool binds the requested start", bindBootstrapStart(pool, "19209", { dir }) === 19209
+    && envStore.loadEnv()[startKeyOf(pool)] === "19209");
+  appendRecord(pool, openJournal(pool, dir).committedOffset, { v: 1, kind: K.DECLARATION,
+    object: "pool", gen: 1, poolId: pool, condition: "lag-measurement", reasoning: "r",
+    lagCount: 0, undistributedCredits: "0", configuredStartEpoch: 19209 }, dir);
+  ok("a bound pool asked for the same start returns it", bindBootstrapStart(pool, "19209", { dir }) === 19209);
+  throws("a bound pool asked for a different start refuses", () => bindBootstrapStart(pool, "0", { dir }), /bound at 19209, not the requested 0/);
+}
+{
+  // the run's first epoch (2026-09-27)
+  const { firstEpochFor } = require("./e2Distribute.cjs");
+  ok("a resume run starts at the gate capture's epoch", firstEpochFor({ bootstrap: false, requestedStart: "19209", gateEpochIndex: 0 }) === 0);
+  ok("a bootstrap run starts at its requested start", firstEpochFor({ bootstrap: true, requestedStart: "19209", gateEpochIndex: 0 }) === 19209);
+  ok("a bootstrap run with no requested start starts at 0", firstEpochFor({ bootstrap: true, requestedStart: "", gateEpochIndex: 5 }) === 0
+    && firstEpochFor({ bootstrap: true, requestedStart: undefined, gateEpochIndex: 5 }) === 0);
+  throws("a malformed requested start refuses before anything is read or written",
+    () => firstEpochFor({ bootstrap: true, requestedStart: "019209", gateEpochIndex: 0 }), /canonical decimal u32/);
 }
 {
   // the serialization lock: set-start and the run's first append hold the
@@ -415,6 +460,36 @@ const mkDeps = (poolId, dir, over = {}) => {
     && openValidatedJournal(pool, dir).records[0].lagCount === 0);
   const r = await runHeaderStep({ poolId: pool, dir, deps, run });
   ok("the header step reports a complete universe done", r.status === "already-complete");
+}
+{
+  // THE FINAL-EPOCH RE-CHECK (the step 4 review's first finding): the header step re-reads the
+  // pool's final epochs UNDER THE POOL'S LOCK before building a fresh header, and a set that changed
+  // since the run's rows were built refuses the step before anything is built or journaled
+  const pool = freshPool();
+  const dir = caseDir();
+  setStart(pool, "5", { dir });
+  const seen = [];
+  const lockHeld = () => fs.existsSync(path.join(STATE_DIR, `oplock-e2-pool-${pool}`));
+  const deps = mkDeps(pool, dir, { confirmFinalEpochs: async (epochIndex) => {
+    seen.push({ epochIndex, lockHeld: lockHeld() });
+    require("./e2FinalEpoch.cjs").assertSameFinalEpochs(new Map(), new Map([[h32("72"), 5]]));
+  } });
+  const run = await startRun({ poolId: pool, dir, deps });
+  await rejects("a final-epoch set changed since the run's rows were built refuses the fresh header step",
+    runHeaderStep({ poolId: pool, dir, deps, run }), /effective final epochs changed since this run's rows were built/);
+  const hdr = (openValidatedJournal(pool, dir).perEpoch[5] || {}).header;
+  ok("the re-check ran for the epoch the step picked, while the pool's lock was held",
+    seen.length === 1 && seen[0].epochIndex === 5 && seen[0].lockHeld === true);
+  ok("and nothing was built or journaled for the header", (hdr === null || hdr === undefined) && !lockHeld());
+  // the same pool with an unchanged set proceeds to build the header
+  const deps2 = mkDeps(pool, dir, { confirmFinalEpochs: async () => {
+    require("./e2FinalEpoch.cjs").assertSameFinalEpochs(new Map([[h32("72"), 5]]), new Map([[h32("72"), 5]])); } });
+  const run2 = await startRun({ poolId: pool, dir, deps: deps2 });
+  await runHeaderStep({ poolId: pool, dir, deps: deps2, run: run2 });
+  const hdr2 = openValidatedJournal(pool, dir).perEpoch[5].header;
+  ok("an unchanged set lets the fresh header step build and journal the header", hdr2 && hdr2.gen === 1 && hdr2.state !== "annotated");
+  await rejects("a header step without the re-check refuses by name",
+    runHeaderStep({ poolId: pool, dir, deps: { ...deps2, confirmFinalEpochs: undefined }, run: run2 }), /needs deps\.confirmFinalEpochs/);
 }
 {
   // COMPLETION IS NEVER INFERRED FROM THE JOURNAL: every receipt captured
@@ -626,13 +701,27 @@ const mkDeps = (poolId, dir, over = {}) => {
     && deps._calls.broadcast.length === 1 && deps._calls.broadcast[0].bytes === bytes);
 }
 
+// ---- NOT CODE-ONLY at the header: the proved-equality gate is reached only by the real payload ----
+for (const [label, result, status] of [["another error's payload", CODE_ONLY_OTHER, "refused"],
+  ["an undecodable payload", CODE_ONLY_MALFORMED, "unresolved-pending"]]) {
+  const pool = freshPool();
+  const dir = caseDir();
+  setStart(pool, "5", { dir });
+  let asked = 0;
+  const deps = mkDeps(pool, dir, { outcome: () => result,
+    provedQuery: () => { asked++; return { found: true, proved: true, documentId: h32("dd"), fields: { poolId: pool, epochIndex: 5, ...numbersOf() } }; } });
+  const run = await startRun({ poolId: pool, dir, deps });
+  const r = await runHeaderStep({ poolId: pool, dir, deps, run });
+  ok(`a header answered 40105 with ${label} is ${status} and never asks the proved query`, r.status === status && asked === 0);
+}
+
 // ---- the duplicate refusal's proved-equality gate ----
 {
   const mk = (provedQuery) => async () => {
     const pool = freshPool();
     const dir = caseDir();
     setStart(pool, "5", { dir });
-    const deps = mkDeps(pool, dir, { outcome: () => REFUSAL_RESULT, unique: true, provedQuery });
+    const deps = mkDeps(pool, dir, { outcome: () => HEADER_UNIQUE, provedQuery });
     const run = await startRun({ poolId: pool, dir, deps });
     deps._journalRecordsAfter = () => openValidatedJournal(pool, dir).records;
     return { r: await runHeaderStep({ poolId: pool, dir, deps, run }), deps };
@@ -648,7 +737,7 @@ const mkDeps = (poolId, dir, over = {}) => {
     const pool2 = freshPool();
     const dir2 = caseDir();
     setStart(pool2, "5", { dir: dir2 });
-    const deps2 = mkDeps(pool2, dir2, { outcome: () => REFUSAL_RESULT, unique: true,
+    const deps2 = mkDeps(pool2, dir2, { outcome: () => HEADER_UNIQUE,
       provedQuery: () => ({ found: true, proved: true, documentId: h32("99"),
         fields: { poolId: pool2, epochIndex: 5, ...numbersOf() } }) });
     const run2 = await startRun({ poolId: pool2, dir: dir2, deps: deps2 });
@@ -683,7 +772,7 @@ const mkDeps = (poolId, dir, over = {}) => {
   const pool = freshPool();
   const dir = caseDir();
   setStart(pool, "5", { dir });
-  const deps = mkDeps(pool, dir, { outcome: () => REFUSAL_RESULT, unique: true,
+  const deps = mkDeps(pool, dir, { outcome: () => HEADER_UNIQUE,
     provedQuery: () => ({ found: true, proved: true, documentId: h32("dd"),
       fields: { poolId: pool, epochIndex: 5, ...numbersOf() } }) });
   const run = await startRun({ poolId: pool, dir, deps });
@@ -862,11 +951,27 @@ const openEpoch = async (pool, dir, over = {}) => {
   const pool = freshPool();
   const dir = caseDir();
   const { deps: seed, run } = await openEpoch(pool, dir);
-  const deps = mkDeps(pool, dir, { unique: true, docBehavior: () => "ok-silent" });
+  const deps = mkDeps(pool, dir, { docBehavior: () => "ok-silent-unique" });
   const r = await runAccrualStep({ poolId: pool, dir, deps, run, epochIndex: 5 });
   ok("a duplicate document refusal resolves by fetch-and-compare with ONE write",
     r.statuses.every((s) => s.status === "present")
     && deps._calls.docWrites.filter((w) => w.object === "accrual").length === 2);
+}
+{
+  // NOT CODE-ONLY: a 40105 whose payload is another error is a refusal, and one whose payload does
+  // not decode is ambiguous; neither takes the fetch-and-compare branch
+  for (const [behavior, status] of [["code-only-other", "refused"], ["code-only-malformed", "ambiguous"]]) {
+    const pool = freshPool();
+    const dir = caseDir();
+    const { run } = await openEpoch(pool, dir);
+    const deps = mkDeps(pool, dir, { docBehavior: () => behavior });
+    let fetches = 0;
+    const realFetch = deps.documents.fetch;
+    deps.documents.fetch = async (...a) => { fetches++; return realFetch(...a); };
+    const r = await runAccrualStep({ poolId: pool, dir, deps, run, epochIndex: 5 });
+    ok(`a document write answered 40105 with ${behavior === "code-only-other" ? "another error's" : "an undecodable"} payload is ${status}, with no re-fetch after the write`,
+      r.statuses[0].status === status && fetches === 1);
+  }
 }
 
 // ---- the run token, the lock order, and the torn-frontier repair ----
@@ -1063,8 +1168,8 @@ const openEpoch = async (pool, dir, over = {}) => {
   const dir = caseDir();
   const { run } = await openEpoch(pool, dir);
   const tHash = sha("0a0b0005" + A1.slice(0, 4));
-  const equal = mkDeps(pool, dir, { unique: true,
-    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? REFUSAL_RESULT : SUCCESS_RESULT,
+  const equal = mkDeps(pool, dir, {
+    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? RESERVATION_UNIQUE : SUCCESS_RESULT,
     reservationOnLedger: () => ({ found: true, boundTransferHash: tHash }) });
   const r = await runTransferStep({ poolId: pool, dir, deps: equal, run, epochIndex: 5, accrualId: A1 });
   const read = openValidatedJournal(pool, dir);
@@ -1091,8 +1196,8 @@ const openEpoch = async (pool, dir, over = {}) => {
   const pool = freshPool();
   const dir = caseDir();
   const { run } = await openEpoch(pool, dir);
-  const foreign = mkDeps(pool, dir, { unique: true,
-    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? REFUSAL_RESULT : SUCCESS_RESULT,
+  const foreign = mkDeps(pool, dir, {
+    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? RESERVATION_UNIQUE : SUCCESS_RESULT,
     reservationOnLedger: () => ({ found: true, boundTransferHash: h32("99") }) });
   const r = await runTransferStep({ poolId: pool, dir, deps: foreign, run, epochIndex: 5, accrualId: A1 });
   const fc = openValidatedJournal(pool, dir).records.find((x) => x.observationType === "foreign-claim");
@@ -1108,11 +1213,25 @@ const openEpoch = async (pool, dir, over = {}) => {
   const { run } = await openEpoch(pool, dir);
   const tHash = sha("0a0b0005" + A1.slice(0, 4));
   const lastByteOff = tHash.slice(0, 62) + (tHash.slice(62) === "00" ? "01" : "00");
-  const nearMiss = mkDeps(pool, dir, { unique: true,
-    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? REFUSAL_RESULT : SUCCESS_RESULT,
+  const nearMiss = mkDeps(pool, dir, {
+    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? RESERVATION_UNIQUE : SUCCESS_RESULT,
     reservationOnLedger: () => ({ found: true, boundTransferHash: lastByteOff }) });
   const r = await runTransferStep({ poolId: pool, dir, deps: nearMiss, run, epochIndex: 5, accrualId: A1 });
   ok("a claim differing only in its last byte is foreign", r.status === "reservation-foreign-pending");
+}
+for (const [label, result, status] of [["another error's payload", CODE_ONLY_OTHER, "reservation-refused"],
+  ["an undecodable payload", CODE_ONLY_MALFORMED, "reservation-unresolved-pending"]]) {
+  // NOT CODE-ONLY at the reservation: the claim comparison is reached only by the real payload
+  const pool = freshPool();
+  const dir = caseDir();
+  const { run } = await openEpoch(pool, dir);
+  let asked = 0;
+  const deps = mkDeps(pool, dir, {
+    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? result : SUCCESS_RESULT,
+    reservationOnLedger: () => { asked++; return { found: true, boundTransferHash: h32("99") }; } });
+  const r = await runTransferStep({ poolId: pool, dir, deps, run, epochIndex: 5, accrualId: A1 });
+  ok(`a reservation answered 40105 with ${label} is ${status} and never reads the on-ledger claim`,
+    r.status === status && asked === 0);
 }
 {
   // a duplicate refusal beside a PROVED ABSENCE is a stale read:
@@ -1120,8 +1239,8 @@ const openEpoch = async (pool, dir, over = {}) => {
   const pool = freshPool();
   const dir = caseDir();
   const { run } = await openEpoch(pool, dir);
-  const stale = mkDeps(pool, dir, { unique: true,
-    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? REFUSAL_RESULT : SUCCESS_RESULT });
+  const stale = mkDeps(pool, dir, {
+    outcome: (hash, bytes) => bytes.startsWith("0c0d") ? RESERVATION_UNIQUE : SUCCESS_RESULT });
   const before = openValidatedJournal(pool, dir).records.length;
   const r = await runTransferStep({ poolId: pool, dir, deps: stale, run, epochIndex: 5, accrualId: A1 });
   const afterRecords = openValidatedJournal(pool, dir).records;
@@ -2274,7 +2393,7 @@ const openEpoch = async (pool, dir, over = {}) => {
   {
     const { buildCarryCapableEntitlements } = require("./entitlementCalc.cjs");
     const M = h32("71");
-    const calc = buildCarryCapableEntitlements({ configuredStart: 0, incomeIdentity: I,
+    const calc = buildCarryCapableEntitlements({ finalEpochs: new Map(), configuredStart: 0, incomeIdentity: I,
       allocation: [{ recipientId: I, bps: 5000 }, { recipientId: M, bps: 5000 }], encodingCeiling: 9007199254740991n,
       epochs: [["0", "199998"], ["1", "200000"], ["2", "100000"], ["3", "1"]].map(([n, d]) => ({ number: Number(n), distributableCredits: d })) });
     const expectedOf = (r) => (r.isSelfShare ? "self-share" : r.payable ? "payable" : "below-minimum");

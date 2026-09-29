@@ -1,0 +1,117 @@
+{
+  "source": "evidence/l1-rc1/2026-09-27-full-agreement/evidence.json (co-owner exercise at commit ce5c7fa, Dash Core v24.0.0-rc.1)",
+  "note": "protxInfo is the node's answer for R1; agreements are the members' own; the platform identities are testnet A and B, attached by FIXTURE",
+  "proTxHash": "1ebcf58bd0d70bd52535cbab181f83813cff6b8c5df7e3e869c36c6954d61159",
+  "protxInfo": {
+    "type": "Regular",
+    "proTxHash": "1ebcf58bd0d70bd52535cbab181f83813cff6b8c5df7e3e869c36c6954d61159",
+    "collateralHash": "1ebcf58bd0d70bd52535cbab181f83813cff6b8c5df7e3e869c36c6954d61159",
+    "collateralIndex": 2,
+    "operatorReward": 0,
+    "state": {
+      "version": 3,
+      "addresses": {},
+      "registeredHeight": 622,
+      "lastPaidHeight": 0,
+      "consecutivePayments": 0,
+      "PoSePenalty": 0,
+      "PoSeRevivedHeight": -1,
+      "PoSeBanHeight": 622,
+      "revocationReason": 0,
+      "votingAddress": "ygqsGTZTw4gp6WZN4RQ66codzcHzoRBqSz",
+      "shares": [
+        {
+          "amount": 60000000000,
+          "refundAddress": "yNraxaQ1tyFDUmPTUXNSS7iKE6Ku28Q6mQ",
+          "refundScript": "76a9141bd3ea8a9c0bd7b3946b1e31356f67c98b09c4ab88ac",
+          "rewardAddress": "yf8wEFbKAnBZf2pX9pX14a8LML4Xos7Jd4",
+          "rewardScript": "76a914ce6d813fa664e09a726b636fd5c809a1d369299688ac",
+          "ownerAddress": "yb6W2VqHh38mtxzn2EG8Tfu9bz7mMoi37G"
+        },
+        {
+          "amount": 40000000000,
+          "refundAddress": "yXiAi5ZV91iJvx1dbkf4SkhKLKnF3poSYg",
+          "refundScript": "76a9147cf57a4a5c0e74de084b6c75a6d9829e4795fd9a88ac",
+          "rewardAddress": "yYEmvfnBeWAUTPQa8jQK6WAkCysW1f7GiG",
+          "rewardScript": "76a91482bf5ab20bc1a50f3adc5cecb5c4b51151c3bfe988ac",
+          "ownerAddress": "yT2smPJ4UUkSnqEJ7LoMmqs9hiJhxvBECA"
+        }
+      ],
+      "earlyPeriodBlocks": 100,
+      "earlyPenalty": 1000000000,
+      "pubKeyOperator": "98316a4b268b7fdd6b4d0eecff9fec0aede412db8f6145037d51bff7c48f79d44c2639ee09e214464f6c5cfcbd5eeb55"
+    },
+    "confirmations": 1,
+    "metaInfo": {
+      "lastDSQ": 0,
+      "mixingTxCount": 0,
+      "outboundAttemptCount": 0,
+      "lastOutboundAttempt": 0,
+      "lastOutboundAttemptElapsed": 1790547112,
+      "lastOutboundSuccess": 0,
+      "lastOutboundSuccessElapsed": 1790547112,
+      "is_platform_banned": false,
+      "platform_ban_height_updated": 0
+    }
+  },
+  "agreements": {
+    "memberA": {
+      "shares": [
+        {
+          "amount": 60000000000,
+          "refundAddress": "yNraxaQ1tyFDUmPTUXNSS7iKE6Ku28Q6mQ",
+          "rewardAddress": "yf8wEFbKAnBZf2pX9pX14a8LML4Xos7Jd4",
+          "ownerAddress": "yb6W2VqHh38mtxzn2EG8Tfu9bz7mMoi37G"
+        },
+        {
+          "amount": 40000000000,
+          "refundAddress": "yXiAi5ZV91iJvx1dbkf4SkhKLKnF3poSYg",
+          "rewardAddress": "yYEmvfnBeWAUTPQa8jQK6WAkCysW1f7GiG",
+          "ownerAddress": "yT2smPJ4UUkSnqEJ7LoMmqs9hiJhxvBECA"
+        }
+      ],
+      "earlyPeriodBlocks": 100,
+      "earlyPenalty": 1000000000,
+      "operatorPubKey": "98316a4b268b7fdd6b4d0eecff9fec0aede412db8f6145037d51bff7c48f79d44c2639ee09e214464f6c5cfcbd5eeb55",
+      "votingAddress": "ygqsGTZTw4gp6WZN4RQ66codzcHzoRBqSz",
+      "operatorReward": 0,
+      "myIndex": 0,
+      "myContributionDuffs": 60000000000,
+      "myFeeDuffs": 10000
+    },
+    "memberB": {
+      "shares": [
+        {
+          "amount": 60000000000,
+          "refundAddress": "yNraxaQ1tyFDUmPTUXNSS7iKE6Ku28Q6mQ",
+          "rewardAddress": "yf8wEFbKAnBZf2pX9pX14a8LML4Xos7Jd4",
+          "ownerAddress": "yb6W2VqHh38mtxzn2EG8Tfu9bz7mMoi37G"
+        },
+        {
+          "amount": 40000000000,
+          "refundAddress": "yXiAi5ZV91iJvx1dbkf4SkhKLKnF3poSYg",
+          "rewardAddress": "yYEmvfnBeWAUTPQa8jQK6WAkCysW1f7GiG",
+          "ownerAddress": "yT2smPJ4UUkSnqEJ7LoMmqs9hiJhxvBECA"
+        }
+      ],
+      "earlyPeriodBlocks": 100,
+      "earlyPenalty": 1000000000,
+      "operatorPubKey": "98316a4b268b7fdd6b4d0eecff9fec0aede412db8f6145037d51bff7c48f79d44c2639ee09e214464f6c5cfcbd5eeb55",
+      "votingAddress": "ygqsGTZTw4gp6WZN4RQ66codzcHzoRBqSz",
+      "operatorReward": 0,
+      "myIndex": 1,
+      "myContributionDuffs": 40000000000,
+      "myFeeDuffs": 10000
+    }
+  },
+  "platformIdentities": {
+    "memberA": {
+      "b58": "2ghcNuyk6M6JGchFEkj6QTzAN5xFaSrRDGy7kii5RRNi",
+      "hex": "1907419d9b0c323c08fa10cc29ffb6370e69f435cafd90389f64721a7d9694ab"
+    },
+    "memberB": {
+      "b58": "CxwSMpKPQ58NvGFmta24LDr2kqW4Em92sKUZrXBcrPS",
+      "hex": "0310a38b64d87cfdeadeab6b52d1eedd82960e0c3aa6838fe4fa85675896e911"
+    }
+  }
+}

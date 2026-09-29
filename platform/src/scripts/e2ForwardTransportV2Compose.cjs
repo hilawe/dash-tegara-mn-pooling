@@ -34,8 +34,10 @@
  *   discoverUniverse({ readEpochInterval, currentEpoch, referenceHeight, chainIdPin,
  *                    configuredStart, universeEnd, log })
  *                                          -> universe, refusing a fallback or an empty set
+ *   readFinalEpochsFor({ poolId, provedQuery, contractDefinesFinalEpochType, log })
+ *                                          -> the pool's effective final epochs (a Map)
  *   contextsOver({ universe, target, formation, journalRun, configuredStart, declared,
- *                  identifiers, log })     -> { contexts, contextFor }
+ *                  identifiers, finalEpochs, log }) -> { contexts, contextFor }
  *   captureLookupOver(records)             -> captureFor
  *   composeV2Inputs({ ... })               the whole chain in the order the runner needs
  *
@@ -64,6 +66,12 @@
  * REFUSES, since the profile's `universe` is a claim about the finalized set; an empty
  * universe refuses; a start above the end refuses before the enumeration runs.
  *
+ * THE POOL'S FINAL EPOCHS (FINAL_EPOCH_DESIGN.md) are read through e2FinalEpoch's one
+ * composition, the writer's, with a late record REFUSING the run as it refuses the writer's,
+ * and every context is built over the same effective set. Whether the contract defines the type
+ * is the injected answer from the PROVED contract definition. A failed read refuses, so an
+ * unperformed read never becomes "no final epochs".
+ *
  * THE CAPTURE LOOKUP answers the receipt capture whose `accrualId` equals the planned
  * identifier, with every receipt-capture supersession record (the basis selector matches the
  * subject tuple itself); no capture answers null, which the verifier refuses; MORE THAN ONE
@@ -84,6 +92,7 @@ const captureRecord = require("./e2CaptureRecord.cjs");
 const X = require("./e2EpochContext.cjs");
 const C = require("./e2ForwardTransportCheck.cjs");
 const { createFetchRange } = require("./e2EpochDiscoveryGate.cjs");
+const finalEpoch = require("./e2FinalEpoch.cjs");
 
 const refuse = (why) => { throw new Error(`e2ForwardTransportV2Compose: ${why}; refusing`); };
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -255,18 +264,42 @@ const discoverUniverse = async ({ readEpochInterval, currentEpoch, referenceHeig
   return universe;
 };
 
+/**
+ * readFinalEpochsFor({ poolId, provedQuery, contractDefinesFinalEpochType, log }) -> Map
+ *   provedQuery                    async (type, where, label) -> the served documents, through
+ *                                  the marker-checked proof-verifying query (the runner's)
+ *   contractDefinesFinalEpochType  () -> boolean, from the PROVED contract definition
+ * The writer's reading, the same composition and the same late-record rule, so over the same
+ * served records the forward run and the writer decide the same effective set. Reads taken at
+ * different times can see different records, which this does not address.
+ */
+const readFinalEpochsFor = async ({ poolId, provedQuery, contractDefinesFinalEpochType, log }) => {
+  if (!HEX64.test(poolId || "")) refuse("readFinalEpochsFor needs a 64-hex poolId");
+  if (typeof provedQuery !== "function" || typeof contractDefinesFinalEpochType !== "function") {
+    refuse("readFinalEpochsFor needs provedQuery and contractDefinesFinalEpochType functions (the proved record read and the proved contract definition)");
+  }
+  const read = await finalEpoch.readEffectiveFinalEpochs({ poolId, lateIs: "refused",
+    ...finalEpoch.makeFinalEpochReads({ poolId, provedQuery, idHex, contractDefinesType: contractDefinesFinalEpochType }) });
+  if (typeof log === "function") {
+    log(`[FINAL EPOCHS] ${read.basis}: ${read.finalEpochs.size} effective${read.finalEpochs.size ? ` (${[...read.finalEpochs].map(([f, e]) => `${f.slice(0, 12)}... at ${e}`).join(", ")})` : ""}`);
+  }
+  return read.finalEpochs;
+};
+
 // one context per universe epoch, all built BEFORE the instrument runs, so a builder refusal
 // (a thrown one; an encoding-refused context is a RETURNED context the instrument takes)
-// stops the run by name here
-const contextsOver = ({ universe, target, formation, journalRun, configuredStart, declared, identifiers, log }) => {
+// stops the run by name here. A run reaching an epoch after a member's final epoch is one such
+// refusal, from the row source.
+const contextsOver = ({ universe, target, formation, journalRun, configuredStart, declared, identifiers, finalEpochs, log }) => {
   if (!Array.isArray(universe) || universe.length === 0) refuse("contextsOver needs a non-empty universe");
   if (!isPlain(declared)) refuse("contextsOver needs the parsed declared fixtures (an object, possibly empty)");
+  if (!(finalEpochs instanceof Map)) refuse("contextsOver needs the pool's effective final epochs as a Map, empty when none (an omitted answer would leave a final carry unpaid)");
   const outside = Object.keys(declared).filter((k) => !universe.includes(Number(k)));
   if (outside.length) refuse(`E2_FORWARD_DECLARED_FIGURES names epoch(s) ${outside.join(",")} outside the universe [${universe.join(",")}]; a fixture nobody will read is a misconfiguration`);
   const contexts = new Map();
   for (const n of universe) {
     const fixture = Object.prototype.hasOwnProperty.call(declared, String(n)) ? declared[String(n)] : null;
-    const ctx = X.buildEpochContext({ scope: { ...target, epochIndex: n }, formation, journalRun, configuredStart, declaredFigures: fixture, identifiers });
+    const ctx = X.buildEpochContext({ scope: { ...target, epochIndex: n }, formation, journalRun, configuredStart, declaredFigures: fixture, identifiers, finalEpochs });
     contexts.set(n, ctx);
     if (typeof log === "function") log(`[CONTEXT] epoch ${n}: figuresSource=${ctx.figuresSource} precondition=${ctx.precondition ? ctx.precondition.code : "none"} encodingRefused=${ctx.encodingRefused} rows=${ctx.rows ? ctx.rows.length : "none"}`);
   }
@@ -291,13 +324,14 @@ const captureLookupOver = (records) => {
 
 /**
  * composeV2Inputs({ poolId, contractId, target, universeEnd, declared, provedOne, b58Of,
- *                   readJournal, readEpochInterval, identifiers, log })
+ *                   readJournal, readEpochInterval, identifiers, provedQuery,
+ *                   contractDefinesFinalEpochType, log })
  *   -> { formation, incomeIdentity, currentEpoch, configuredStart, journalRun, universe,
- *        contextFor, captureFor }
+ *        finalEpochs, contextFor, captureFor }
  * The chain in the runner's order: the resolution (whose marker gives the current epoch),
- * the journal run, the universe, the contexts, the capture lookup.
+ * the journal run, the pool's final epochs, the universe, the contexts, the capture lookup.
  */
-const composeV2Inputs = async ({ poolId, contractId, target, universeEnd, declared, provedOne, b58Of, readJournal, readEpochInterval, identifiers, log }) => {
+const composeV2Inputs = async ({ poolId, contractId, target, universeEnd, declared, provedOne, b58Of, readJournal, readEpochInterval, identifiers, provedQuery, contractDefinesFinalEpochType, log }) => {
   if (!isPlain(target) || target.poolId !== poolId) refuse("composeV2Inputs needs the run's target scope bound to the same pool");
   if (typeof readJournal !== "function") refuse("composeV2Inputs needs readJournal, the validated journal reader");
   const { formation, incomeIdentity, poolMarker } = await resolveFormation({ poolId, contractId, provedOne, b58Of });
@@ -310,11 +344,12 @@ const composeV2Inputs = async ({ poolId, contractId, target, universeEnd, declar
   if (referenceHeight === undefined || referenceHeight === null) refuse("the pool read's verified metadata carries no height; there is no authenticated reference to compare an interval answer against");
   const read = readJournal();
   const { configuredStart, journalRun } = journalRunOf(read);
+  const finalEpochs = await readFinalEpochsFor({ poolId, provedQuery, contractDefinesFinalEpochType, log });
   const universe = await discoverUniverse({ readEpochInterval, currentEpoch, referenceHeight,
     chainIdPin: target.chainId, configuredStart, universeEnd, log });
-  const { contextFor } = contextsOver({ universe, target, formation, journalRun, configuredStart, declared, identifiers, log });
+  const { contextFor } = contextsOver({ universe, target, formation, journalRun, configuredStart, declared, identifiers, finalEpochs, log });
   const captureFor = captureLookupOver(read.records);
-  return { formation, incomeIdentity, currentEpoch, configuredStart, journalRun, universe, contextFor, captureFor };
+  return { formation, incomeIdentity, currentEpoch, configuredStart, journalRun, universe, finalEpochs, contextFor, captureFor };
 };
 
-module.exports = { PROFILE_KINDS, requireProfileKind, parseV2Config, makeProvedOne, resolveFormation, currentEpochOf, journalRunOf, discoverUniverse, contextsOver, captureLookupOver, composeV2Inputs };
+module.exports = { PROFILE_KINDS, requireProfileKind, parseV2Config, makeProvedOne, resolveFormation, currentEpochOf, journalRunOf, discoverUniverse, readFinalEpochsFor, contextsOver, captureLookupOver, composeV2Inputs };

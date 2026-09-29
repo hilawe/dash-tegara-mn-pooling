@@ -1,0 +1,41 @@
+{
+  "record": {
+    "domain": "tegara.coowner.termsApproval",
+    "version": 1,
+    "platformChainId": "dash-testnet-51",
+    "contractId": "GJWKJLZF3PHm8HuUwz4JCL2PkTmvDqcYV2GagYaQ6mq",
+    "poolId": "878c9b21195adf91d95229c9935fa5b2c0e048eeb1fa195ce6b6032bebccd278",
+    "l1GenesisHash": "000008ca1832a4baf228eb1553c03d3a2c8e02399550dd6ea8d65cec3ef23d2e",
+    "memberIdentity": "1907419d9b0c323c08fa10cc29ffb6370e69f435cafd90389f64721a7d9694ab",
+    "revision": 2,
+    "notAfterHeight": 821,
+    "agreement": {
+      "shares": [
+        {
+          "amount": 60000000000,
+          "refundAddress": "yhDxwZJYGjeeHtqDi4mJYiCFqJt46YTXza",
+          "rewardAddress": "ygzo3LhsF8mTrUyzPsPqaec8TyAjodG1Cc",
+          "ownerAddress": "yjeHc53Jx8SXwZjDviWPccpDQj2MsGwFpp"
+        },
+        {
+          "amount": 40000000000,
+          "refundAddress": "yNBwaRN3j3uskX7MxVWgTHCJWCyHt619z7",
+          "rewardAddress": "ycrthA49CRUrH8Sd5CxFdd4bFqyyEUx67o",
+          "ownerAddress": "yShu25DeYworK7ynqfTe67obfu1uomwkMX"
+        }
+      ],
+      "earlyPeriodBlocks": 100,
+      "earlyPenalty": 1000000000,
+      "operatorPubKey": "9344e791a5d980ece0e11a82d316344b1197e6340b813b8ec5fd028b7ac1e316405aa904a5fdd26f6e6c296b3aac4c67",
+      "votingAddress": "yTQfHRxMHW8K7kzW3KxTziksBZ747Z5ir1",
+      "operatorReward": 0,
+      "myIndex": 0,
+      "myContributionDuffs": 60000000000,
+      "myFeeDuffs": 10000
+    }
+  },
+  "ownerSignature": "IF3d5wccnyU1K7NS4/OgaYho76pjDfXFAjn+YpcyPRf9NMgwB3cgNpbOef5TfnXTxmByMHkVkrBIdJM9asJQSJo=",
+  "identityKeyId": 1,
+  "identitySignature": "H6qsfH3U05czNSijFQIHPI5LR/M0BNsBeqvpbeZj05zcAqWuDTa0WLeqHih5bx/yfM3SjZ6kfZXWAVP6dwLJNnA=",
+  "source": "tegara/evidence/member-approval/2026-09-27/envelope-memberA-rev2.json: owner signature by Dash Core v24.0.0-rc.1 signmessage in member A's wallet"
+}

@@ -281,11 +281,17 @@ const appendChecked = (poolId, dir, rec) => {
  * holds, so a configuration update and a first record cannot both pass
  * their checks and leave the key disagreeing with the fresh binding.
  */
-const setStart = (poolId, epochStr, { dir } = {}) => {
-  requirePool(poolId);
+// the one rule for a start epoch's form, used by setStart and by a runner that must refuse a
+// malformed start before any write
+const parseStartEpoch = (epochStr) => {
   if (typeof epochStr !== "string" || !DEC_U32.test(epochStr) || Number(epochStr) > U32_MAX) {
     refuse("the start epoch must be a canonical decimal u32 string");
   }
+  return Number(epochStr);
+};
+const setStart = (poolId, epochStr, { dir } = {}) => {
+  requirePool(poolId);
+  parseStartEpoch(epochStr);
   envStore.acquireOpLock(poolRunLockName(poolId));
   try {
     if (openJournal(poolId, dir).records.length > 0) {
@@ -294,6 +300,34 @@ const setStart = (poolId, epochStr, { dir } = {}) => {
     envStore.updateEnvKey(startKeyOf(poolId), epochStr);
   } finally { envStore.releaseOpLock(poolRunLockName(poolId)); }
   return { poolId, startEpoch: Number(epochStr) };
+};
+
+/**
+ * The run's first epoch, decided before anything is read or written (2026-09-27): a resume run
+ * starts at the gate capture's epoch, and a bootstrap run at its requested start, "0" when unset or
+ * empty. The request is validated here, so a malformed start refuses before the pool and receipt
+ * documents are formed. bindBootstrapStart later binds it or matches it against the bound start.
+ */
+const firstEpochFor = ({ bootstrap, requestedStart, gateEpochIndex }) => {
+  if (!bootstrap) return gateEpochIndex;
+  return parseStartEpoch(requestedStart ? requestedStart : "0");
+};
+
+/**
+ * A bootstrap pool's start (2026-09-27): bind the requested start while the pool has no journal
+ * record, and once one exists require the bound start to equal the request, refusing otherwise.
+ * Returns the start the pool actually has. The request is validated by setStart first, so a
+ * malformed value refuses before anything else is read.
+ */
+const bindBootstrapStart = (poolId, requested, { dir } = {}) => {
+  try { return setStart(poolId, requested, { dir }).startEpoch; }
+  catch (e) {
+    if (!/bound and immutable/.test((e && e.message) || "")) throw e;
+    const bound = readConfiguredStartKey(poolId);
+    if (bound === null) refuse("the pool has journal records but no stored configured start");
+    if (bound !== Number(requested)) refuse(`the bootstrap pool's start is bound at ${bound}, not the requested ${requested}`);
+    return bound;
+  }
 };
 
 const readConfiguredStartKey = (poolId) => {
@@ -587,7 +621,7 @@ const resendAuthorized = (poolId, dir, { object, epochIndex, accrualId, gen }) =
  */
 const resendAndAwait = async (deps, hash, bytes) => {
   const sent = await deps.broadcastAndAwait(hash, bytes);
-  return classifyOutcome(sent, deps._uniqueIdentityForTest) === TOKENS.SUCCESS ? sent : deps.awaitResult(hash);
+  return classifyOutcome(sent) === TOKENS.SUCCESS ? sent : deps.awaitResult(hash);
 };
 
 /**
@@ -667,7 +701,7 @@ const runHeaderStep = async ({ poolId, dir, deps, run }) => {
   await requireGateAdmission(deps, "runHeaderStep");
   const need = ["fetchRange", "entitlementsForEpoch", "epochNumbers", "epochDistributionComplete",
     "buildHeaderTransition", "broadcastAndAwait", "awaitResult", "buildHeaderCapture",
-    "provedHeaderQuery", "fetchBalanceWithMetadata", "resolvePool"];
+    "provedHeaderQuery", "fetchBalanceWithMetadata", "resolvePool", "confirmFinalEpochs"];
   for (const k of need) if (typeof (deps && deps[k]) !== "function") refuse(`runHeaderStep needs deps.${k}`);
   if (!deps.identities || !HEX64.test(deps.identities.writer || "") || !HEX64.test(deps.identities.income || "")) {
     refuse("runHeaderStep needs deps.identities ({ writer, income } hex)");
@@ -772,6 +806,15 @@ const runHeaderStep = async ({ poolId, dir, deps, run }) => {
   }
 
   // ---- FRESH ATTEMPT (no write-ahead in the current generation) ----
+  // THE POOL'S FINAL EPOCHS ARE RE-READ HERE, UNDER THE POOL'S LOCK and before anything is built
+  // (FINAL_EPOCH_DESIGN.md, WHO DECIDES, AND WHO WRITES). The rows came from a read at the run's
+  // start, outside this lock, and the operator's command takes this same lock to write a record.
+  // Once this check passes, the write-ahead below is journaled before the lock is released, and the
+  // command refuses a record for an epoch whose header is in the journal, so no record for this
+  // epoch can become effective behind rows that ignore it, PROVIDED the proved re-read is current. A
+  // node that lags the record's creation is the residual e2FinalEpoch.cjs states (the epoch is paid
+  // unraised, never overpaid, and the audit reports it). A changed set refuses the step.
+  await deps.confirmFinalEpochs(epochIndex);
   const locks = acquireIdentityLocks([deps.identities.writer, deps.identities.income]);
   try {
     await admitHeader({ dir, poolId,
@@ -801,14 +844,11 @@ const runHeaderStep = async ({ poolId, dir, deps, run }) => {
 
 // the shared outcome tail for a fresh or resumed broadcast
 const finishHeaderOutcome = async ({ poolId, dir, deps, epochIndex, gen, W, expectedContents, result, locks }) => {
-  // deps._uniqueIdentityForTest mirrors e2Outcome's governed seam EXACTLY:
-  // it supplies only the pinned-identity argument, so the closed-shape
-  // validation always runs and cannot be replaced; the unique-index
-  // identity is unpinned, so the duplicate-refusal branch is unreachable
-  // through the production default until the pinning-time read lands, and
-  // the seam makes it executable in the battery ONLY (any use outside the
-  // test file is a review finding)
-  const token = classifyOutcome(result, deps._uniqueIdentityForTest);
+  // THE DUPLICATE-REFUSAL BRANCH IS REACHABLE IN PRODUCTION since the unique-index identity was
+  // pinned (consensusErrorPin.cjs, 2026-09-28): a refusal reaches it only with code 40105 AND a
+  // payload that decodes as the duplicate unique-index error. The test seam that made it reachable
+  // before is removed, so the battery reaches it the same way, with real-format payloads.
+  const token = classifyOutcome(result);
   if (token === TOKENS.SUCCESS) {
     return journalHeaderCapture({ poolId, dir, deps, epochIndex, gen, W, expectedContents, result, locks });
   }
@@ -971,7 +1011,7 @@ const documentWriteOnce = async ({ poolId, dir, deps, object, epochIndex, accrua
       : { status: "mismatch-stop", note: `the on-ledger ${object} differs from the recomputation (hard stop)` };
   }
   const result = await deps.documents.write(object, key, expected);
-  const token = classifyOutcome(result, deps._uniqueIdentityForTest);
+  const token = classifyOutcome(result);
   if (token === TOKENS.SUCCESS) return { status: "written" };
   if (token === TOKENS.UNIQUE) {
     // the stale-read rule: wait-only fetch-and-compare, never a resubmit
@@ -1403,7 +1443,7 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
             poolId, epochIndex, accrualId, transitionHash: rW.transitionHash });
           resResult = await deps.broadcastAndAwait(rW.transitionHash, rW.transitionBytes);
         }
-        const rToken = classifyOutcome(resResult, deps._uniqueIdentityForTest);
+        const rToken = classifyOutcome(resResult);
         if (rToken === TOKENS.SUCCESS) {
           // THE IDENTIFIER IS ASKED FOR BEFORE THE RECORD IS WRITTEN, and an answer that is not
           // found stops this accrual with a named condition instead of ending the run (a soundness-review finding).
@@ -1481,7 +1521,7 @@ const runTransferStep = async ({ poolId, dir, deps, run, epochIndex, accrualId }
         // marker set, no capture, no licensed resend: wait-only on the persisted hash
         transferResult = await deps.awaitResult(transferHash);
       }
-      const tToken = classifyOutcome(transferResult, deps._uniqueIdentityForTest);
+      const tToken = classifyOutcome(transferResult);
       if (tToken === TOKENS.OTHER) {
         appendChecked(poolId, dir, { v: 1, kind: K.ERROR, object: "transfer", gen: tGen, poolId,
           epochIndex, accrualId, code: Number.isSafeInteger(transferResult && transferResult.code) ? transferResult.code : 0,
@@ -1645,7 +1685,7 @@ const runFromJournal = (read) => {
   return out;
 };
 
-module.exports = { setStart, startRun, runHeaderStep, runAccrualStep, runTransferStep,
+module.exports = { setStart, parseStartEpoch, firstEpochFor, bindBootstrapStart, startRun, runHeaderStep, runAccrualStep, runTransferStep,
   startKeyOf, poolRunLockName, appendChecked, MIN_TRANSFER_AMOUNT_CREDITS,
   classifyEntitlement, runFromJournal };
 
