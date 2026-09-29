@@ -843,6 +843,14 @@ const main = async () => {
       const r = await b.deps.documents.fetch("receipt", { accrualId: row.accrualId });
       ok("a single hit is normalized: bytes to hex, bigints to numbers",
         r.found === true && r.fields.poolId === POOL && r.fields.amountCredits === 5);
+      // a soundness-review finding: a served "__proto__" member stays an own member of the normalized fields, and never
+      // becomes their prototype, so nothing downstream reads a value that was not served as a member
+      const odd = { getProperties: () => JSON.parse(`{"poolId":"${POOL}","__proto__":{"amountCredits":7}}`) };
+      const bo = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [odd] });
+      const ro = await bo.deps.documents.fetch("receipt", { accrualId: row.accrualId });
+      ok("a served __proto__ member stays own and never becomes the fields' prototype (a soundness-review finding)",
+        ro.found === true && Object.prototype.hasOwnProperty.call(ro.fields, "__proto__")
+        && Object.getPrototypeOf(ro.fields) === Object.prototype && ro.fields.amountCredits === undefined);
       const none = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [] });
       ok("no hit answers found:false", (await none.deps.documents.fetch("receipt", { accrualId: row.accrualId })).found === false);
       const many = bundleOf(CLEAN, EP0, new Set(), { queryAnswer: async () => [one, one] });

@@ -212,4 +212,38 @@ async function selectExpectedPayload({ readVersion, poolLedgerContract }) {
   return expectedV11Payload(poolLedgerContract, version);
 }
 
-module.exports = { buildV11, E2_TYPES, buildV11WithFinalEpoch, expectedV11Payload, selectExpectedPayload, FINAL_EPOCH_TYPE: "memberFinalEpoch" };
+/**
+ * THE CONTRACT-LEVEL CONFIG v11 WAS REGISTERED WITH, as a literal. registerV11Run.mjs published v11
+ * through `sdk.dataContracts.create` with no config, so it carries the pinned DPP's default, and
+ * contractV11Test.cjs checks that the pinned DPP builds exactly this for both v11 payloads. Read
+ * back from testnet by proof on 2026-09-29, it matched member for member.
+ * The audit compares the served config with THIS literal, never with anything fetched.
+ *
+ * What the members mean for this project, checked against buildV11WithFinalEpoch on 2026-09-29.
+ * Every type sets documentsMutable, so documentsMutableContractDefault governs none. No type sets
+ * documentsKeepHistory, so documentsKeepHistoryContractDefault governs all fourteen. Six types
+ * inherited from v8 and v9 (share, membershipRequest, rewardAccrual, votePreference, settlement,
+ * pledgeSlot) set neither canBeDeleted nor creationRestrictionMode, so their deletability comes
+ * from documentsCanBeDeletedContractDefault (pledgeSlot's cancel-safety rests on it, see
+ * registerV7.cjs). The E2 types, pool, completionReceipt and memberFinalEpoch set both. readonly
+ * false is what let the one update (memberFinalEpoch) happen. keepsHistory, the bounded-key
+ * requirements and sizedIntegerTypes change what Platform keeps and accepts.
+ * Platform v4.1.1 refuses an update that changes any member except sizedIntegerTypes, which may
+ * only go from false to true (rs-dpp data_contract/config/methods/validate_update, v0 and v1), so
+ * a difference here most likely means another contract, another registration, or a Platform
+ * release that reads the config differently, and each of those is re-read, not assumed.
+ */
+const V11_CONFIG = Object.freeze({
+  $formatVersion: "1",
+  canBeDeleted: false,
+  documentsCanBeDeletedContractDefault: true,
+  documentsKeepHistoryContractDefault: false,
+  documentsMutableContractDefault: true,
+  keepsHistory: false,
+  readonly: false,
+  requiresIdentityDecryptionBoundedKey: null,
+  requiresIdentityEncryptionBoundedKey: null,
+  sizedIntegerTypes: true,
+});
+
+module.exports = { buildV11, E2_TYPES, buildV11WithFinalEpoch, expectedV11Payload, selectExpectedPayload, FINAL_EPOCH_TYPE: "memberFinalEpoch", V11_CONFIG };

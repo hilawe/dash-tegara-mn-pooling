@@ -235,7 +235,10 @@ const plainDataSnapshot = (root) => {
           if (!dsc.enumerable) { defect = `member ${label}.${String(k)} is non-enumerable (it would vanish from canonical comparison)`; return null; }
           const child = walk(dsc.value, `${label}.${String(k)}`);
           if (!child) return null;
-          copy[k] = child.copy;
+          // DEFINED, never assigned (a soundness-review finding): assigning the key "__proto__" to an ordinary object
+          // calls the prototype setter, so the member vanished from the copy and an object value
+          // became its prototype; a definition keeps it an own member like any other
+          Object.defineProperty(copy, k, { value: child.copy, writable: true, enumerable: true, configurable: true });
           if (child.h > maxChild) maxChild = child.h;
         }
       }

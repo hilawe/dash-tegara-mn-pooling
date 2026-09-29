@@ -89,6 +89,16 @@ const resolve = ({ receipts = [RECEIPT()], pools = [POOL()], seen = {} } = {}) =
       && typeof r.poolDoc.getProperties === "function" && typeof r.receiptDoc.getProperties === "function");
   }
 
+  // a soundness-review finding: a served pool whose only own member is "__proto__", holding every expected field, must
+  // not be read through the prototype as a conforming pool
+  {
+    const inherited = JSON.parse(`{"__proto__":${JSON.stringify(poolProps())}}`);
+    const odd = { id: { base58: () => POOL_B58 }, ownerId: { base58: () => ID_A }, getProperties: () => inherited };
+    let outcome;
+    try { outcome = (await resolve({ pools: [odd] })).action; } catch (e) { outcome = `refused: ${e.message.slice(0, 80)}`; }
+    ok(`a pool whose fields sit only inside an own __proto__ member is refused, never reused (got ${outcome}) (a soundness-review finding)`, /^refused/.test(outcome));
+  }
+
   // ---- everything else refuses ----
   await rejects("two receipts on a unique index refuse", resolve({ receipts: [RECEIPT(), RECEIPT()] }), /served 2 receipts/);
   await rejects("a receipt owned by another identity refuses", resolve({ receipts: [RECEIPT({}, ID_B)] }), /receipt is not owned by the writer/);

@@ -865,6 +865,8 @@ const buildReport = ({ poolId, contractId, expectedChainId, startSource,
 //   { status: "unverified" }. Types used: "pool", "completionReceipt",
 //   "identity", "contract", "reservationByAccrual", "receiptByAccrual",
 //   "headerByEpoch" (key poolId+epochIndex, the expected-header fallback),
+//   ("contract" serves the contract's document schemas with "$id",
+//   "$ownerId" and, since 2026-09-29, its contract-level config as "$config"),
 //   "accrualByKey" (key poolId+epochIndex+funderId, the expected-accrual
 //   fallback) and "accrualById" (key accrualId, 64-hex; settles a
 //   dependent whose accrual no enumeration or fallback resolved).
@@ -894,7 +896,7 @@ const { emptyCarryState, advanceEpoch } = require("./epochCarry.cjs");
 // WHICH FINAL-EPOCH RECORDS APPLY is decided in e2FinalEpoch.cjs, the composition the writer
 // and the pool resolution also use, so the three readers cannot disagree about the set
 const { readEffectiveFinalEpochs } = require("./e2FinalEpoch.cjs");
-const { FINAL_EPOCH_TYPE } = require("./contractV11.cjs");
+const { FINAL_EPOCH_TYPE, V11_CONFIG } = require("./contractV11.cjs");
 // THE ALLOCATION SPLIT IS NOT IMPLEMENTED HERE EITHER. `splitOwed` is the same rule the
 // writer's carry-capable row source consumes, so the two cannot drift; it was living in
 // three places before that module, one of them under a comment saying its arithmetic
@@ -1257,6 +1259,15 @@ const evaluateFormationInputs = async ({ poolId, contractId, deps }) => {
  * conformance grade until the permitted-change rules are read), an
  * unserved or unverified read is UNPROVED.
  *
+ * THE COMPARISON COVERS THE CONTRACT-LEVEL CONFIG TOO, since 2026-09-29.
+ * Before that it covered the document schemas alone, because the adapter
+ * served only those, so "the exact registered payload" was wider than what
+ * was compared. The served config travels in the document as "$config" and
+ * is compared WHOLE against contractV11.V11_CONFIG, the source build's
+ * literal, never against anything fetched. A served answer without
+ * "$config" was not compared and is UNPROVED; a different config is
+ * REFUSED, naming the members that differ.
+ *
  * IT ALSO ANSWERS WHETHER THE PROVED CONTRACT DEFINES memberFinalEpoch, as
  * `definesFinalEpochType`: true or false from the served contract once it is
  * bound to the requested identifier, whether or not it then equals the
@@ -1316,6 +1327,11 @@ const evaluateContractIntegrity = async ({ contractId, expectedContractPayload, 
   }
   // an OWN member of the proved contract, never an inherited one
   const definesFinalEpochType = Object.prototype.hasOwnProperty.call(ans.doc, FINAL_EPOCH_TYPE);
+  // THE CONFIG IS TAKEN OUT BY NAME before the envelope check, so it can be neither stripped with
+  // the envelope nor read as a document type; it is compared after the schemas, below
+  const hasConfig = Object.prototype.hasOwnProperty.call(ans.doc, "$config");
+  const servedConfig = hasConfig ? ans.doc["$config"] : undefined;
+  const doc = Object.fromEntries(Object.entries(ans.doc).filter(([k]) => k !== "$config"));
   // CANONICAL equality over the CONTRACT-DEFINED members, with the fetched
   // document's envelope removed by a CLOSED LIST, never by the $ prefix
   //. Stripping every $-prefixed fetched name discarded members
@@ -1345,7 +1361,7 @@ const evaluateContractIntegrity = async ({ contractId, expectedContractPayload, 
     "$createdAt", "$updatedAt",
     "$createdAtBlockHeight", "$updatedAtBlockHeight",
     "$createdAtCoreBlockHeight", "$updatedAtCoreBlockHeight"];
-  const fetched$ = Object.keys(ans.doc).filter((k) => k.startsWith("$"));
+  const fetched$ = Object.keys(doc).filter((k) => k.startsWith("$"));
   const unrecognized$ = fetched$.filter((k) => !ENVELOPE_MEMBERS.includes(k));
   if (unrecognized$.length) {
     return { label: "REFUSED",
@@ -1358,8 +1374,22 @@ const evaluateContractIntegrity = async ({ contractId, expectedContractPayload, 
   // single statement of which names are envelope members, so relaxing the
   // refusal cannot silently widen what is dropped.
   const stripSystem = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !ENVELOPE_MEMBERS.includes(k)));
-  if (canonicalString(stripSystem(ans.doc)) !== canonicalString(expectedContractPayload)) {
+  if (canonicalString(stripSystem(doc)) !== canonicalString(expectedContractPayload)) {
     return { label: "REFUSED", reason: "the proved contract diverges from the registered v11 payload (its contract-defined members)",
+      definesFinalEpochType };
+  }
+  if (!hasConfig) {
+    return { label: "UNPROVED", reason: "the proved contract answer carries no config ($config), so the contract-level config was not compared",
+      definesFinalEpochType };
+  }
+  if (!servedConfig || typeof servedConfig !== "object" || safeIsArray(servedConfig)) {
+    refuse(`the contract lookup served a config that is not a plain object (${show(servedConfig)}); a nonconforming adapter answer`);
+  }
+  if (canonicalString(servedConfig) !== canonicalString(V11_CONFIG)) {
+    const differ = [...new Set([...Object.keys(V11_CONFIG), ...Object.keys(servedConfig)])].sort()
+      .filter((k) => !Object.prototype.hasOwnProperty.call(servedConfig, k) || !Object.prototype.hasOwnProperty.call(V11_CONFIG, k)
+        || canonicalString(servedConfig[k]) !== canonicalString(V11_CONFIG[k]));
+    return { label: "REFUSED", reason: `the proved contract's config differs from the registered v11 config in ${show(differ)}`,
       definesFinalEpochType };
   }
   return { label: "PROVED", definesFinalEpochType };

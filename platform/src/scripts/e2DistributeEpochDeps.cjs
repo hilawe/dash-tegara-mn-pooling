@@ -151,22 +151,13 @@ const makeEpochDepsFactory = (env) => {
       const d = ctx.docIdFor(TYPE_OF[object], subject);
       return { b58: d.b58, entropy: d.entropy };
     };
-    const norm = (fields) => {
-      const out = {};
-      for (const [k, v] of Object.entries(fields)) {
-        if (k.startsWith("$")) continue;
-        out[k] = (v && (v instanceof Uint8Array || Buffer.isBuffer(v))) ? Buffer.from(v).toString("hex")
-          : (typeof v === "bigint" ? Number(v) : v);
-      }
-      return out;
-    };
-    const denorm = (type, fields) => {
-      const out = {};
-      for (const [k, v] of Object.entries(fields)) {
-        out[k] = BYTE_FIELDS[type].includes(k) ? Buffer.from(v, "hex") : v;
-      }
-      return out;
-    };
+    // both built with Object.fromEntries, which defines each member, so a served "__proto__" stays
+    // an own member rather than vanishing into the prototype setter (a soundness-review finding)
+    const norm = (fields) => Object.fromEntries(Object.entries(fields).filter(([k]) => !k.startsWith("$")).map(([k, v]) => [k,
+      (v && (v instanceof Uint8Array || Buffer.isBuffer(v))) ? Buffer.from(v).toString("hex")
+        : (typeof v === "bigint" ? Number(v) : v)]));
+    const denorm = (type, fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [k,
+      BYTE_FIELDS[type].includes(k) ? Buffer.from(v, "hex") : v]));
     // THE PIN CHECK IS THE DECISION AND IT LIVES HERE. The raw read is injected, so this module
     // never imports by container path and a battery can answer with any metadata it likes. A read
     // whose chain or protocol version is not the pinned one REFUSES rather than returning a nonce

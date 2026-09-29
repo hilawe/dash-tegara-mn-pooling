@@ -70,6 +70,8 @@ const refusesInput = (name, fn, re) => {
       && re.test(e.message));
   }
 };
+// the config the audit compares against, the source build's literal (contractV11.cjs)
+const { V11_CONFIG: V11_CONFIG_T } = require("./contractV11.cjs");
 const rejects = async (name, p, re) => {
   try { await p; failed++; console.error(`FAIL: ${name} (no error)`); }
   catch (e) { ok(name, re.test((e && e.message) || String(e))); }
@@ -1657,7 +1659,10 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
     const pool = { "$id": POOL_HEX, slotIndex: 0, nodeType: opts.nodeType ?? "evo",
       operatorFeeBps: opts.operatorFeeBps ?? 2000,
       targetDuffs: Number(EVO), slotDuffs: Number(BigInt(EVO) / 2n), slotCount: 2, "$ownerId": OA };
-    const contractPayload = { "$id": GC, version: "v11",
+    // the served contract carries its contract-level config as "$config", as the live adapter serves
+    // it (e2AuditRun.mjs); the registration payload below drops every $-member, so the expectation
+    // for the config is contractV11.V11_CONFIG alone
+    const contractPayload = { "$id": GC, "$config": JSON.parse(JSON.stringify(V11_CONFIG_T)), version: "v11",
       documentTypes: ["header", "accrual", "reservation", "receipt", "part"],
       documents: { pool: { required: ["nodeType", "operatorFeeBps"] } } };
     // THE FINAL-EPOCH TYPE, defined on the contract only when a case asks for it. The audit
@@ -2297,6 +2302,58 @@ const cleanCoverage = () => ({ lateConfiguredStart: false, containsUniverse: tru
         expectedContractPayload: proxyPayload, deps: w.deps });
       ok("a Proxy payload's captured (divergent) members govern the comparison, so it cannot fake equality through its get trap",
         cP.label === "REFUSED" && /diverges/.test(cP.reason));
+    }
+    // ---- THE CONTRACT-LEVEL CONFIG (2026-09-29): compared whole against V11_CONFIG ----
+    {
+      const withConfig = (cfg) => ({ ...w.deps, provedByKey: async (type, key) => (type === "contract"
+        ? { status: "served", doc: (() => { const d = JSON.parse(JSON.stringify(w.contractPayload));
+          if (cfg === undefined) delete d["$config"]; else d["$config"] = cfg; return d; })(), height: "889" }
+        : w.deps.provedByKey(type, key)) });
+      const integrity = (cfg, payload = w.deps.expectedContractPayload) => evaluateContractIntegrity({ contractId: GC,
+        expectedContractPayload: payload, deps: withConfig(cfg) });
+      const base = JSON.parse(JSON.stringify(V11_CONFIG_T));
+      const cNone = await integrity(undefined);
+      ok(`a served contract without $config is UNPROVED, never PROVED (got ${cNone.label})`,
+        cNone.label === "UNPROVED" && /\$config/.test(cNone.reason));
+      const cBoth = await integrity(undefined, { ...w.deps.expectedContractPayload, version: "v12" });
+      ok("a schema divergence with no $config is REFUSED for the divergence, not UNPROVED", cBoth.label === "REFUSED" && /diverges/.test(cBoth.reason));
+      for (const k of Object.keys(base)) {
+        const v = base[k];
+        const changed = v === null ? "0x01" : typeof v === "boolean" ? !v : `${v}-other`;
+        const c = await integrity({ ...base, [k]: changed });
+        ok(`a config differing only in ${k} is REFUSED, naming it (got ${c.label}: ${c.reason})`,
+          c.label === "REFUSED" && c.reason.includes(k) && /config differs/.test(c.reason));
+        const missing = { ...base }; delete missing[k];
+        const cm = await integrity(missing);
+        ok(`a config missing ${k} is REFUSED, naming it`, cm.label === "REFUSED" && cm.reason.includes(k));
+      }
+      const cExtra = await integrity({ ...base, documentsTransferable: true });
+      ok("a config with an extra member is REFUSED, naming it", cExtra.label === "REFUSED" && cExtra.reason.includes("documentsTransferable"));
+      const cMatch = await integrity(base);
+      ok("the served config equal to V11_CONFIG, member order aside, is PROVED",
+        cMatch.label === "PROVED" && (await integrity(Object.fromEntries(Object.entries(base).reverse()))).label === "PROVED");
+      // a soundness-review finding: an extra own "__proto__" member of the served config must
+      // be compared, so it REFUSES naming it, whatever its value
+      for (const extra of ['null', '0', 'false', '"ignored"', '{}']) {
+        const cfg = JSON.parse(`{"__proto__":${extra}}`);
+        for (const [k, v] of Object.entries(base)) Object.defineProperty(cfg, k, { value: v, enumerable: true, writable: true, configurable: true });
+        const c = await integrity(cfg);
+        ok(`a config carrying an extra own __proto__ (${extra}) is REFUSED, naming it (got ${c.label}) (a soundness-review finding)`,
+          c.label === "REFUSED" && c.reason.includes("__proto__"));
+      }
+      const cFmt = await integrity({ ...base, $formatVersion: 1 });
+      ok("a numeric $formatVersion 1 where the literal holds the string \"1\" is REFUSED (no coercion)", cFmt.label === "REFUSED" && cFmt.reason.includes("$formatVersion"));
+      {
+        const withProtoSchema = JSON.parse(JSON.stringify(w.contractPayload));
+        Object.defineProperty(withProtoSchema, "__proto__", { value: { required: ["x"] }, enumerable: true, writable: true, configurable: true });
+        const cS = await evaluateContractIntegrity({ contractId: GC, expectedContractPayload: w.deps.expectedContractPayload,
+          deps: { ...w.deps, provedByKey: async (type, key) => (type === "contract" ? { status: "served", doc: withProtoSchema, height: "889" } : w.deps.provedByKey(type, key)) } });
+        ok(`a served contract carrying an extra own __proto__ document member diverges, never PROVED (got ${cS.label}) (a soundness-review finding)`,
+          cS.label === "REFUSED" && /diverges/.test(cS.reason));
+      }
+      for (const [what, bad] of [["null", null], ["an array", []], ["a string", "config"]]) {
+        await rejects(`a $config that is ${what} is a nonconforming adapter answer`, integrity(bad), /config that is not a plain object/);
+      }
     }
   }
   {

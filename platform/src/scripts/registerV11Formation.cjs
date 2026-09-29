@@ -73,11 +73,11 @@ const normalizeDoc = (doc, what) => {
   const owner = idOf(doc.ownerId !== undefined ? doc.ownerId : doc.$ownerId, `${what} owner`);
   const props = typeof doc.getProperties === "function" ? doc.getProperties() : doc.properties;
   if (!props || typeof props !== "object") refuse(`the served ${what} has no properties`);
-  const fields = {};
-  for (const [k, v] of Object.entries(props)) {
-    fields[k] = (v instanceof Uint8Array || Buffer.isBuffer(v)) ? Buffer.from(v).toString("hex")
-      : (typeof v === "bigint" ? Number(v) : v);
-  }
+  // built with Object.fromEntries, which defines each member, so a served "__proto__" stays own
+  // and is compared rather than dropped or adopted as the prototype (a soundness-review finding)
+  const fields = Object.fromEntries(Object.entries(props).map(([k, v]) => [k,
+    (v instanceof Uint8Array || Buffer.isBuffer(v)) ? Buffer.from(v).toString("hex")
+      : (typeof v === "bigint" ? Number(v) : v)]));
   return { id, owner, fields };
 };
 

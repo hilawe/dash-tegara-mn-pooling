@@ -193,6 +193,17 @@ const ledger = (total, heights, log) => {
     // no trace of the class, and the consumer must read THAT.
     class Foreign { constructor() { this.x = 1; } get trap() { return "never read"; } }
     const lying = new Proxy(new Foreign(), { getPrototypeOf: () => Object.prototype });
+    // a soundness-review finding: an own member named "__proto__" is CAPTURED as an own member, whatever its value, and
+    // the capture keeps the ordinary prototype (assignment dropped it and adopted object values as
+    // the copy's prototype)
+    for (const [what, json] of [["null", 'null'], ["0", '0'], ["false", 'false'], ["a string", '"ignored"'], ["an object", '{"status":"served"}']]) {
+      const src = JSON.parse(`{"a":1,"__proto__":${json}}`);
+      const cap = plainDataSnapshot(src);
+      ok(`an own __proto__ member that is ${what} is captured as an own member, the prototype unchanged (a soundness-review finding)`,
+        cap.defect === null && Object.prototype.hasOwnProperty.call(cap.value, "__proto__")
+        && Object.getPrototypeOf(cap.value) === Object.prototype && cap.value.status === undefined
+        && JSON.stringify(cap.value) === JSON.stringify(src));
+    }
     const snap = plainDataSnapshot({ id: "01".repeat(32), nested: lying });
     ok("a prototype-reporting Proxy over a class instance yields an ORDINARY plain-object capture",
       snap.defect === null

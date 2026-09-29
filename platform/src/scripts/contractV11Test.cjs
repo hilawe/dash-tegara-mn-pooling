@@ -11,7 +11,7 @@
 const path = require("path");
 const { pathToFileURL } = require("url");
 const { buildV9 } = require("./contractV9.cjs");
-const { buildV11, E2_TYPES, buildV11WithFinalEpoch, expectedV11Payload, selectExpectedPayload, FINAL_EPOCH_TYPE } = require("./contractV11.cjs");
+const { buildV11, E2_TYPES, buildV11WithFinalEpoch, expectedV11Payload, selectExpectedPayload, FINAL_EPOCH_TYPE, V11_CONFIG } = require("./contractV11.cjs");
 
 let passed = 0, failed = 0;
 const ok = (name, cond) => {
@@ -228,6 +228,19 @@ const EXPECTED = {
     let refused3 = false;
     try { await selectExpectedPayload({ readVersion: async () => 3, poolLedgerContract }); } catch (e) { refused3 = /no expected payload/.test(e.message); }
     ok("the seam refuses version 3", refused3);
+  }
+
+  // ---- THE CONFIG LITERAL IS THE BUILD'S. v11 was published with no config, so it carries the
+  // pinned DPP's default; both payloads, built by that DPP with no config, must carry exactly the
+  // literal the audit compares against (a literal nobody tied to the build would be a guess) ----
+  {
+    const dpp = require("pshenmic-dpp");
+    const plain = (x) => JSON.parse(JSON.stringify(x));
+    for (const [label, schemas] of [["published", buildV11(poolLedgerContract)], ["updated", buildV11WithFinalEpoch(poolLedgerContract)]]) {
+      const built = new dpp.DataContractWASM(new dpp.IdentifierWASM("11".repeat(32)), 7n, schemas, undefined, undefined, true, 12);
+      ok(`the pinned DPP builds the ${label} v11 payload with exactly V11_CONFIG`, eq(plain(built.getConfig()), plain(V11_CONFIG)));
+    }
+    ok("V11_CONFIG is frozen", Object.isFrozen(V11_CONFIG));
   }
 
   console.log(`contractV11Test: ${passed} passed, ${failed} failed`);
