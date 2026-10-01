@@ -46,7 +46,7 @@ const served = (w, over = {}) => {
   ok("and the document it makes passes the ledger binding with the real rc.1 signature", v.revision === 2 && v.identityHex === A2.record.memberIdentity);
 }
 throws("a signature that is not 65 bytes", () => W.documentFromApproval({ ...A2, ownerSignature: Buffer.alloc(64, 1).toString("base64") }), /not 65 bytes/);
-throws("a record that is not version 1", () => W.documentFromApproval({ ...A2, record: { ...A2.record, version: 2 } }), /version-1/);
+throws("a version-1 agreement relabeled as version 2 is refused by the version-2 rules", () => W.documentFromApproval({ ...A2, record: { ...A2.record, version: 2 } }), /version-2 agreement/);
 
 // ---- the write plan ----
 {

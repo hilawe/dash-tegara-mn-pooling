@@ -16,15 +16,35 @@
  * WHAT A PASS ESTABLISHES: the holders of the owner key and of the identity key both approved these
  * exact terms for this pool within the window. NOT that two members are two people, only two sets of
  * keys, and not that the approval is stored anywhere on Platform.
+ *
+ * TWO RECORD VERSIONS (the #7437 format unit, 2026-10-01). VERSION 1 is read and verified exactly as it
+ * was written, its agreement in the member tool's first shape (a whole-percent operator reward, every
+ * share with a reward address) and its signatures over the version-1 message; nothing in it is
+ * reinterpreted, and the three approvals of the testnet trial stay readable. VERSION 2 is the only
+ * version written: its agreement carries the registration terms in the chain's own shapes
+ * (registrationTerms.cjs: amounts in duffs, the operator reward in basis points, the reward address
+ * optional and defaulting to the refund address, the chain's bounds) beside the member's own position
+ * and fee share, and at completion the signed terms are compared with the registration as the node
+ * decoded it by the invariant in registrationTerms.agreementWithDecoded, units and defaults included.
+ * The message each version signs carries its own prefix, so a version-2 record can never verify under
+ * a version-1 signature or the reverse.
  */
 const crypto = require("crypto");
 const { canonicalString } = require("./canonicalJson.cjs");
 const completion = require("./coownerCompletion.cjs");
 const formationCore = require("./formationCore.cjs");
+const terms = require("./registrationTerms.cjs");
 
 const DOMAIN = "tegara.coowner.termsApproval";
-const VERSION = 1;
+const VERSION = 1;          // the first version, read and verified as written
+const VERSION_2 = 2;
+const VERSION_WRITE = 2;    // the only version new approvals are written in
 const PREFIX = "tegara co-owner terms approval v1 ";
+const PREFIX_BY_VERSION = Object.freeze({ 1: PREFIX, 2: "tegara co-owner terms approval v2 " });
+const AGREEMENT_V2_KEYS = Object.freeze(["registration", "myIndex", "myFeeDuffs"]);
+// the address rules a Platform chain's layer 1 uses (testnet and regtest share one address format)
+const NETWORK_BY_CHAIN = Object.freeze({ "dash-testnet-51": "testnet" });
+const networkOfChain = (chainId) => NETWORK_BY_CHAIN[chainId] || (/regtest|local/.test(String(chainId)) ? "regtest" : null);
 const HEX64 = /^[0-9a-f]{64}$/;
 const isInt = (v) => Number.isSafeInteger(v);
 class ApprovalRefusal extends Error {}
@@ -33,24 +53,79 @@ const refuse = (why) => { throw new ApprovalRefusal(why); };
 const RECORD_KEYS = ["domain", "version", "platformChainId", "contractId", "poolId", "l1GenesisHash",
   "memberIdentity", "revision", "notAfterHeight", "agreement"];
 
-/** The record's shape, refused rather than repaired. */
+/** The record's shape, refused rather than repaired: version 1 as it was always checked, version 2 by the chain's rules. */
 function requireRecord(r) {
   if (!r || typeof r !== "object") refuse("the approval carries no record");
   const extra = Object.keys(r).filter((k) => !RECORD_KEYS.includes(k));
   const missing = RECORD_KEYS.filter((k) => !(k in r));
-  if (extra.length || missing.length) refuse(`the record's fields are not the version-1 set (extra ${extra.join(",") || "none"}, missing ${missing.join(",") || "none"})`);
-  if (r.domain !== DOMAIN || r.version !== VERSION) refuse("the record is not a version-1 co-owner terms approval");
+  if (extra.length || missing.length) refuse(`the record's fields are not the approval set (extra ${extra.join(",") || "none"}, missing ${missing.join(",") || "none"})`);
+  if (r.domain !== DOMAIN || (r.version !== VERSION && r.version !== VERSION_2)) refuse("the record is not a version-1 or version-2 co-owner terms approval");
   for (const k of ["poolId", "l1GenesisHash", "memberIdentity"]) if (!HEX64.test(r[k])) refuse(`the record's ${k} is not 64 lowercase hex`);
   if (!isInt(r.revision) || r.revision < 1) refuse("the record's revision is not a positive integer");
   if (!isInt(r.notAfterHeight) || r.notAfterHeight < 0) refuse("the record's notAfterHeight is not a height");
   const a = r.agreement;
-  if (!a || !Array.isArray(a.shares) || !isInt(a.myIndex) || !a.shares[a.myIndex]) refuse("the record's agreement names no share for this member");
+  if (r.version === VERSION) {
+    if (!a || !Array.isArray(a.shares) || !isInt(a.myIndex) || !a.shares[a.myIndex]) refuse("the record's agreement names no share for this member");
+    return r;
+  }
+  if (!a || typeof a !== "object" || Array.isArray(a)) refuse("the version-2 record's agreement is not an object");
+  const ex = Object.keys(a).filter((k) => !AGREEMENT_V2_KEYS.includes(k)), mi = AGREEMENT_V2_KEYS.filter((k) => !Object.hasOwn(a, k));
+  if (ex.length || mi.length) refuse(`the version-2 agreement's fields are not registration, myIndex, myFeeDuffs (extra ${ex.join(",") || "none"}, missing ${mi.join(",") || "none"})`);
+  const network = networkOfChain(r.platformChainId);
+  if (!network) refuse(`no address rules are pinned for Platform chain ${r.platformChainId}`);
+  try { terms.requireTerms(a.registration, { network }); } catch (e) { if (e instanceof terms.TermsRefusal) refuse(`the registration terms are not ones the chain accepts (${e.reason}): ${e.message}`); throw e; }
+  if (!isInt(a.myIndex) || !a.registration.shares[a.myIndex]) refuse("the version-2 agreement names no share for this member");
+  if (!isInt(a.myFeeDuffs) || a.myFeeDuffs < 0) refuse("the version-2 agreement's fee share is not a whole amount");
   return r;
 }
 
-/** The exact message both keys sign. */
+/** The exact message both keys sign; each version has its own prefix. */
 function messageFor(record) {
-  return PREFIX + crypto.createHash("sha256").update(canonicalString(requireRecord(record))).digest("hex");
+  const r = requireRecord(record);
+  return PREFIX_BY_VERSION[r.version] + crypto.createHash("sha256").update(canonicalString(r)).digest("hex");
+}
+
+/** The member's own share of a checked record, whichever version. */
+const shareOf = (r) => (r.version === VERSION_2 ? r.agreement.registration.shares[r.agreement.myIndex] : r.agreement.shares[r.agreement.myIndex]);
+
+/**
+ * One view of a checked record's agreement for display and for the completion's claim logic, whichever
+ * version: shares with their effective reward destination, the terms, the reward as text (and in basis
+ * points for version 2), and the member's position and fee share. A version-1 agreement is shown, not
+ * reinterpreted: its reward is shown as it was written and carries NO basis points, so nothing can compare
+ * a version-1 approval with version-2 agreed terms through this view (a review found the earlier x100 feeding
+ * status's match label), and the completion still compares version-1 terms exactly as before.
+ */
+function agreementView(record) {
+  const r = requireRecord(record);
+  return agreementViewOf(r.version, r.agreement);
+}
+/** The same view from a version and an agreement alone (a proposal's, before any record exists). */
+function agreementViewOf(version, a) {
+  if (version !== VERSION && version !== VERSION_2) refuse(`no agreement view for version ${version}`);
+  if (version === VERSION) {
+    return { version: 1, shares: a.shares.map((s) => ({ amount: s.amount, ownerAddress: s.ownerAddress, refundAddress: s.refundAddress, rewardAddress: s.rewardAddress, rewardAddressGiven: true })),
+      earlyPeriodBlocks: a.earlyPeriodBlocks, earlyPenalty: a.earlyPenalty, operatorPubKey: a.operatorPubKey, votingAddress: a.votingAddress,
+      operatorRewardText: `${a.operatorReward}%`, myIndex: a.myIndex, myContributionDuffs: a.myContributionDuffs, myFeeDuffs: a.myFeeDuffs };
+  }
+  const t = a.registration;
+  return { version: 2, shares: t.shares.map((s) => ({ amount: s.amount, ownerAddress: s.ownerAddress, refundAddress: s.refundAddress, rewardAddress: terms.rewardDestination(s), rewardAddressGiven: Object.hasOwn(s, "rewardAddress") })),
+    earlyPeriodBlocks: t.earlyPeriodBlocks, earlyPenalty: t.earlyPenalty, operatorPubKey: t.operatorPubKey, votingAddress: t.votingAddress,
+    operatorRewardBps: t.operatorRewardBps, operatorRewardText: `${terms.bpsToPercentText(t.operatorRewardBps)}%`, myIndex: a.myIndex, myContributionDuffs: t.shares[a.myIndex].amount, myFeeDuffs: a.myFeeDuffs };
+}
+
+/**
+ * A version-2 agreement in the shape the completion's claim logic and table comparison take (the
+ * version-1 shape with every reward destination made explicit and the operator reward as the percentage
+ * number the node reports), derived exactly, used only after the invariant has run on the real terms.
+ */
+function completionShapeOf(record) {
+  const r = requireRecord(record);
+  if (r.version === VERSION) return r.agreement;
+  const v = agreementView(r);
+  return { shares: v.shares.map((s) => ({ amount: s.amount, ownerAddress: s.ownerAddress, refundAddress: s.refundAddress, rewardAddress: s.rewardAddress })),
+    earlyPeriodBlocks: v.earlyPeriodBlocks, earlyPenalty: v.earlyPenalty, operatorPubKey: v.operatorPubKey, votingAddress: v.votingAddress,
+    operatorReward: Number(terms.bpsToPercentText(v.operatorRewardBps)), myIndex: v.myIndex, myContributionDuffs: v.myContributionDuffs, myFeeDuffs: v.myFeeDuffs };
 }
 
 /** One served identity key into plain data: { id, purpose, disabled, type, dataHex }. */
@@ -82,7 +157,7 @@ function verifyRecordAndOwner({ record, ownerSignature, expect, verifyMessage })
   if (expect.registrationHeight > r.notAfterHeight) {
     refuse(`STALE: ${who} allows registration up to height ${r.notAfterHeight}, and the registration confirmed at ${expect.registrationHeight}`);
   }
-  const ownerAddress = r.agreement.shares[r.agreement.myIndex].ownerAddress;
+  const ownerAddress = shareOf(r).ownerAddress;
   if (typeof ownerSignature !== "string" || !verifyMessage(ownerAddress, message, ownerSignature)) {
     refuse(`SUBSTITUTION: ${who} carries no valid signature by its share's owner key ${ownerAddress}`);
   }
@@ -105,7 +180,7 @@ function verifyEnvelope({ envelope, expect, identityKeys, verifyMessage, address
   if (typeof envelope.identitySignature !== "string" || !verifyMessage(addressOfPubkey(key.dataHex), message, envelope.identitySignature)) {
     refuse(`SUBSTITUTION: ${who} carries no valid signature by the identity's key ${key.id}`);
   }
-  return { identityHex: r.memberIdentity, revision: r.revision, agreement: r.agreement, message };
+  return { identityHex: r.memberIdentity, revision: r.revision, agreement: r.agreement, version: r.version, record: r, message };
 }
 
 /**
@@ -155,13 +230,27 @@ function decideApprovedCompletion({ envelopes, identityKeysByIdentity, expect, v
     const had = latest.get(v.identityHex);
     if (!had || v.revision > had.revision) latest.set(v.identityHex, v);
   }
+  // THE INVARIANT FOR VERSION-2 TERMS: the signed registration terms equal what the node decoded, units
+  // and defaults included, before the claim logic sees a derived shape of them
+  const network = networkOfChain(expect.platformChainId);
+  for (const v of latest.values()) {
+    if (v.version !== VERSION_2) continue;
+    // st is present here: verifyRecordAndOwner refused every envelope already when no registration height was read
+    if (!network) { refusals.push(`${v.identityHex.slice(0, 12)}...'s version-2 terms cannot be compared: no address rules for this chain`); continue; }
+    let cmp;
+    try { cmp = terms.agreementWithDecoded({ terms: v.agreement.registration, decoded: { ...st, operatorReward: completionInputs.protxInfo.operatorReward }, network }); }
+    catch (e) { if (!(e instanceof terms.TermsRefusal)) throw e; refusals.push(`${v.identityHex.slice(0, 12)}...'s terms are not ones the chain accepts (${e.reason}): ${e.message}`); continue; }
+    if (!cmp.ok) refusals.push(`${v.identityHex.slice(0, 12)}...'s signed terms differ from the registration: ${cmp.differences.join("; ")}`);
+  }
+  if (refusals.length) return { ok: false, refusals };
+  const shapeOf = (v) => completionShapeOf(v.record);
   const termsSets = [...latest.values()].map((v) => ({ member: `identity ${v.identityHex.slice(0, 12)}...`,
-    platformIdentityB58: b58OfHex(v.identityHex), agreement: v.agreement }));
+    platformIdentityB58: b58OfHex(v.identityHex), agreement: shapeOf(v) }));
   let claims;
   try {
     const plan = completion.planClaims({ pool: completionInputs.pool, terms: [...latest.values()].map((v) => ({
-      member: `identity ${v.identityHex.slice(0, 12)}...`, platformIdentity: { b58: b58OfHex(v.identityHex) }, agreement: v.agreement,
-      rewardScriptHex: scriptOfAddress(v.agreement.shares[v.agreement.myIndex].rewardAddress) })) });
+      member: `identity ${v.identityHex.slice(0, 12)}...`, platformIdentity: { b58: b58OfHex(v.identityHex) }, agreement: shapeOf(v),
+      rewardScriptHex: scriptOfAddress(shapeOf(v).shares[shapeOf(v).myIndex].rewardAddress) })) });
     claims = plan.flatMap((p) => p.slots.map((slotNo) => ({ slotNo, ownerB58: p.identityB58, rewardScriptHex: p.rewardScriptHex, createdAt: slotNo })));
   } catch (e) {
     return { ok: false, refusals: [`the approved terms do not fill the pool, so a member may have no valid approval: ${e.message}`] };
@@ -172,4 +261,5 @@ function decideApprovedCompletion({ envelopes, identityKeysByIdentity, expect, v
     superseded: verified.length - latest.size };
 }
 
-module.exports = { DOMAIN, VERSION, PREFIX, messageFor, requireRecord, verifyRecordAndOwner, verifyEnvelope, decideApprovedCompletion, keyOf, ApprovalRefusal };
+module.exports = { DOMAIN, VERSION, VERSION_2, VERSION_WRITE, PREFIX, PREFIX_BY_VERSION, networkOfChain, messageFor, requireRecord, shareOf, agreementView, agreementViewOf, completionShapeOf,
+  verifyRecordAndOwner, verifyEnvelope, decideApprovedCompletion, keyOf, ApprovalRefusal };

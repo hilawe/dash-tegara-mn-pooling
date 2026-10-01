@@ -1,0 +1,801 @@
+{
+ "source": {
+  "build": {
+   "tag": "v24.0.0-rc.1 (binaries checked against the digests pinned in run_terms_v2.sh)",
+   "subversion": "/Dash Core:24.0.0/"
+  },
+  "exercise": "tegara/l1/pasta-build/terms_v2_inner.py",
+  "network": "regtest, v24 forced active"
+ },
+ "terms": {
+  "shares": [
+   {
+    "amount": 60000000000,
+    "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+    "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+    "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+   },
+   {
+    "amount": 40000000000,
+    "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+    "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+   }
+  ],
+  "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+  "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+  "operatorRewardBps": 525,
+  "earlyPeriodBlocks": 100,
+  "earlyPenalty": 39999999999
+ },
+ "rpcArgs": {
+  "shares": [
+   {
+    "amount": 60000000000,
+    "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+    "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+    "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+   },
+   {
+    "amount": 40000000000,
+    "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+    "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+   }
+  ],
+  "coreP2PAddrs": "",
+  "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+  "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+  "operatorReward": "5.25",
+  "earlyPeriodBlocks": 100,
+  "earlyPenalty": 39999999999
+ },
+ "accepted": {
+  "txid": "812d3ddd97d277db2afe15df248b47501ee5d6a292ef7c2ea4ca1b12b6aeb5ed",
+  "hex": "0300010003f8b24e9c16ddb24eb2fe6fd17886955ec7da583d3362dc8efecb86330869cadd000000006a47304402203c05a649bb3aadaa4d94bce25dd3d5ddf03372904979bcbc672e7b33496e0e0d022048ae748b6830d5f8cf12c69c7bc3bd6e30ff3290e6485cc8e56e0393f6d075cc012103ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45dfffffffff6da3e86166528da6594784b7679b3ded139ddb5c6a0f2da305d36b7169ca306000000006a47304402203d52f85db952e962d18d7260fcfa3d13876e7397327d3edd217f662fd2220a40022023bbb420ec35fd71f12c52e94384c3822deb876bc0716cc6a18f0a0634b365ca012103ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45dfffffffff419894b048e538539e2235fe912d7ba34ae3dea92121cc9b4f5acaee1c9211a000000006a47304402201700b040ec79544879b85b6cb93dac9346ead33a936d11072e634a400208b1e7022003bdc30c511ac1a55158eef9686e9444285a7d369f1f5c8f342abaf37ef4c193012103ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45dffffffff02c0312ca40b0000001976a9141f34fc3e093775c9663a87ba5100d981a5bbd14b88ac00e8764817000000070444534843755100000000fdbc0103000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000000000000000000000000000000b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2376460bdbf926395d4449cffc56a719e498ae3a20d020002005847f80d00000017a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d871976a914611af00a924435e025078d1398a4240335e01a8988ac732439fdaeef4012cfe05fb68cd66de93e69fb8c00902f50090000001976a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac0077801c6a49b522e5c3e37b5a1a0dc12ecad7fcd0207135514de8007e60d1e0c1071d4941122b6c84e58b433833e88e66db9a26a85648588b3de0f6d926e26c22a6eea400552e3742e3bdafc8cb831a3f410003d27f1f8a59092db350745cacd9956680742743d1846f775c431b6161d2071abe2709b31c9660185c93bb3666c9a15b1d13a376394cd0473e8965fb17682972e94e8f2c64000000ff8f2f50090000001afc4a97423cd394e055967d24291a9e430079c0da5b94c7a50228e2ec97412100",
+  "prepare": {
+   "tx": "0300010003f8b24e9c16ddb24eb2fe6fd17886955ec7da583d3362dc8efecb86330869cadd0000000000fffffffff6da3e86166528da6594784b7679b3ded139ddb5c6a0f2da305d36b7169ca3060000000000fffffffff419894b048e538539e2235fe912d7ba34ae3dea92121cc9b4f5acaee1c9211a0000000000ffffffff02c0312ca40b0000001976a9141f34fc3e093775c9663a87ba5100d981a5bbd14b88ac00e8764817000000070444534843755100000000fdbc0103000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000000000000000000000000000000b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2376460bdbf926395d4449cffc56a719e498ae3a20d020002005847f80d00000017a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d871976a914611af00a924435e025078d1398a4240335e01a8988ac732439fdaeef4012cfe05fb68cd66de93e69fb8c00902f50090000001976a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac0077801c6a49b522e5c3e37b5a1a0dc12ecad7fcd00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000064000000ff8f2f50090000001afc4a97423cd394e055967d24291a9e430079c0da5b94c7a50228e2ec97412100",
+   "collateralIndex": 1,
+   "consentHash": "a00a196f2c645b976e3d73b382635b36dfdc3065f1a1b23738c16aab3d69fa62",
+   "terms": {
+    "version": 3,
+    "type": 0,
+    "collateralHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "collateralIndex": 1,
+    "addresses": {},
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "shares": [
+     {
+      "amount": 60000000000,
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+      "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+     },
+     {
+      "amount": 40000000000,
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+     }
+    ],
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999,
+    "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "operatorReward": 5.25,
+    "inputsHash": "214197ece22802a5c7945bdac07900439e1a29247d9655e094d33c42974afc1a"
+   }
+  },
+  "confirmations": 1
+ },
+ "decoded": {
+  "txid": "812d3ddd97d277db2afe15df248b47501ee5d6a292ef7c2ea4ca1b12b6aeb5ed",
+  "version": 3,
+  "type": 1,
+  "size": 948,
+  "locktime": 0,
+  "vin": [
+   {
+    "txid": "ddca69083386cbfe8edc62333d58dac75e958678d16ffeb24eb2dd169c4eb2f8",
+    "vout": 0,
+    "scriptSig": {
+     "asm": "304402203c05a649bb3aadaa4d94bce25dd3d5ddf03372904979bcbc672e7b33496e0e0d022048ae748b6830d5f8cf12c69c7bc3bd6e30ff3290e6485cc8e56e0393f6d075cc[ALL] 03ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45d",
+     "hex": "47304402203c05a649bb3aadaa4d94bce25dd3d5ddf03372904979bcbc672e7b33496e0e0d022048ae748b6830d5f8cf12c69c7bc3bd6e30ff3290e6485cc8e56e0393f6d075cc012103ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45d"
+    },
+    "sequence": 4294967295
+   },
+   {
+    "txid": "06a39c16b7365d30daf2a0c6b5dd39d1deb379764b789465da286516863edaf6",
+    "vout": 0,
+    "scriptSig": {
+     "asm": "304402203d52f85db952e962d18d7260fcfa3d13876e7397327d3edd217f662fd2220a40022023bbb420ec35fd71f12c52e94384c3822deb876bc0716cc6a18f0a0634b365ca[ALL] 03ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45d",
+     "hex": "47304402203d52f85db952e962d18d7260fcfa3d13876e7397327d3edd217f662fd2220a40022023bbb420ec35fd71f12c52e94384c3822deb876bc0716cc6a18f0a0634b365ca012103ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45d"
+    },
+    "sequence": 4294967295
+   },
+   {
+    "txid": "1a21c9e1aeacf5b4c91c1292ea3dae34bad712e95f23e23985538e044b8919f4",
+    "vout": 0,
+    "scriptSig": {
+     "asm": "304402201700b040ec79544879b85b6cb93dac9346ead33a936d11072e634a400208b1e7022003bdc30c511ac1a55158eef9686e9444285a7d369f1f5c8f342abaf37ef4c193[ALL] 03ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45d",
+     "hex": "47304402201700b040ec79544879b85b6cb93dac9346ead33a936d11072e634a400208b1e7022003bdc30c511ac1a55158eef9686e9444285a7d369f1f5c8f342abaf37ef4c193012103ecab919295a9302aa6b02de5570584adc5c5f654defd9e59bec1b6f2e437e45d"
+    },
+    "sequence": 4294967295
+   }
+  ],
+  "vout": [
+   {
+    "value": 499.99,
+    "valueSat": 49999000000,
+    "n": 0,
+    "scriptPubKey": {
+     "asm": "OP_DUP OP_HASH160 1f34fc3e093775c9663a87ba5100d981a5bbd14b OP_EQUALVERIFY OP_CHECKSIG",
+     "desc": "addr(yPATGdkfD68xhFXFqe7ygzfvxqFXiQdTvx)#cdlmlwy0",
+     "hex": "76a9141f34fc3e093775c9663a87ba5100d981a5bbd14b88ac",
+     "address": "yPATGdkfD68xhFXFqe7ygzfvxqFXiQdTvx",
+     "type": "pubkeyhash"
+    }
+   },
+   {
+    "value": 1000.0,
+    "valueSat": 100000000000,
+    "n": 1,
+    "scriptPubKey": {
+     "asm": "1128813380 OP_DROP 1",
+     "desc": "raw(04445348437551)#r4kf3m9f",
+     "hex": "04445348437551",
+     "type": "nonstandard"
+    }
+   }
+  ],
+  "extraPayloadSize": 444,
+  "extraPayload": "03000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000000000000000000000000000000b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2376460bdbf926395d4449cffc56a719e498ae3a20d020002005847f80d00000017a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d871976a914611af00a924435e025078d1398a4240335e01a8988ac732439fdaeef4012cfe05fb68cd66de93e69fb8c00902f50090000001976a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac0077801c6a49b522e5c3e37b5a1a0dc12ecad7fcd0207135514de8007e60d1e0c1071d4941122b6c84e58b433833e88e66db9a26a85648588b3de0f6d926e26c22a6eea400552e3742e3bdafc8cb831a3f410003d27f1f8a59092db350745cacd9956680742743d1846f775c431b6161d2071abe2709b31c9660185c93bb3666c9a15b1d13a376394cd0473e8965fb17682972e94e8f2c64000000ff8f2f50090000001afc4a97423cd394e055967d24291a9e430079c0da5b94c7a50228e2ec97412100",
+  "proRegTx": {
+   "version": 3,
+   "type": 0,
+   "collateralHash": "0000000000000000000000000000000000000000000000000000000000000000",
+   "collateralIndex": 1,
+   "addresses": {},
+   "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+   "shares": [
+    {
+     "amount": 60000000000,
+     "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+     "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+     "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+     "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+     "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+    },
+    {
+     "amount": 40000000000,
+     "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+     "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+     "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+     "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+     "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+    }
+   ],
+   "earlyPeriodBlocks": 100,
+   "earlyPenalty": 39999999999,
+   "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+   "operatorReward": 5.25,
+   "inputsHash": "214197ece22802a5c7945bdac07900439e1a29247d9655e094d33c42974afc1a"
+  }
+ },
+ "protxInfo": {
+  "type": "Regular",
+  "proTxHash": "812d3ddd97d277db2afe15df248b47501ee5d6a292ef7c2ea4ca1b12b6aeb5ed",
+  "collateralHash": "812d3ddd97d277db2afe15df248b47501ee5d6a292ef7c2ea4ca1b12b6aeb5ed",
+  "collateralIndex": 1,
+  "operatorReward": 5.25,
+  "state": {
+   "version": 3,
+   "addresses": {},
+   "registeredHeight": 621,
+   "lastPaidHeight": 0,
+   "consecutivePayments": 0,
+   "PoSePenalty": 0,
+   "PoSeRevivedHeight": -1,
+   "PoSeBanHeight": 621,
+   "revocationReason": 0,
+   "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+   "shares": [
+    {
+     "amount": 60000000000,
+     "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+     "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+     "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+     "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+     "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+    },
+    {
+     "amount": 40000000000,
+     "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+     "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+     "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+     "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+     "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+    }
+   ],
+   "earlyPeriodBlocks": 100,
+   "earlyPenalty": 39999999999,
+   "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2"
+  },
+  "confirmations": 1,
+  "wallet": {
+   "hasOwnerKey": true,
+   "hasOperatorKey": false,
+   "hasVotingKey": true,
+   "ownsCollateral": false,
+   "ownsPayeeScript": true,
+   "ownsOperatorRewardScript": false
+  },
+  "metaInfo": {
+   "lastDSQ": 0,
+   "mixingTxCount": 0,
+   "outboundAttemptCount": 0,
+   "lastOutboundAttempt": 0,
+   "lastOutboundAttemptElapsed": 1790824234,
+   "lastOutboundSuccess": 0,
+   "lastOutboundSuccessElapsed": 1790824234,
+   "is_platform_banned": false,
+   "platform_ban_height_updated": 0
+  }
+ },
+ "refusals": [
+  {
+   "case": "reward 10001 bps",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 10001,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\noperatorReward must be between 0 and 10000"
+  },
+  {
+   "case": "penalty equal to the smallest share",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 40000000000
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-penalty"
+  },
+  {
+   "case": "penalty nonzero with a zero period",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 0,
+    "earlyPenalty": 1
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-penalty"
+  },
+  {
+   "case": "period one over the maximum",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 420481,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\nearlyPeriodBlocks out of range"
+  },
+  {
+   "case": "a P2SH owner address",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "8gwyjihtHx34kgWCGuqKnZoJCK8tfDUGz4",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -5\nerror message:\ninvalid share owner address: 8gwyjihtHx34kgWCGuqKnZoJCK8tfDUGz4"
+  },
+  {
+   "case": "a refund script paying an owner key",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-payee-reuse"
+  },
+  {
+   "case": "a reward script paying the voting key",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-payee-reuse"
+  },
+  {
+   "case": "two shares with one refund script",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-dup-refund"
+  },
+  {
+   "case": "two shares with one owner key",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-dup-key"
+  },
+  {
+   "case": "a share one duff below 100 DASH",
+   "terms": {
+    "shares": [
+     {
+      "amount": 90000000001,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj"
+     },
+     {
+      "amount": 9999999999,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-amount"
+  },
+  {
+   "case": "shares summing to one duff over the collateral",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000001,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepare",
+   "text": "error code: -8\nerror message:\ninvalid shared registration terms: bad-protx-shares-amount-sum"
+  }
+ ],
+ "acceptedBoundaries": [
+  {
+   "case": "reward 10000 bps (the maximum)",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 10000,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepared",
+   "termsAsReported": {
+    "version": 3,
+    "type": 0,
+    "collateralHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "collateralIndex": 1,
+    "addresses": {},
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "shares": [
+     {
+      "amount": 60000000000,
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+      "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+     },
+     {
+      "amount": 40000000000,
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+     }
+    ],
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999,
+    "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "operatorReward": 100,
+    "inputsHash": "9f3175c1de67dc7e325e757aca940ca7d0d89aa8f2bd8c43c5d250b1a415d4e7"
+   }
+  },
+  {
+   "case": "reward 0 bps",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 0,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepared",
+   "termsAsReported": {
+    "version": 3,
+    "type": 0,
+    "collateralHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "collateralIndex": 1,
+    "addresses": {},
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "shares": [
+     {
+      "amount": 60000000000,
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+      "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+     },
+     {
+      "amount": 40000000000,
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+     }
+    ],
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999,
+    "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "operatorReward": 0,
+    "inputsHash": "9f3175c1de67dc7e325e757aca940ca7d0d89aa8f2bd8c43c5d250b1a415d4e7"
+   }
+  },
+  {
+   "case": "period at the maximum",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 420480,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepared",
+   "termsAsReported": {
+    "version": 3,
+    "type": 0,
+    "collateralHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "collateralIndex": 1,
+    "addresses": {},
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "shares": [
+     {
+      "amount": 60000000000,
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+      "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+     },
+     {
+      "amount": 40000000000,
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+     }
+    ],
+    "earlyPeriodBlocks": 420480,
+    "earlyPenalty": 39999999999,
+    "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "operatorReward": 5.25,
+    "inputsHash": "9f3175c1de67dc7e325e757aca940ca7d0d89aa8f2bd8c43c5d250b1a415d4e7"
+   }
+  },
+  {
+   "case": "period 0 with penalty 0",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf"
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 0,
+    "earlyPenalty": 0
+   },
+   "stage": "prepared",
+   "termsAsReported": {
+    "version": 3,
+    "type": 0,
+    "collateralHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "collateralIndex": 1,
+    "addresses": {},
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "shares": [
+     {
+      "amount": 60000000000,
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+      "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+     },
+     {
+      "amount": 40000000000,
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+     }
+    ],
+    "earlyPeriodBlocks": 0,
+    "earlyPenalty": 0,
+    "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "operatorReward": 5.25,
+    "inputsHash": "9f3175c1de67dc7e325e757aca940ca7d0d89aa8f2bd8c43c5d250b1a415d4e7"
+   }
+  },
+  {
+   "case": "an empty-string reward address, which the RPC reads as omitted",
+   "terms": {
+    "shares": [
+     {
+      "amount": 60000000000,
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY",
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5"
+     },
+     {
+      "amount": 40000000000,
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H",
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardAddress": ""
+     }
+    ],
+    "operatorPubKey": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "operatorRewardBps": 525,
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999
+   },
+   "stage": "prepared",
+   "termsAsReported": {
+    "version": 3,
+    "type": 0,
+    "collateralHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "collateralIndex": 1,
+    "addresses": {},
+    "votingAddress": "yRNLG8crqxBt6Q6kxgCBkdskjGBUsMNZCM",
+    "shares": [
+     {
+      "amount": 60000000000,
+      "refundAddress": "8yJtrUJoMgvR9yHRbvTjdFZDhtGQL2wNxj",
+      "refundScript": "a914cf2c77d65762f8154d4941cf84ddc5dc50844c0d87",
+      "rewardAddress": "yVAtfULVKXWf1EdfVskTAKc5c7MigB2Dk5",
+      "rewardScript": "76a914611af00a924435e025078d1398a4240335e01a8988ac",
+      "ownerAddress": "yWpFxKuZxERepnmTVyFES5b4sxmPFhe1qY"
+     },
+     {
+      "amount": 40000000000,
+      "refundAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "refundScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "rewardAddress": "yTtcsrcYmZT7qWSRrDYJY5LrTKo8koEBGf",
+      "rewardScript": "76a914530efa8565041ff90da6f8862e03cec1d24a54ad88ac",
+      "ownerAddress": "yXDJjLcbvi25D5UDj9ttZgUjDRu3HeyH6H"
+     }
+    ],
+    "earlyPeriodBlocks": 100,
+    "earlyPenalty": 39999999999,
+    "pubKeyOperator": "b222aea81f876f0be6646b0a89a569c244f451a7ffe74a75d91b667cd3911a0c38518ae124a53eee9ea07a46bc9eebc2",
+    "operatorReward": 5.25,
+    "inputsHash": "9f3175c1de67dc7e325e757aca940ca7d0d89aa8f2bd8c43c5d250b1a415d4e7"
+   }
+  }
+ ]
+}
