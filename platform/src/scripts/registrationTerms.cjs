@@ -176,6 +176,43 @@ function agreementWithDecoded({ terms, decoded, network = "testnet" }) {
   return { ok: d.length === 0, differences: d };
 }
 
+/**
+ * THE DIGEST OF WHAT A CHECK SAW: every field of the decoded transaction that input signatures do not
+ * change, canonical, SHA-256: the version, the type, the lock time, the inputs' outpoints and sequence
+ * numbers, the outputs (script and value, the value as its 8-decimal text), the raw extra payload as the
+ * node reports it, and the registration payload's decoded projection.
+ * A verdict bound to this digest binds to the bytes a member then signs (a review found the first digest
+ * leaving out the version, the type, the lock time and the sequences, so other unsigned bytes passed).
+ * rc1_member_check.py computes the same digest in Python and refuses a verdict whose digest is not the one
+ * it computes over the transaction it is about to sign; its battery cross-checks the two.
+ */
+/** The digest of the terms a verdict answered for: canonical, SHA-256 (the other half of a verdict's binding). */
+function termsDigest(t) {
+  const crypto = require("crypto");
+  const { canonicalString } = require("./canonicalJson.cjs");
+  return crypto.createHash("sha256").update(canonicalString(t)).digest("hex");
+}
+
+function decodedDigest(decoded) {
+  const crypto = require("crypto");
+  const { canonicalString } = require("./canonicalJson.cjs");
+  if (!decoded || typeof decoded !== "object" || !Array.isArray(decoded.vin) || !Array.isArray(decoded.vout)) refuse("the decoded transaction has no inputs and outputs to digest", "shape");
+  // the canonical form carries integers only, so a non-integer number (the node's operatorReward, 5.25)
+  // is carried as its shortest decimal text, the same text Python's repr gives for the parsed float
+  const plain = (x) => (Array.isArray(x) ? x.map(plain)
+    : x && typeof x === "object" ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, plain(v)]))
+    : typeof x === "number" && !Number.isInteger(x) ? String(x) : x);
+  // the RAW extra payload (the node's `extraPayload` hex) is covered as bytes beside its decoded projection, so
+  // the digest covers the whole unsigned serialization: version, type, inputs without their signatures,
+  // outputs, lock time and payload (a confirmation found the projection alone leaving payload bytes unbound)
+  const body = { version: decoded.version ?? null, type: decoded.type ?? null, locktime: decoded.locktime ?? null,
+    vin: decoded.vin.map((v) => ({ txid: v.txid, vout: v.vout, sequence: v.sequence ?? null })),
+    vout: decoded.vout.map((o) => ({ hex: o.scriptPubKey && o.scriptPubKey.hex, value: Number(o.value).toFixed(8) })),
+    extraPayload: typeof decoded.extraPayload === "string" ? decoded.extraPayload : null,
+    proRegTx: decoded.proRegTx === undefined ? null : plain(decoded.proRegTx) };
+  return crypto.createHash("sha256").update(canonicalString(body)).digest("hex");
+}
+
 /** The terms in words, every value shown in exact display conversion. */
 function displayTerms(t) {
   requireTerms(t);
@@ -186,5 +223,5 @@ function displayTerms(t) {
 }
 
 module.exports = { COIN, COLLATERAL, MIN_SHARE, MIN_SHARES, MAX_SHARES, MAX_BPS, MAX_EARLY_PERIOD_BLOCKS, TERMS_KEYS, SHARE_KEYS,
-  requireTerms, rpcArgs, agreementWithDecoded, displayTerms, rewardDestination, bpsToPercentText, percentTextToBps, decodedPercentToBps,
+  requireTerms, rpcArgs, agreementWithDecoded, decodedDigest, termsDigest, displayTerms, rewardDestination, bpsToPercentText, percentTextToBps, decodedPercentToBps,
   addressKind, scriptHexOf, TermsRefusal };
